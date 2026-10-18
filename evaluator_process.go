@@ -97,6 +97,10 @@ func (p *evaluatorProcess) wait(requests *os.File) {
 }
 
 func (p *evaluatorProcess) roundTrip(ctx context.Context, next request) (response, error) {
+	if ctx.Err() != nil {
+		p.kill()
+		return response{}, fmt.Errorf("cancelled: %w", context.Cause(ctx))
+	}
 	if p.hasExited() {
 		return response{}, p.failure()
 	}

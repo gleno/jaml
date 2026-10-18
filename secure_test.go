@@ -3,6 +3,7 @@ package jaml
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -204,4 +205,53 @@ func TestSecureVarsMustBeJSONData(t *testing.T) {
 	var out int
 	expectError(t, template.Eval(within(t, 10*time.Second), &out, map[string]any{"f": func() {}}, "v"), EvaluationFailed, `var "f" is not JSON data`)
 	expectError(t, template.Eval(within(t, 10*time.Second), &out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `var "undefined" cannot be bound`)
+}
+
+type endsOnSecondLook struct {
+	context.Context
+	looks atomic.Int32
+	ended chan struct{}
+}
+
+func (c *endsOnSecondLook) Done() <-chan struct{} {
+	if c.looks.Add(1) > 1 {
+		return c.ended
+	}
+	return nil
+}
+
+func (c *endsOnSecondLook) Err() error {
+	if c.looks.Load() > 1 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {
+	for range 50 {
+		ctx := &endsOnSecondLook{Context: context.Background(), ended: make(chan struct{})}
+		close(ctx.ended)
+		template, err := MakeSecureTemplate(ctx, "v: ${ 1 }\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !template.isClosed() {
+			if time.Now().After(deadline) {
+				t.Fatal("the template outlived its context")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		var out int
+		expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
+	}
+}
+
+func TestClosingAZeroSecureTemplateIsHarmless(t *testing.T) {
+	var template SecureTemplate
+	if err := template.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out int
+	expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
 }

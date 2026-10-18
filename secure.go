@@ -42,7 +42,9 @@ func MakeSecureTemplate(ctx context.Context, written string, options ...Option) 
 		return nil, fault.From(EvaluationFailed, fmt.Sprintf("starting the evaluator: %s", err))
 	}
 	secured := &SecureTemplate{core: core, spec: spec, evaluator: evaluator}
+	secured.state.Lock()
 	secured.stopOnDone = context.AfterFunc(ctx, func() { _ = secured.Close() })
+	secured.state.Unlock()
 	return secured, nil
 }
 
@@ -60,12 +62,14 @@ func (t *SecureTemplate) Eval(ctx context.Context, into any, vars map[string]any
 }
 
 func (t *SecureTemplate) Close() error {
-	t.stopOnDone()
 	t.state.Lock()
 	t.closed = true
-	evaluator := t.evaluator
+	evaluator, stopOnDone := t.evaluator, t.stopOnDone
 	t.evaluator = nil
 	t.state.Unlock()
+	if stopOnDone != nil {
+		stopOnDone()
+	}
 	if evaluator != nil {
 		evaluator.kill()
 	}
