@@ -78,13 +78,14 @@ steps: |
   }
 ```
 
-- A value is a **whole expression** when, after trimming whitespace, it starts with `${`, ends with `}`, and is one balanced expression. Quoting does not matter: `${1+1}`, `"${1+1}"` and `'${1+1}'` are all the number 2.
+- A value is a **whole expression** when, after trimming whitespace, it starts with `${`, ends with `}`, and the expression ends at that final `}`. Quoting does not matter: `${1+1}`, `"${1+1}"` and `'${1+1}'` are all the number 2.
 - A value that starts with `${` but is not one whole expression (`${a} and ${b}`) is an error. Interpolate with `${{ }}` instead.
 - **Interpolation** with `${{ … }}` always produces text, even when it is the whole value: `${{1+1}}` is `"2"`. To write an object literal as a whole value, put a space between the braces: `${ {a: 1} }`. Strings interpolate as they are; numbers, bools, lists and objects interpolate as JSON, keys sorted, written as `JSON.stringify` writes them: `${{ ({b: '<&>', a: 1}) }}` is `{"a":1,"b":"<&>"}`.
+- An expression ends at the first closing `}` (or `}}` for interpolation) that JavaScript itself does not consume, so braces inside strings, template literals, regex literals and comments never close it: `${ /}/.test(x) }` and `${{ {a: 1}}}` work. A `//` comment runs to the end of its line, closing brace included; close the expression on the next line.
 - A single `${` anywhere other than the start of a value is plain text: `echo ${HOME}` stays as written.
 - To write the delimiters literally, use a JavaScript string: `${{'${{'}}` or `${'${x}'}`.
 - **Keys are never evaluated.**
-- Expressions run in strict mode. The vars are globals, deep-copied from `vars` the way `encoding/json` marshals them, so an expression cannot change your data. A var name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing var is a `ReferenceError`; a missing property of a var is `undefined`.
+- An expression is exactly one strict-mode JavaScript expression, evaluated as a top-level script expression: statements (`1; 2`), legacy octal escapes (`"\101"`) and `new.target` are syntax errors, `arguments` is a `ReferenceError`, and `this` is `globalThis`. A body holding only comments is an empty expression. The vars are globals, deep-copied from `vars` the way `encoding/json` marshals them, so an expression cannot change your data. A var name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing var is a `ReferenceError`; a missing property of a var is `undefined`.
 - All expressions in one `Eval` share one runtime, so one expression can see globals another one set. Separate `Eval` calls never share anything.
 
 ### YAML gotchas
@@ -145,6 +146,7 @@ The child is your own binary, started again with a marker in its environment; on
 Both kinds share the same limits:
 
 - JavaScript calls nest at most 4096 deep; deeper recursion fails with `EvaluationFailed`.
+- A value that holds code (a whole expression, or text with `${{`) is at most 65,536 bytes as written; a longer one is refused with `InvalidTemplate`, naming its path. This bounds how deep goja's recursive parser can go, so no template text can overflow the stack while it is compiled.
 - Vars, results and templates nest at most 4096 deep. Deeper data is refused, naming the var or the path where it crosses the limit: a template with `InvalidTemplate`, a var or a result with `EvaluationFailed`.
 - `JSON.parse` refuses text nested deeper than 4096 with a `RangeError`, so a deep string var cannot be turned into deep data.
 - Data an expression builds for itself is not bounded. Some built-ins (`JSON.stringify`, `String` or `join` of an array, `flat`) walk it recursively on the Go stack, and a value nested about a million deep overflows that stack, which Go cannot recover from. It is the template's own risk, like an allocation bomb: a trusted template takes your process down, a secure template's child dies, and that `Eval` fails.

@@ -174,7 +174,7 @@ func TestInvalidExpressionsFailAtMakeTrustedTemplate(t *testing.T) {
 		fragments []string
 	}{
 		"syntax":            {"a: ${1 +}\n", []string{"$.a", "${1 +}", "syntax error"}},
-		"interpolated":      {"a: \"x ${{ ) }}\"\n", []string{"$.a", "${{)}}", "syntax error"}},
+		"interpolated":      {"a: \"x ${{ ) }}\"\n", []string{"$.a", "${{) }}", "syntax error at line 1, column 2", "Unexpected token )"}},
 		"second line":       {"a: |\n  ${\n    1 +\n    +\n  }\n", []string{"syntax error"}},
 		"unclosed whole":    {"a: ${1 + 1\n", []string{"unclosed ${"}},
 		"unclosed double":   {"a: \"x ${{1\"\n", []string{"unclosed ${{"}},
@@ -183,6 +183,7 @@ func TestInvalidExpressionsFailAtMakeTrustedTemplate(t *testing.T) {
 		"empty double":      {"a: \"x ${{}}\"\n", []string{"empty expression"}},
 		"not whole":         {"a: ${a} and ${b}\n", []string{"one whole expression"}},
 		"statement":         {"a: ${ var x = 1 }\n", []string{"syntax error"}},
+		"two statements":    {"a: ${ 1; 2 }\n", []string{"syntax error", "single JavaScript expression"}},
 		"nested in list":    {"a:\n  - ok\n  - ${ ( }\n", []string{"$.a[1]"}},
 	}
 	for name, c := range cases {
@@ -198,10 +199,10 @@ func TestSourceMapCommentsAreNotFollowed(t *testing.T) {
 	expectEqual(t, evalAs[int](t, template, nil, "a"), 1)
 }
 
-func TestAnExpressionCannotCloseItsWrapper(t *testing.T) {
-	for _, source := range []string{"1)}); (function(){ return (2", "1)}), (function(){ return (2"} {
-		if _, err := compileExpression(source, false); err != errEscapesItsWrapper {
-			t.Fatalf("%s: expected the wrapper escape to be refused, got %v", source, err)
+func TestAnExpressionCannotEscapeItsContext(t *testing.T) {
+	for _, source := range []string{"1)}); (function(){ return (2", "1)}), (function(){ return (2", "1), (2", "1; 2", "1\n2"} {
+		if _, err := compileExpression(source, false); err == nil {
+			t.Fatalf("%q: expected a refusal", source)
 		}
 	}
 }
@@ -211,10 +212,18 @@ func TestStrictModeCompileErrorsFailAtMakeTrustedTemplate(t *testing.T) {
 	expectError(t, err, InvalidTemplate, "$.a", "syntax error at line 2")
 }
 
-func TestUnclosedJavaScriptTokensAreUnclosedExpressions(t *testing.T) {
-	for _, text := range []string{"a: ${ 'x }\n", "a: \"${ `x }\"\n", "a: \"${ `${ 1 }\"\n", "a: ${ /* x }\n", "a: \"x ${{ 'y }}\"\n"} {
+func TestInputEndingInsideAJavaScriptTokenIsUnclosed(t *testing.T) {
+	for _, text := range []string{"a: \"${ `x }\"\n", "a: \"${ `${ 1 }\"\n", "a: ${ /* x }\n", "a: ${ x // c }\n", "a: \"x ${{ `y }}\"\n"} {
 		_, err := MakeTrustedTemplate(text)
 		expectError(t, err, InvalidTemplate, "unclosed")
+	}
+}
+
+func TestAnUnterminatedStringIsJavaScriptsOwnSyntaxError(t *testing.T) {
+	for _, text := range []string{"a: ${ 'x }\n", "a: \"x ${{ 'abc }}\"\n"} {
+		_, err := MakeTrustedTemplate(text)
+		expectError(t, err, InvalidTemplate, "syntax error at line 1, column 2", "Unexpected token ILLEGAL")
+		expectNoFragment(t, err, "unclosed", "object literal")
 	}
 }
 

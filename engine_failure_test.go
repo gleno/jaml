@@ -18,8 +18,13 @@ const (
 
 func survivesInAStackCappedChild(t *testing.T, body func(t *testing.T)) {
 	t.Helper()
+	survivesInAChildWithMaxStack(t, childStackBytes, body)
+}
+
+func survivesInAChildWithMaxStack(t *testing.T, maxStack int, body func(t *testing.T)) {
+	t.Helper()
 	if os.Getenv(stackCappedChild) == t.Name() {
-		debug.SetMaxStack(childStackBytes)
+		debug.SetMaxStack(maxStack)
 		debug.SetMemoryLimit(childMemoryBytes)
 		body(t)
 		return

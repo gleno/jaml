@@ -1,7 +1,10 @@
 package jaml
 
 import (
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/gleno/fault"
 )
@@ -34,6 +37,22 @@ func compileTexts(root any) (map[string]text, []source, error) {
 	return c.texts, c.sources, nil
 }
 
+var errNotAWholeExpression = errors.New("a value that starts with ${ must be one whole expression; interpolate into text with ${{ }}")
+
+type delimiter struct {
+	opens  string
+	closes string
+}
+
+var (
+	wholeValue    = delimiter{opens: "${", closes: "}"}
+	interpolation = delimiter{opens: "${{", closes: "}}"}
+)
+
+func (d delimiter) around(code string) string {
+	return d.opens + preview(code) + d.closes
+}
+
 func (c *compiler) visit(node any, at *dataPath) error {
 	written, isString := node.(string)
 	if !isString {
@@ -42,47 +61,81 @@ func (c *compiler) visit(node any, at *dataPath) error {
 	if _, seen := c.texts[written]; seen {
 		return nil
 	}
-	compiled, hasCode, err := c.compileText(written)
+	compiled, err := c.compileText(written)
 	if err != nil {
 		return fault.From(InvalidTemplate, fmt.Sprintf("%s: %s", at, err))
 	}
-	if hasCode {
+	if compiled.holdsCode() {
 		c.texts[written] = compiled
 	}
 	return nil
 }
 
-func (c *compiler) compileText(written string) (text, bool, error) {
-	found, err := scan(written)
-	if err != nil {
-		return text{}, false, err
-	}
-	if found.whole != "" {
-		compiled, err := c.compile(source{Text: found.whole})
-		if err != nil {
-			return text{}, false, fmt.Errorf("${%s}: %w", preview(found.whole), err)
-		}
-		return text{whole: &compiled}, true, nil
-	}
-	return c.compileSegments(found.segments)
+func (t text) holdsCode() bool {
+	return t.whole != nil || slices.ContainsFunc(t.segments, func(piece segment) bool { return piece.code != nil })
 }
 
-func (c *compiler) compileSegments(scanned []scannedSegment) (text, bool, error) {
-	compiled := text{segments: make([]segment, 0, len(scanned))}
-	hasCode := false
-	for _, piece := range scanned {
-		if !piece.code {
-			compiled.segments = append(compiled.segments, segment{literal: piece.text})
-			continue
-		}
-		code, err := c.compile(source{Text: piece.text, Interpolated: true})
-		if err != nil {
-			return text{}, false, fmt.Errorf("${{%s}}: %w", preview(piece.text), err)
-		}
-		hasCode = true
-		compiled.segments = append(compiled.segments, segment{code: &code})
+func (c *compiler) compileText(written string) (text, error) {
+	trimmed := strings.TrimSpace(written)
+	whole := strings.HasPrefix(trimmed, wholeValue.opens) && !strings.HasPrefix(trimmed, interpolation.opens)
+	if !whole && !strings.Contains(written, interpolation.opens) {
+		return text{}, nil
 	}
-	return compiled, hasCode, nil
+	if err := refuseLongCode(written); err != nil {
+		return text{}, err
+	}
+	if whole {
+		return c.compileWhole(trimmed)
+	}
+	return c.compileInterpolations(written)
+}
+
+func (c *compiler) compileWhole(trimmed string) (text, error) {
+	after := trimmed[len(wholeValue.opens):]
+	end, err := expressionEnd(after, wholeValue)
+	if err != nil {
+		return text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, preview(after), err)
+	}
+	if end != len(after)-len(wholeValue.closes) {
+		return text{}, errNotAWholeExpression
+	}
+	code := after[:end]
+	compiled, err := c.compile(source{Text: code})
+	if err != nil {
+		return text{}, fmt.Errorf("%s: %w", wholeValue.around(code), err)
+	}
+	return text{whole: &compiled}, nil
+}
+
+func (c *compiler) compileInterpolations(written string) (text, error) {
+	var compiled text
+	rest := written
+	for {
+		start := strings.Index(rest, interpolation.opens)
+		if start < 0 {
+			return compiled.withLiteral(rest), nil
+		}
+		compiled = compiled.withLiteral(rest[:start])
+		after := rest[start+len(interpolation.opens):]
+		end, err := expressionEnd(after, interpolation)
+		if err != nil {
+			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, preview(after), err)
+		}
+		code, err := c.compile(source{Text: after[:end], Interpolated: true})
+		if err != nil {
+			return text{}, fmt.Errorf("%s: %w", interpolation.around(after[:end]), err)
+		}
+		compiled.segments = append(compiled.segments, segment{code: &code})
+		rest = after[end+len(interpolation.closes):]
+	}
+}
+
+func (t text) withLiteral(literal string) text {
+	if literal == "" {
+		return t
+	}
+	t.segments = append(t.segments, segment{literal: literal})
+	return t
 }
 
 func (c *compiler) compile(written source) (expression, error) {

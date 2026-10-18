@@ -95,15 +95,7 @@ func engineFailure(recovered any) error {
 }
 
 func (s *session) run(compiled expression) (any, error) {
-	wrapper, err := s.vm.RunProgram(compiled.program)
-	if err != nil {
-		return nil, s.describe(err)
-	}
-	call, isCallable := goja.AssertFunction(wrapper)
-	if !isCallable {
-		return nil, errors.New("the expression wrapper is not callable")
-	}
-	returned, err := call(goja.Undefined())
+	returned, err := s.vm.RunProgram(compiled.program)
 	if err != nil {
 		return nil, s.describe(err)
 	}
