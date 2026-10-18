@@ -93,12 +93,12 @@ YAML is read by `go.yaml.in/yaml/v3` into plain data, then checked to be JSON da
 - **Only `true` and `false` are bools.** `y`, `yes`, `on`, `n` stay text.
 - **Keys must be strings.** `1: x` or `true: x` is an `InvalidTemplate` error naming the path; quote the key.
 - **Duplicate keys are refused**, with the line of the first one.
-- **`.inf` and `.nan` are refused**, since JSON cannot carry them.
+- **`.inf` and `.nan` are refused**, since JSON cannot carry them, and so are numbers too large for a 64-bit float (`1e400`). Quote them to keep them as text.
 - **Dates stay text.** `2026-10-18` is the string `"2026-10-18"`, as written. A `time.Time` target still parses an RFC 3339 date-time such as `2026-10-18T10:00:00Z`.
-- **Integers beyond int64 lose digits.** Quote them and decode into a string.
-- `0644` is octal (420). Write `0o644`, `644` or `"0644"` to say what you mean.
+- **Integers beyond int64 are text.** `123456789012345678901234567890` is the string `"123456789012345678901234567890"`, digits intact. Integers that fit int64 are numbers.
+- **No silent octal.** `0644` is 420 in YAML 1.1 and 644 in YAML 1.2, so jaml keeps it as the text `"0644"`. Write `0o644` for octal or `644` for decimal; `!!int 0644` is octal.
 - Anchors, aliases and merge keys (`<<`) expand. Tags are applied by the parser and then forgotten: `!!str 12` is the text `"12"`.
-- Only the first document is read.
+- **One document per template.** A second document (`---` followed by content) is an error.
 
 ## Decoding
 

@@ -69,16 +69,58 @@ func TestMergeKeysMerge(t *testing.T) {
 	expectEqual(t, evalAs[map[string]int](t, template, nil, "m"), map[string]int{"x": 1, "y": 2})
 }
 
-func TestOnlyTheFirstDocumentIsRead(t *testing.T) {
-	got := evalAs[map[string]int](t, mustTemplate(t, "a: 1\n---\nb: 2\n"), nil)
+func TestASecondDocumentIsRefused(t *testing.T) {
+	_, err := MakeTrustedTemplate("a: 1\n---\nb: 2\n")
+	expectError(t, err, InvalidTemplate, "line 2 starts a second YAML document")
+	got := evalAs[map[string]int](t, mustTemplate(t, "---\na: 1\n---\n"), nil)
 	expectEqual(t, got, map[string]int{"a": 1})
 }
 
-func TestIntegersBeyondFloat64LoseDigitsUnlessQuoted(t *testing.T) {
-	var out big.Int
-	expectError(t, mustTemplate(t, "v: 123456789012345678901234567890\n").Eval(&out, nil, "v"), CoercionFailed, "1.2345678901234568e+29")
-	quoted := evalAs[string](t, mustTemplate(t, "v: \"123456789012345678901234567890\"\n"), nil, "v")
-	expectEqual(t, quoted, "123456789012345678901234567890")
+func TestIntegersBeyondInt64AreText(t *testing.T) {
+	template := mustTemplate(t, `
+max: 9223372036854775807
+over: 9223372036854775808
+under: -9223372036854775809
+huge: 123456789012345678901234567890
+hex: 0x8000000000000000
+grouped: 1_000
+18446744073709551616: key
+`)
+	got := evalAs[map[string]any](t, template, nil)
+	expectEqual(t, got, map[string]any{
+		"max":                  float64(9223372036854775807),
+		"over":                 "9223372036854775808",
+		"under":                "-9223372036854775809",
+		"huge":                 "123456789012345678901234567890",
+		"hex":                  "0x8000000000000000",
+		"grouped":              float64(1000),
+		"18446744073709551616": "key",
+	})
+	expectEqual(t, evalAs[int64](t, template, nil, "max"), int64(9223372036854775807))
+	var huge big.Int
+	if err := huge.UnmarshalText([]byte(evalAs[string](t, template, nil, "huge"))); err != nil {
+		t.Fatal(err)
+	}
+	expectEqual(t, huge.String(), "123456789012345678901234567890")
+}
+
+func TestLegacyOctalStaysText(t *testing.T) {
+	template := mustTemplate(t, "legacy: 0644\nnegative: -0755\nexplicit: 0o644\nzero: 0\ntagged: !!int 0644\n")
+	got := evalAs[map[string]any](t, template, nil)
+	expectEqual(t, got, map[string]any{"legacy": "0644", "negative": "-0755", "explicit": float64(420), "zero": float64(0), "tagged": float64(420)})
+	var mode int
+	expectError(t, template.Eval(&mode, nil, "legacy"), CoercionFailed, "$.legacy", "cannot unmarshal string")
+}
+
+func TestOutOfRangeFloatsAreRefused(t *testing.T) {
+	for _, text := range []string{"v: 0.1e400\n", "v: [-1e999]\n", "v: {deep: 1_0e999}\n"} {
+		_, err := MakeTrustedTemplate(text)
+		expectError(t, err, InvalidTemplate, "out of the range of a 64-bit float")
+	}
+	_, err := MakeTrustedTemplate("outer:\n  v: 1e400\n")
+	expectError(t, err, InvalidTemplate, "$.outer.v: 1e400")
+	got := evalAs[map[string]any](t, mustTemplate(t, "quoted: \"1e400\"\ntiny: 1e-400\nbig: 1e308\n"), nil)
+	expectEqual(t, got, map[string]any{"quoted": "1e400", "tiny": float64(0), "big": 1e308})
 }
 
 func TestIntegersUpToInt64KeepTheirDigits(t *testing.T) {
