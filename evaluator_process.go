@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -21,8 +22,9 @@ type evaluatorSpec struct {
 
 type evaluatorProcess struct {
 	cmd       *exec.Cmd
-	requests  *json.Encoder
+	requests  *os.File
 	responses chan response
+	unread    error
 	exited    chan struct{}
 	stderr    *tailBuffer
 	limit     int64
@@ -44,7 +46,7 @@ func startEvaluator(ctx context.Context, spec evaluatorSpec) (*evaluatorProcess,
 	}
 	process := &evaluatorProcess{
 		cmd:       exec.Command(self),
-		requests:  json.NewEncoder(requestsWrite),
+		requests:  requestsWrite,
 		responses: make(chan response),
 		exited:    make(chan struct{}),
 		stderr:    &tailBuffer{limit: stderrTailBytes},
@@ -63,12 +65,12 @@ func startEvaluator(ctx context.Context, spec evaluatorSpec) (*evaluatorProcess,
 	go process.readResponses(responsesRead)
 	go process.wait(requestsWrite)
 	answer, err := process.roundTrip(ctx, request{Op: opCompile, Sources: spec.sources})
-	if err != nil {
-		return nil, err
+	if err == nil && answer.Error != "" {
+		err = errors.New(answer.Error)
 	}
-	if answer.Error != "" {
+	if err != nil {
 		process.kill()
-		return nil, errors.New(answer.Error)
+		return nil, err
 	}
 	return process, nil
 }
@@ -80,6 +82,9 @@ func (p *evaluatorProcess) readResponses(from *os.File) {
 	for {
 		var next response
 		if err := decoder.Decode(&next); err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				p.unread = fmt.Errorf("reading the evaluator's answer: %w", err)
+			}
 			return
 		}
 		select {
@@ -104,8 +109,11 @@ func (p *evaluatorProcess) roundTrip(ctx context.Context, next request) (respons
 	if p.hasExited() {
 		return response{}, p.failure()
 	}
-	if err := p.requests.Encode(next); err != nil {
-		p.kill()
+	encoded, err := json.Marshal(next)
+	if err != nil {
+		return response{}, fmt.Errorf("writing the evaluator's request: %w", err)
+	}
+	if _, err := p.requests.Write(append(encoded, '\n')); err != nil {
 		return response{}, p.failure()
 	}
 	select {
@@ -137,7 +145,12 @@ func (p *evaluatorProcess) kill() {
 }
 
 func (p *evaluatorProcess) failure() error {
-	<-p.exited
+	p.kill()
+	for range p.responses {
+	}
+	if p.unread != nil {
+		return p.unread
+	}
 	if p.cmd.ProcessState.ExitCode() == exitMemoryLimit {
 		return fmt.Errorf("exceeded the memory limit of %d bytes", p.limit)
 	}

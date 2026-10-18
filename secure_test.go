@@ -255,3 +255,44 @@ func TestClosingAZeroSecureTemplateIsHarmless(t *testing.T) {
 	var out int
 	expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
 }
+
+func evalBounded(t *testing.T, template *SecureTemplate, ctx context.Context, path string) error {
+	t.Helper()
+	result := make(chan error, 1)
+	go func() {
+		var out any
+		result <- template.Eval(ctx, &out, nil, path)
+	}()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(15 * time.Second):
+		_ = template.Close()
+		t.Fatal("Eval outlived its context")
+		return nil
+	}
+}
+
+func TestAnAnswerTooDeepToReadFailsWithItsCause(t *testing.T) {
+	template := mustSecure(t, "deep: ${ (() => { let a = []; for (let i = 0; i < 9999; i++) a = [a]; return a })() }\nok: ${ 5 }\n")
+	first := evaluatorPID(template)
+	expectError(t, evalBounded(t, template, within(t, 2*time.Second), "deep"), EvaluationFailed, "$.deep", "reading the evaluator's answer", "exceeded max depth")
+	expectEqual(t, secureEvalAs[int](t, template, nil, "ok"), 5)
+	if replaced := evaluatorPID(template); replaced == first || replaced == 0 {
+		t.Fatalf("expected a fresh evaluator, still %d", replaced)
+	}
+}
+
+func TestVarsTooDeepToSendFailWithTheirCause(t *testing.T) {
+	template := mustSecure(t, "v: ${ 1 }\n")
+	before := evaluatorPID(template)
+	var deep any = []any{}
+	for range 10001 {
+		deep = []any{deep}
+	}
+	var out int
+	err := template.Eval(within(t, 10*time.Second), &out, map[string]any{"deep": deep}, "v")
+	expectError(t, err, EvaluationFailed, "exceeded max depth")
+	expectEqual(t, secureEvalAs[int](t, template, nil, "v"), 1)
+	expectEqual(t, evaluatorPID(template), before)
+}
