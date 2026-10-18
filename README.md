@@ -82,7 +82,7 @@ YAML is read by `go.yaml.in/yaml/v3` into plain data, then checked to be JSON da
 - **Keys must be strings.** `1: x` or `true: x` is an `InvalidTemplate` error naming the path; quote the key.
 - **Duplicate keys are refused**, with the line of the first one.
 - **`.inf` and `.nan` are refused**, since JSON cannot carry them.
-- **Plain dates are timestamps.** `2026-10-18` decodes into a `time.Time`, and into a `string` as `"2026-10-18T00:00:00Z"`. Quote it to keep the spelling.
+- **Dates stay text.** `2026-10-18` is the string `"2026-10-18"`, as written. A `time.Time` target still parses an RFC 3339 date-time such as `2026-10-18T10:00:00Z`.
 - **Integers beyond int64 lose digits.** Quote them and decode into a string.
 - `0644` is octal (420). Write `0o644`, `644` or `"0644"` to say what you mean.
 - Anchors, aliases and merge keys (`<<`) expand. Tags are applied by the parser and then forgotten: `!!str 12` is the text `"12"`.

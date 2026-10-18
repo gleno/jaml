@@ -12,11 +12,28 @@ import (
 )
 
 func parseYAML(source string) (any, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(source), &document); err != nil {
+		return nil, fault.From(InvalidTemplate, err.Error())
+	}
+	if document.Kind == 0 {
+		return nil, nil
+	}
+	keepTimestampsAsText(&document)
 	var root any
-	if err := yaml.Unmarshal([]byte(source), &root); err != nil {
+	if err := document.Decode(&root); err != nil {
 		return nil, fault.From(InvalidTemplate, err.Error())
 	}
 	return asJSONData(root, "$")
+}
+
+func keepTimestampsAsText(node *yaml.Node) {
+	if node.Kind == yaml.ScalarNode && node.ShortTag() == "!!timestamp" {
+		node.Tag = "!!str"
+	}
+	for _, child := range node.Content {
+		keepTimestampsAsText(child)
+	}
 }
 
 func asJSONData(node any, at string) (any, error) {

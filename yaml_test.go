@@ -45,16 +45,23 @@ func TestDuplicateKeysAreRefused(t *testing.T) {
 	expectError(t, err, InvalidTemplate, `mapping key "a" already defined at line 1`)
 }
 
-func TestPlainDatesDecodeAsTimestamps(t *testing.T) {
+func TestDatesKeepTheirSpelling(t *testing.T) {
 	type shape struct {
 		At     time.Time `json:"at"`
 		Plain  string    `json:"plain"`
 		Quoted string    `json:"quoted"`
+		Tagged string    `json:"tagged"`
 	}
-	got := evalAs[shape](t, mustTemplate(t, "at: 2026-10-18T10:00:00Z\nplain: 2026-10-18\nquoted: \"2026-10-18\"\n"), nil)
-	expectEqual(t, got.At, time.Date(2026, time.October, 18, 10, 0, 0, 0, time.UTC))
-	expectEqual(t, got.Plain, "2026-10-18T00:00:00Z")
-	expectEqual(t, got.Quoted, "2026-10-18")
+	template := mustTemplate(t, "at: 2026-10-18T10:00:00Z\nplain: 2026-10-18\nquoted: \"2026-10-18\"\ntagged: !!timestamp 2026-10-18 10:00:00\n")
+	got := evalAs[shape](t, template, nil)
+	expectEqual(t, got, shape{
+		At:     time.Date(2026, time.October, 18, 10, 0, 0, 0, time.UTC),
+		Plain:  "2026-10-18",
+		Quoted: "2026-10-18",
+		Tagged: "2026-10-18 10:00:00",
+	})
+	dates := evalAs[map[string]any](t, mustTemplate(t, "base: &d 2026-10-18\ncopy: *d\nlist: [2026-01-02]\n"), nil)
+	expectEqual(t, dates, map[string]any{"base": "2026-10-18", "copy": "2026-10-18", "list": []any{"2026-01-02"}})
 }
 
 func TestMergeKeysMerge(t *testing.T) {
