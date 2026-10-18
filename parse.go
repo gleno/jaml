@@ -1,29 +1,68 @@
 package jaml
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 
 	"github.com/gleno/fault"
-	"sigs.k8s.io/yaml"
+	"go.yaml.in/yaml/v3"
 )
 
 func parseYAML(source string) (any, error) {
-	converted, err := yaml.YAMLToJSON([]byte(source))
-	if err != nil {
-		return nil, fault.From(InvalidTemplate, err.Error())
-	}
-	decoder := json.NewDecoder(bytes.NewReader(converted))
-	decoder.UseNumber()
 	var root any
-	if err := decoder.Decode(&root); err != nil {
+	if err := yaml.Unmarshal([]byte(source), &root); err != nil {
 		return nil, fault.From(InvalidTemplate, err.Error())
 	}
-	return root, nil
+	return asJSONData(root, "$")
+}
+
+func asJSONData(node any, at string) (any, error) {
+	switch typed := node.(type) {
+	case map[string]any:
+		data := make(map[string]any, len(typed))
+		for key, item := range typed {
+			converted, err := asJSONData(item, at+keyStep(key))
+			if err != nil {
+				return nil, err
+			}
+			data[key] = converted
+		}
+		return data, nil
+	case map[any]any:
+		data := make(map[string]any, len(typed))
+		for key, item := range typed {
+			name, isString := key.(string)
+			if !isString {
+				return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: key %v is a %T; keys must be strings, so quote it", at, key, key))
+			}
+			converted, err := asJSONData(item, at+keyStep(name))
+			if err != nil {
+				return nil, err
+			}
+			data[name] = converted
+		}
+		return data, nil
+	case []any:
+		data := make([]any, len(typed))
+		for index, item := range typed {
+			converted, err := asJSONData(item, at+indexStep(index))
+			if err != nil {
+				return nil, err
+			}
+			data[index] = converted
+		}
+		return data, nil
+	case float64:
+		if math.IsInf(typed, 0) || math.IsNaN(typed) {
+			return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: %v is not a finite number, which JSON cannot carry", at, typed))
+		}
+		return typed, nil
+	default:
+		return typed, nil
+	}
 }
 
 func (t *Template) selectPath(path []string) (any, string, error) {

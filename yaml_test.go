@@ -3,12 +3,68 @@ package jaml
 import (
 	"math/big"
 	"testing"
+	"time"
 )
 
-func TestYAMLFollowsSigsYAMLOneOneRules(t *testing.T) {
-	template := mustTemplate(t, "plain: y\nquoted: \"y\"\nn: key\n")
+func TestOnlyTrueAndFalseAreBools(t *testing.T) {
+	template := mustTemplate(t, "y: y\nyes: yes\non: on\nn: n\ntruth: true\n")
 	got := evalAs[map[string]any](t, template, nil)
-	expectEqual(t, got, map[string]any{"plain": true, "quoted": "y", "false": "key"})
+	expectEqual(t, got, map[string]any{"y": "y", "yes": "yes", "on": "on", "n": "n", "truth": true})
+}
+
+func TestNonStringKeysAreRefused(t *testing.T) {
+	cases := map[string]string{
+		"integer": "1: x\n",
+		"bool":    "outer:\n  true: x\n",
+		"null":    "~: x\n",
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := MakeTemplate(text)
+			expectError(t, err, InvalidTemplate, "keys must be strings")
+		})
+	}
+	_, err := MakeTemplate("outer:\n  true: x\n")
+	expectError(t, err, InvalidTemplate, "$.outer: key true is a bool")
+}
+
+func TestQuotedKeysAreStrings(t *testing.T) {
+	got := evalAs[map[string]string](t, mustTemplate(t, "\"1\": x\n\"true\": y\n"), nil)
+	expectEqual(t, got, map[string]string{"1": "x", "true": "y"})
+}
+
+func TestInfinityAndNaNAreRefused(t *testing.T) {
+	for _, text := range []string{"a: .inf\n", "a: -.inf\n", "a: [.nan]\n"} {
+		_, err := MakeTemplate(text)
+		expectError(t, err, InvalidTemplate, "not a finite number")
+	}
+}
+
+func TestDuplicateKeysAreRefused(t *testing.T) {
+	_, err := MakeTemplate("a: 1\na: 2\n")
+	expectError(t, err, InvalidTemplate, `mapping key "a" already defined at line 1`)
+}
+
+func TestPlainDatesDecodeAsTimestamps(t *testing.T) {
+	type shape struct {
+		At     time.Time `json:"at"`
+		Plain  string    `json:"plain"`
+		Quoted string    `json:"quoted"`
+	}
+	got := evalAs[shape](t, mustTemplate(t, "at: 2026-10-18T10:00:00Z\nplain: 2026-10-18\nquoted: \"2026-10-18\"\n"), nil)
+	expectEqual(t, got.At, time.Date(2026, time.October, 18, 10, 0, 0, 0, time.UTC))
+	expectEqual(t, got.Plain, "2026-10-18T00:00:00Z")
+	expectEqual(t, got.Quoted, "2026-10-18")
+}
+
+func TestMergeKeysMerge(t *testing.T) {
+	template := mustTemplate(t, "base: &b {x: 1}\nm:\n  <<: *b\n  y: \"${ 1 + 1 }\"\n")
+	expectEqual(t, evalAs[map[string]int](t, template, nil, "m"), map[string]int{"x": 1, "y": 2})
+}
+
+func TestOnlyTheFirstDocumentIsRead(t *testing.T) {
+	got := evalAs[map[string]int](t, mustTemplate(t, "a: 1\n---\nb: 2\n"), nil)
+	expectEqual(t, got, map[string]int{"a": 1})
 }
 
 func TestIntegersBeyondFloat64LoseDigitsUnlessQuoted(t *testing.T) {

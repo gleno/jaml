@@ -75,12 +75,18 @@ steps: |
 
 ### YAML gotchas
 
-YAML is read by `sigs.k8s.io/yaml`, which converts it to JSON with YAML 1.1 rules.
+YAML is read by `go.yaml.in/yaml/v3` into plain data, then checked to be JSON data.
 
 - **Quote expressions that contain `: `, `#`, or start a flow collection.** `limits: ${ {cpu: 2} }` is a YAML error, because `: ` inside a plain scalar starts a mapping. Write `limits: "${ {cpu: 2} }"`. Inside flow collections (`[…]`, `{…}`) every expression needs quotes. The same goes for `?:` ternaries.
-- **YAML 1.1 bools.** `y`, `n`, `yes`, `no`, `on`, `off` are bools, even as keys: a bare key `n` becomes `"false"`. Quote them.
+- **Only `true` and `false` are bools.** `y`, `yes`, `on`, `n` stay text.
+- **Keys must be strings.** `1: x` or `true: x` is an `InvalidTemplate` error naming the path; quote the key.
+- **Duplicate keys are refused**, with the line of the first one.
+- **`.inf` and `.nan` are refused**, since JSON cannot carry them.
+- **Plain dates are timestamps.** `2026-10-18` decodes into a `time.Time`, and into a `string` as `"2026-10-18T00:00:00Z"`. Quote it to keep the spelling.
 - **Integers beyond int64 lose digits.** Quote them and decode into a string.
-- Anchors and aliases expand.
+- `0644` is octal (420). Write `0o644`, `644` or `"0644"` to say what you mean.
+- Anchors, aliases and merge keys (`<<`) expand. Tags are applied by the parser and then forgotten: `!!str 12` is the text `"12"`.
+- Only the first document is read.
 
 ## Decoding
 
