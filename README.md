@@ -46,7 +46,9 @@ err = template.Eval(&cfg, map[string]any{"name": "abc"}, "config")
 // cfg == Config{Value1: 123, Value2: 2, Value3: "some string abc"}
 ```
 
-`Eval(into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A path that does not exist is a `MissingPath` error.
+`Eval(into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error.
+
+`vars` must be JSON data. Every `Eval` checks all of them before evaluating anything, whatever the path selects; a var that `encoding/json` cannot marshal, or that nests deeper than 4096, is an `EvaluationFailed` error naming the var.
 
 ### Templates you do not trust
 

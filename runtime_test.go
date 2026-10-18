@@ -13,16 +13,16 @@ func TestReasonableRecursionWorks(t *testing.T) {
 	expectEqual(t, evalAs[int](t, template, nil, "v"), 1000)
 }
 
-func TestTemplatesWithoutExpressionsNeverBindVars(t *testing.T) {
+func TestTemplatesWithoutExpressionsStillCheckVars(t *testing.T) {
 	template := mustTemplate(t, "a: 1\nb: [x, z]\n")
-	got := evalAs[map[string]any](t, template, map[string]any{"unmarshalable": func() {}})
-	expectEqual(t, got, map[string]any{"a": float64(1), "b": []any{"x", "z"}})
+	var out any
+	expectError(t, template.Eval(&out, map[string]any{"unmarshalable": func() {}}), EvaluationFailed, `var "unmarshalable" is not JSON data`)
 }
 
-func TestVarsThatAreNotJSONDataFailTheFirstExpression(t *testing.T) {
+func TestVarsThatAreNotJSONDataFailBeforeAnyExpression(t *testing.T) {
 	template := mustTemplate(t, "v: ${1}\n")
 	var out int
-	expectError(t, template.Eval(&out, map[string]any{"f": func() {}}, "v"), EvaluationFailed, "$.v", `var "f" is not JSON data`)
+	expectError(t, template.Eval(&out, map[string]any{"f": func() {}}, "v"), EvaluationFailed, `binding vars: var "f" is not JSON data`)
 }
 
 func TestVarsCannotRedefineImmutableGlobals(t *testing.T) {

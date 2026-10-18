@@ -15,7 +15,7 @@ const sourcePreviewLength = 60
 type renderer struct {
 	template *template
 	engine   engine
-	vars     map[string]any
+	vars     encodedVars
 	runtime  runtime
 }
 
@@ -107,7 +107,7 @@ func (r *renderer) admit(result any, compiled expression, at string) (any, error
 
 func (r *renderer) evaluate(compiled expression, at string) (any, error) {
 	if r.runtime == nil {
-		opened, err := r.openRuntime()
+		opened, err := r.engine.open(r.vars)
 		if err != nil {
 			return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: binding vars: %s", at, err))
 		}
@@ -118,14 +118,6 @@ func (r *renderer) evaluate(compiled expression, at string) (any, error) {
 		return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: %s: %s", at, compiled.written(), err))
 	}
 	return result, nil
-}
-
-func (r *renderer) openRuntime() (runtime, error) {
-	encoded, err := encodeVars(r.vars)
-	if err != nil {
-		return nil, err
-	}
-	return r.engine.open(encoded)
 }
 
 func stringify(value any) (string, error) {

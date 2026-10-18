@@ -192,7 +192,7 @@ func (t *template) selectPath(path []string) (any, string, error) {
 			current, at = found, at+keyStep(step)
 		case []any:
 			index, err := strconv.Atoi(step)
-			if err != nil || index < 0 || index >= len(typed) {
+			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
 				return nil, "", missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
 			current, at = typed[index], at+indexStep(index)

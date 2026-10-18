@@ -22,5 +22,12 @@ func MakeTrustedTemplate(written string, options ...Option) (*TrustedTemplate, e
 }
 
 func (t *TrustedTemplate) Eval(into any, vars map[string]any, path ...string) error {
-	return t.core.eval(inProcess{}, evalCall{into: into, vars: vars, path: path})
+	return t.template().eval(inProcess{}, evalCall{into: into, vars: vars, path: path})
+}
+
+func (t *TrustedTemplate) template() *template {
+	if t == nil {
+		return nil
+	}
+	return t.core
 }
