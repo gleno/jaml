@@ -8,7 +8,10 @@ import (
 	"github.com/dop251/goja"
 )
 
-const maxResultNodes = 1 << 20
+const (
+	maxResultNodes = 1 << 20
+	maxDataDepth   = 4096
+)
 
 type undefined struct{}
 
@@ -72,6 +75,9 @@ func (r *resultReader) readObject(object *goja.Object, at string) (any, error) {
 	}
 	if r.ancestors[object] {
 		return nil, notJamlable(at, "a cyclic reference")
+	}
+	if len(r.ancestors) >= maxDataDepth {
+		return nil, tooDeep(describeResultAt(at))
 	}
 	r.ancestors[object] = true
 	defer delete(r.ancestors, object)
@@ -142,6 +148,10 @@ func (r *resultReader) readPlainObject(object *goja.Object, at string) (any, err
 
 func notJamlable(at string, what string) error {
 	return fmt.Errorf("%s is %s, which is not YAML data", describeResultAt(at), what)
+}
+
+func tooDeep(what string) error {
+	return fmt.Errorf("%s nests deeper than %d", what, maxDataDepth)
 }
 
 func describeResultAt(at string) string {

@@ -25,9 +25,33 @@ func encodeVars(vars map[string]any) (encodedVars, error) {
 		if err != nil {
 			return nil, fmt.Errorf("var %q is not JSON data: %w", name, err)
 		}
+		if jsonDepth(value) > maxDataDepth {
+			return nil, tooDeep(fmt.Sprintf("var %q", name))
+		}
 		encoded[name] = value
 	}
 	return encoded, nil
+}
+
+func jsonDepth(encoded []byte) int {
+	depth, deepest, inString, escaped := 0, 0, false, false
+	for _, b := range encoded {
+		switch {
+		case escaped:
+			escaped = false
+		case inString:
+			escaped = b == '\\'
+			inString = b != '"'
+		case b == '"':
+			inString = true
+		case b == '[' || b == '{':
+			depth++
+			deepest = max(deepest, depth)
+		case b == ']' || b == '}':
+			depth--
+		}
+	}
+	return deepest
 }
 
 type inProcess struct{}

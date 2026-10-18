@@ -36,7 +36,7 @@ func parseYAML(source string) (any, error) {
 	if err := document.Decode(&root); err != nil {
 		return nil, fault.From(InvalidTemplate, err.Error())
 	}
-	return asJSONData(root, "$")
+	return asJSONData(root, nodeAt{path: "$"})
 }
 
 func readOneDocument(source string) (*yaml.Node, error) {
@@ -119,12 +119,27 @@ func outOfFloat64(written string) bool {
 	return errors.Is(err, strconv.ErrRange) && math.IsInf(number, 0)
 }
 
-func asJSONData(node any, at string) (any, error) {
+type nodeAt struct {
+	path  string
+	depth int
+}
+
+func (n nodeAt) child(step string) nodeAt {
+	return nodeAt{path: n.path + step, depth: n.depth + 1}
+}
+
+func asJSONData(node any, at nodeAt) (any, error) {
+	switch node.(type) {
+	case map[string]any, map[any]any, []any:
+		if at.depth >= maxDataDepth {
+			return nil, fault.From(InvalidTemplate, tooDeep(at.path).Error())
+		}
+	}
 	switch typed := node.(type) {
 	case map[string]any:
 		data := make(map[string]any, len(typed))
 		for key, item := range typed {
-			converted, err := asJSONData(item, at+keyStep(key))
+			converted, err := asJSONData(item, at.child(keyStep(key)))
 			if err != nil {
 				return nil, err
 			}
@@ -136,9 +151,9 @@ func asJSONData(node any, at string) (any, error) {
 		for key, item := range typed {
 			name, isString := key.(string)
 			if !isString {
-				return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: key %v is a %T; keys must be strings, so quote it", at, key, key))
+				return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: key %v is a %T; keys must be strings, so quote it", at.path, key, key))
 			}
-			converted, err := asJSONData(item, at+keyStep(name))
+			converted, err := asJSONData(item, at.child(keyStep(name)))
 			if err != nil {
 				return nil, err
 			}
@@ -148,7 +163,7 @@ func asJSONData(node any, at string) (any, error) {
 	case []any:
 		data := make([]any, len(typed))
 		for index, item := range typed {
-			converted, err := asJSONData(item, at+indexStep(index))
+			converted, err := asJSONData(item, at.child(indexStep(index)))
 			if err != nil {
 				return nil, err
 			}
@@ -157,7 +172,7 @@ func asJSONData(node any, at string) (any, error) {
 		return data, nil
 	case float64:
 		if math.IsInf(typed, 0) || math.IsNaN(typed) {
-			return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: %v is not a finite number, which JSON cannot carry", at, typed))
+			return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: %v is not a finite number, which JSON cannot carry", at.path, typed))
 		}
 		return typed, nil
 	default:

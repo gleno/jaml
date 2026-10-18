@@ -273,26 +273,20 @@ func evalBounded(t *testing.T, template *SecureTemplate, ctx context.Context, pa
 	}
 }
 
-func TestAnAnswerTooDeepToReadFailsWithItsCause(t *testing.T) {
+func TestAnAnswerTooDeepNeverReachesTheWire(t *testing.T) {
 	template := mustSecure(t, "deep: ${ (() => { let a = []; for (let i = 0; i < 9999; i++) a = [a]; return a })() }\nok: ${ 5 }\n")
-	first := evaluatorPID(template)
-	expectError(t, evalBounded(t, template, within(t, 2*time.Second), "deep"), EvaluationFailed, "$.deep", "reading the evaluator's answer", "exceeded max depth")
+	before := evaluatorPID(template)
+	expectError(t, evalBounded(t, template, within(t, 2*time.Second), "deep"), EvaluationFailed, "$.deep", "nests deeper than 4096")
 	expectEqual(t, secureEvalAs[int](t, template, nil, "ok"), 5)
-	if replaced := evaluatorPID(template); replaced == first || replaced == 0 {
-		t.Fatalf("expected a fresh evaluator, still %d", replaced)
-	}
+	expectEqual(t, evaluatorPID(template), before)
 }
 
-func TestVarsTooDeepToSendFailWithTheirCause(t *testing.T) {
+func TestVarsTooDeepNeverReachTheWire(t *testing.T) {
 	template := mustSecure(t, "v: ${ 1 }\n")
 	before := evaluatorPID(template)
-	var deep any = []any{}
-	for range 10001 {
-		deep = []any{deep}
-	}
 	var out int
-	err := template.Eval(within(t, 10*time.Second), &out, map[string]any{"deep": deep}, "v")
-	expectError(t, err, EvaluationFailed, "exceeded max depth")
+	err := template.Eval(within(t, 10*time.Second), &out, map[string]any{"deep": nestedVar(10001)}, "v")
+	expectError(t, err, EvaluationFailed, `var "deep" nests deeper than 4096`)
 	expectEqual(t, secureEvalAs[int](t, template, nil, "v"), 1)
 	expectEqual(t, evaluatorPID(template), before)
 }

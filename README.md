@@ -140,6 +140,7 @@ The child is your own binary, started again with a marker in its environment. ja
 Both kinds share the same limits:
 
 - Calls nest at most 4096 deep.
+- Data, whether a var, a result or a template, nests at most 4096 deep. Deeper data is refused, naming the var or the path where it crosses the limit: a template with `InvalidTemplate`, a var or a result with `EvaluationFailed`.
 - A result may hold at most 1,048,576 values.
 - The runtime has no I/O, no `require`, no timers, and source-map comments are not followed.
 
