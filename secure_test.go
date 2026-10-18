@@ -2,8 +2,9 @@ package jaml
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -36,13 +37,27 @@ func within(t *testing.T, limit time.Duration) context.Context {
 	return ctx
 }
 
-func evaluatorPID(t *SecureTemplate) int {
-	t.state.Lock()
-	defer t.state.Unlock()
-	if t.evaluator == nil {
-		return 0
+func currentEvaluator(template *SecureTemplate) *evaluatorProcess {
+	select {
+	case slot := <-template.slot:
+		defer func() { template.slot <- slot }()
+		return slot.process
+	case <-time.After(10 * time.Second):
+		panic("the evaluator slot stayed taken")
 	}
-	return t.evaluator.cmd.Process.Pid
+}
+
+func evaluatorPID(template *SecureTemplate) int {
+	return currentEvaluator(template).cmd.Process.Pid
+}
+
+func expectDeath(t *testing.T, process *evaluatorProcess) {
+	t.Helper()
+	select {
+	case <-process.dead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the evaluator outlived its template")
+	}
 }
 
 func TestSecureAndTrustedAgree(t *testing.T) {
@@ -81,10 +96,11 @@ func TestAnInfiniteLoopEndsWithItsContext(t *testing.T) {
 
 func TestMemoryBombsHitTheLimit(t *testing.T) {
 	bombs := map[string]string{
-		"one huge string":   "v: \"${ 'x'.repeat(1e9).length }\"\n",
-		"doubling":          "v: \"${ (() => { let s = 'x'; while (true) s += s })() }\"\n",
-		"growing array":     "v: \"${ (() => { const a = []; while (true) a.push({k: a.length}) })() }\"\n",
-		"huge filled array": "v: \"${ new Array(1e8).fill(0).length }\"\n",
+		"one huge string":    "v: \"${ 'x'.repeat(1e9).length }\"\n",
+		"doubling":           "v: \"${ (() => { let s = 'x'; while (true) s += s })() }\"\n",
+		"growing array":      "v: \"${ (() => { const a = []; while (true) a.push({k: a.length}) })() }\"\n",
+		"huge filled array":  "v: \"${ new Array(1e8).fill(0).length }\"\n",
+		"past 4 GiB at once": "v: \"${ 'x'.repeat(5e9).length }\"\n",
 	}
 	for name, text := range bombs {
 		t.Run(name, func(t *testing.T) {
@@ -110,10 +126,9 @@ func TestADeadEvaluatorIsReplaced(t *testing.T) {
 	first := evaluatorPID(template)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		template.state.Lock()
-		evaluator := template.evaluator
-		template.state.Unlock()
-		_ = evaluator.cmd.Process.Kill()
+		if running, err := os.FindProcess(first); err == nil {
+			_ = running.Kill()
+		}
 	}()
 	var out any
 	expectError(t, template.Eval(within(t, 10*time.Second), &out, nil, "spin"), EvaluationFailed, "$.spin", "evaluator died")
@@ -125,13 +140,11 @@ func TestADeadEvaluatorIsReplaced(t *testing.T) {
 
 func TestCloseStopsTheEvaluator(t *testing.T) {
 	template := mustSecure(t, "v: ${ 1 }\n")
-	template.state.Lock()
-	evaluator := template.evaluator
-	template.state.Unlock()
+	process := currentEvaluator(template)
 	if err := template.Close(); err != nil {
 		t.Fatal(err)
 	}
-	expectEqual(t, evaluator.hasExited(), true)
+	expectDeath(t, process)
 	var out int
 	expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
 	if err := template.Close(); err != nil {
@@ -155,15 +168,9 @@ func TestTheTemplateContextOwnsTheEvaluator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	template.state.Lock()
-	evaluator := template.evaluator
-	template.state.Unlock()
+	process := currentEvaluator(template)
 	cancel()
-	select {
-	case <-evaluator.exited:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the evaluator outlived the template's context")
-	}
+	expectDeath(t, process)
 	var out int
 	expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
 }
@@ -185,10 +192,19 @@ func TestConcurrentSecureEvalsTakeTurns(t *testing.T) {
 func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 	t.Setenv("JAML_TEST_SECRET", "hunter2")
 	template := mustSecure(t, "v: ${ 1 }\n")
-	template.state.Lock()
-	env := template.evaluator.cmd.Env
-	template.state.Unlock()
-	expectEqual(t, env, []string{evaluatorMarker + "=1", evaluatorMemoryLimit + "=268435456"})
+	var names []string
+	for _, entry := range currentEvaluator(template).cmd.Env {
+		name, value, _ := strings.Cut(entry, "=")
+		names = append(names, name)
+		if name == evaluatorMemoryLimit {
+			expectEqual(t, value, "268435456")
+		}
+	}
+	want := []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorNonce, evaluatorParent}
+	if forwardableZone() != "" {
+		want = append(want, "TZ")
+	}
+	expectEqual(t, names, want)
 }
 
 func TestSecureTemplateErrorsSurfaceEarly(t *testing.T) {
@@ -207,53 +223,39 @@ func TestSecureVarsMustBeJSONData(t *testing.T) {
 	expectError(t, template.Eval(within(t, 10*time.Second), &out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `var "undefined" cannot be bound`)
 }
 
-type endsOnSecondLook struct {
-	context.Context
-	looks atomic.Int32
-	ended chan struct{}
-}
-
-func (c *endsOnSecondLook) Done() <-chan struct{} {
-	if c.looks.Add(1) > 1 {
-		return c.ended
-	}
-	return nil
-}
-
-func (c *endsOnSecondLook) Err() error {
-	if c.looks.Load() > 1 {
-		return context.Canceled
-	}
-	return nil
-}
-
 func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {
-	for range 50 {
-		ctx := &endsOnSecondLook{Context: context.Background(), ended: make(chan struct{})}
-		close(ctx.ended)
+	for attempt := range 50 {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(time.Duration(attempt%10) * time.Millisecond)
+			cancel()
+		}()
 		template, err := MakeSecureTemplate(ctx, "v: ${ 1 }\n")
 		if err != nil {
-			t.Fatal(err)
+			expectError(t, err, EvaluationFailed, "cancelled")
+			continue
 		}
-		deadline := time.Now().Add(5 * time.Second)
-		for !template.isClosed() {
-			if time.Now().After(deadline) {
-				t.Fatal("the template outlived its context")
-			}
-			time.Sleep(time.Millisecond)
-		}
+		process := currentEvaluator(template)
+		<-ctx.Done()
+		expectDeath(t, process)
 		var out int
 		expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
 	}
 }
 
-func TestClosingAZeroSecureTemplateIsHarmless(t *testing.T) {
-	var template SecureTemplate
-	if err := template.Close(); err != nil {
-		t.Fatal(err)
+func TestAnUnmadeSecureTemplateIsInvalid(t *testing.T) {
+	for name, template := range map[string]*SecureTemplate{"zero": {}, "nil": nil} {
+		t.Run(name, func(t *testing.T) {
+			if err := template.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var out int
+			expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), InvalidTemplate, "not made by")
+			if err := template.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
-	var out int
-	expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
 }
 
 func evalBounded(t *testing.T, template *SecureTemplate, ctx context.Context, path string) error {

@@ -27,8 +27,6 @@ func openSession(vars encodedVars) (*session, error) {
 	return opened, nil
 }
 
-func (s *session) close() {}
-
 func (s *session) bind(vars encodedVars) (err error) {
 	defer s.breakOnEngineFailure(&err)
 	parse := s.guardJSONParse()

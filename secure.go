@@ -6,19 +6,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
+	goruntime "runtime"
 
 	"github.com/gleno/fault"
 )
 
+var (
+	errClosed    = errors.New("closed")
+	errAbandoned = errors.New("abandoned without Close")
+)
+
 type SecureTemplate struct {
-	core       *template
-	spec       evaluatorSpec
-	turn       sync.Mutex
-	state      sync.Mutex
-	evaluator  *evaluatorProcess
-	closed     bool
-	stopOnDone func() bool
+	core     *template
+	lifetime context.Context
+	end      context.CancelCauseFunc
+	slot     chan *evaluatorSlot
+}
+
+type evaluatorSlot struct {
+	lifetime context.Context
+	spec     evaluatorSpec
+	process  *evaluatorProcess
 }
 
 func MakeSecureTemplate(ctx context.Context, written string, options ...Option) (*SecureTemplate, error) {
@@ -36,80 +44,82 @@ func MakeSecureTemplate(ctx context.Context, written string, options ...Option) 
 	if err != nil {
 		return nil, err
 	}
+	lifetime, end := context.WithCancelCause(ctx)
 	spec := evaluatorSpec{sources: core.sources, memoryLimit: configured.memoryLimit}
-	evaluator, err := startEvaluator(ctx, spec)
+	first, err := spawnEvaluator(lifetime, lifetime, spec)
 	if err != nil {
-		return nil, fault.From(EvaluationFailed, fmt.Sprintf("starting the evaluator: %s", err))
+		end(err)
+		if ctx.Err() != nil {
+			err = cancelled(ctx)
+		}
+		return nil, startFailure(err)
 	}
-	secured := &SecureTemplate{core: core, spec: spec, evaluator: evaluator}
-	secured.state.Lock()
-	secured.stopOnDone = context.AfterFunc(ctx, func() { _ = secured.Close() })
-	secured.state.Unlock()
+	slot := make(chan *evaluatorSlot, 1)
+	slot <- &evaluatorSlot{lifetime: lifetime, spec: spec, process: first}
+	secured := &SecureTemplate{core: core, lifetime: lifetime, end: end, slot: slot}
+	goruntime.AddCleanup(secured, func(end context.CancelCauseFunc) { end(errAbandoned) }, end)
 	return secured, nil
 }
 
+func startFailure(err error) error {
+	if errors.Is(err, TemplateError) {
+		return err
+	}
+	return fault.From(EvaluationFailed, fmt.Sprintf("starting the evaluator: %s", err))
+}
+
 func (t *SecureTemplate) Eval(ctx context.Context, into any, vars map[string]any, path ...string) error {
-	t.turn.Lock()
-	defer t.turn.Unlock()
-	if t.isClosed() {
+	if t == nil || t.slot == nil {
+		return unmadeTemplate()
+	}
+	if t.lifetime.Err() != nil {
 		return fault.From(Closed, "Eval after Close or after the template's context ended")
 	}
-	err := t.core.eval(evaluatorEngine{template: t, ctx: ctx}, evalCall{into: into, vars: vars, path: path})
-	if err != nil && t.isClosed() {
-		return fault.From(Closed, "closed during Eval")
+	select {
+	case slot := <-t.slot:
+		defer func() { t.slot <- slot }()
+		err := t.core.eval(evaluatorEngine{slot: slot, ctx: ctx}, evalCall{into: into, vars: vars, path: path})
+		if err != nil && t.lifetime.Err() != nil {
+			return fault.From(Closed, "closed during Eval")
+		}
+		return err
+	case <-ctx.Done():
+		return fault.From(EvaluationFailed, fmt.Sprintf("waiting for the evaluator: %s", cancelled(ctx)))
+	case <-t.lifetime.Done():
+		return fault.From(Closed, "closed while waiting for the evaluator")
 	}
-	return err
 }
 
 func (t *SecureTemplate) Close() error {
-	t.state.Lock()
-	t.closed = true
-	evaluator, stopOnDone := t.evaluator, t.stopOnDone
-	t.evaluator = nil
-	t.state.Unlock()
-	if stopOnDone != nil {
-		stopOnDone()
-	}
-	if evaluator != nil {
-		evaluator.kill()
+	if t != nil && t.end != nil {
+		t.end(errClosed)
 	}
 	return nil
 }
 
-func (t *SecureTemplate) isClosed() bool {
-	t.state.Lock()
-	defer t.state.Unlock()
-	return t.closed
-}
-
-func (t *SecureTemplate) acquire(ctx context.Context) (*evaluatorProcess, error) {
-	t.state.Lock()
-	defer t.state.Unlock()
-	if t.closed {
-		return nil, errors.New("template closed")
+func (s *evaluatorSlot) ready(ctx context.Context) (*evaluatorProcess, error) {
+	if s.process.alive() {
+		return s.process, nil
 	}
-	if t.evaluator != nil && !t.evaluator.hasExited() {
-		return t.evaluator, nil
-	}
-	started, err := startEvaluator(ctx, t.spec)
+	started, err := spawnEvaluator(ctx, s.lifetime, s.spec)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("starting the evaluator: %w", err)
 	}
-	t.evaluator = started
+	s.process = started
 	return started, nil
 }
 
 type evaluatorEngine struct {
-	template *SecureTemplate
-	ctx      context.Context
+	slot *evaluatorSlot
+	ctx  context.Context
 }
 
 func (e evaluatorEngine) open(vars encodedVars) (runtime, error) {
-	evaluator, err := e.template.acquire(e.ctx)
+	process, err := e.slot.ready(e.ctx)
 	if err != nil {
 		return nil, err
 	}
-	session := evaluatorSession{evaluator: evaluator, ctx: e.ctx}
+	session := evaluatorSession{process: process, ctx: e.ctx}
 	if _, err := session.call(request{Op: opOpen, Vars: vars}); err != nil {
 		return nil, err
 	}
@@ -117,8 +127,8 @@ func (e evaluatorEngine) open(vars encodedVars) (runtime, error) {
 }
 
 type evaluatorSession struct {
-	evaluator *evaluatorProcess
-	ctx       context.Context
+	process *evaluatorProcess
+	ctx     context.Context
 }
 
 func (s evaluatorSession) evaluate(compiled expression) (any, error) {
@@ -138,14 +148,8 @@ func (s evaluatorSession) evaluate(compiled expression) (any, error) {
 	return result, nil
 }
 
-func (s evaluatorSession) close() {
-	if !s.evaluator.hasExited() {
-		_, _ = s.call(request{Op: opClose})
-	}
-}
-
 func (s evaluatorSession) call(next request) (response, error) {
-	answer, err := s.evaluator.roundTrip(s.ctx, next)
+	answer, err := s.process.roundTrip(s.ctx, next)
 	if err != nil {
 		return response{}, err
 	}

@@ -130,15 +130,17 @@ goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted i
 
 **`MakeSecureTemplate(ctx, …)`** runs expressions in a child process that jaml starts and owns:
 
-- **Memory.** The child watches its own heap every millisecond and exits once it passes the limit (`WithMemoryLimit`, 256 MiB by default). One huge allocation is caught before it is touched; a doubling loop can reach about twice the limit before it is stopped. On Linux an address-space rlimit of 8× the limit (at least 4 GiB) backs it up.
-- **Time.** `Eval(ctx, …)` takes a context. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`.
-- **Recovery.** A child that is killed or dies fails only the `Eval` it was serving; the next `Eval` starts a fresh one. A JavaScript error does not kill the child.
-- **Lifetime.** The child lives until `Close()` or until the template's context is done, whichever comes first. After that, `Eval` returns `Closed`. A child also exits when its parent dies.
-- **One at a time.** `Eval` calls on one secure template take turns, so one bad input cannot fail another's work. Use several templates for parallelism.
-- **Clean environment.** The child gets none of your environment variables, only its marker and its limit.
+- **Memory.** The limit (`WithMemoryLimit`, 256 MiB by default) bounds what evaluation allocates, over what the binary holds when the child starts serving: heap that your packages build in their `init()` or package variables does not count against it. While it serves a request, the child checks its heap every millisecond and exits once it passes its starting heap plus the limit. One huge allocation is caught as soon as it is made; a doubling loop can reach about twice the limit before it is stopped. Either way `Eval` fails with `EvaluationFailed` and "exceeded the memory limit".
+- **Time.** `Eval(ctx, …)` takes a context, and it bounds the whole call: waiting for a turn, starting a fresh child, the request and the answer. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`. An `Eval` whose context is already done never touches the child.
+- **Recovery.** A child that is killed or dies fails only the `Eval` it was serving; the next `Eval` starts a fresh one. A JavaScript error does not kill the child. A child that crashes is reported with its exit status and the reason line of its crash, never its goroutine dump.
+- **Lifetime.** The child lives until `Close()` or until the template's context is done, whichever comes first, including a child that is still starting. `Close` never blocks. After that, `Eval` returns `Closed`. A template dropped without `Close` kills its child once the garbage collector finds it unreachable; `Close` is still the prompt way. A child also exits when its parent dies: at once when idle, within about a millisecond when busy.
+- **One at a time.** `Eval` calls on one secure template take turns, so one bad input cannot fail another's work. Use several templates for parallelism. An idle child uses no CPU.
+- **Clean environment.** The child gets none of your environment variables. It gets exactly `JAML_EVALUATOR`, `JAML_MEMORY_LIMIT`, `JAML_NONCE` (per start), `JAML_PARENT` (your process id) and, when your local zone has a name, `TZ`. A package whose `init()` needs another variable fails in the child, and every secure `Eval` fails with it.
+- **Local time.** The child uses your local zone when it has an IANA name: the zone from `TZ` at startup, or one you set with `time.Local, _ = time.LoadLocation(name)`. Then trusted and secure templates agree on local `Date` methods. A zone without such a name (`time.FixedZone`, a renamed or hand-built location) cannot be forwarded, so the child uses the system zone. The zone is read when a child starts; a later change to `time.Local` reaches only children started after it.
+- **Signals.** The child runs in its own process group, so a terminal Ctrl-C, `SIGQUIT`, `SIGTSTP` or a signal sent to your process group does not reach it. It still dies with your process.
 - **Cost.** Starting a child takes about 5 ms; a secure `Eval` adds about 50 µs of round trips per expression over a trusted one.
 
-The child is your own binary, started again with a marker in its environment. jaml's `init()` sees the marker, serves evaluations over file descriptors 3 and 4, and exits, so your `main()` never runs in the child. The `init()` functions of packages that Go initializes before jaml do run there. Secure templates need a binary that can start itself again: they are not supported on Windows (`Unsupported`), or when jaml is built into a C shared library or a plugin.
+The child is your own binary, started again with a marker in its environment; on Linux it is the running image (`/proc/self/exe`), even if the file has been replaced since. jaml's `init()` sees the marker, identifies itself to the parent with a greeting that carries the protocol version and the nonce, serves evaluations over file descriptors 3 and 4, and exits, so your `main()` never runs in the child. The `init()` functions of packages that Go initializes before jaml do run there. A child that does not identify itself, because the executable is not a jaml binary or speaks another protocol version, is `Unsupported`, with a message naming which. Secure templates need a Unix that can start the binary again: they are not supported on Windows, iOS, js or wasip1 (`Unsupported`), or when jaml is built into a C shared library or a plugin.
 
 Both kinds share the same limits:
 
@@ -176,7 +178,7 @@ var (
 	EvaluationFailed // an expression threw or produced something that is not data; a secure evaluator was cancelled, ran out of memory or died
 	CoercionFailed   // json.Unmarshal refused the data, or strict null/undefined refused a result
 	Closed           // Eval on a secure template after Close or after its context ended
-	Unsupported      // secure templates on a platform that cannot run them
+	Unsupported      // secure templates on a platform that cannot run them, or a child that is not a jaml evaluator
 )
 ```
 

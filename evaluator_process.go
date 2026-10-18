@@ -3,6 +3,7 @@ package jaml
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,151 +11,223 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/gleno/fault"
 )
 
-const stderrTailBytes = 4096
+const stderrHeadBytes = 4096
+
+var errHungUp = errors.New("the evaluator hung up")
 
 type evaluatorSpec struct {
 	sources     []source
 	memoryLimit int64
 }
 
-type evaluatorProcess struct {
-	cmd       *exec.Cmd
-	requests  *os.File
-	responses chan response
-	unread    error
-	exited    chan struct{}
-	stderr    *tailBuffer
-	limit     int64
+type evaluatorWorld struct {
+	limit  int64
+	nonce  string
+	parent int
+	zone   string
 }
 
-func startEvaluator(ctx context.Context, spec evaluatorSpec) (*evaluatorProcess, error) {
-	self, err := os.Executable()
+type evaluatorProcess struct {
+	cmd      *exec.Cmd
+	requests *os.File
+	replies  *json.Decoder
+	dead     chan struct{}
+	once     sync.Once
+	cause    error
+}
+
+func spawnEvaluator(ctx, lifetime context.Context, spec evaluatorSpec) (*evaluatorProcess, error) {
+	world := currentWorld(spec.memoryLimit)
+	process, err := world.start(lifetime)
 	if err != nil {
-		return nil, fmt.Errorf("finding this executable to start the evaluator: %w", err)
+		return nil, err
+	}
+	if err := process.greet(ctx, world.nonce); err != nil {
+		return nil, err
+	}
+	answer, err := process.roundTrip(ctx, request{Op: opCompile, Sources: spec.sources})
+	if err != nil {
+		return nil, err
+	}
+	if answer.Error != "" {
+		return nil, process.failWith(errors.New(answer.Error))
+	}
+	return process, nil
+}
+
+func currentWorld(limit int64) evaluatorWorld {
+	return evaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: forwardableZone()}
+}
+
+func forwardableZone() string {
+	name := time.Local.String()
+	if name == "Local" {
+		return ""
+	}
+	if _, err := time.LoadLocation(name); err != nil {
+		return ""
+	}
+	return name
+}
+
+func (w evaluatorWorld) env() []string {
+	env := []string{
+		evaluatorMarker + "=1",
+		evaluatorMemoryLimit + "=" + strconv.FormatInt(w.limit, 10),
+		evaluatorNonce + "=" + w.nonce,
+		evaluatorParent + "=" + strconv.Itoa(w.parent),
+	}
+	if w.zone != "" {
+		env = append(env, "TZ="+w.zone)
+	}
+	return env
+}
+
+func (w evaluatorWorld) start(lifetime context.Context) (*evaluatorProcess, error) {
+	image, err := selfImage()
+	if err != nil {
+		return nil, fmt.Errorf("finding this executable: %w", err)
 	}
 	requestsRead, requestsWrite, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	responsesRead, responsesWrite, err := os.Pipe()
+	repliesRead, repliesWrite, err := os.Pipe()
 	if err != nil {
 		closeAll(requestsRead, requestsWrite)
 		return nil, err
 	}
-	process := &evaluatorProcess{
-		cmd:       exec.Command(self),
-		requests:  requestsWrite,
-		responses: make(chan response),
-		exited:    make(chan struct{}),
-		stderr:    &tailBuffer{limit: stderrTailBytes},
-		limit:     spec.memoryLimit,
-	}
-	process.cmd.Env = []string{evaluatorMarker + "=1", evaluatorMemoryLimit + "=" + strconv.FormatInt(spec.memoryLimit, 10)}
-	process.cmd.ExtraFiles = []*os.File{requestsRead, responsesWrite}
-	process.cmd.Stderr = process.stderr
-	process.cmd.SysProcAttr = evaluatorProcAttr()
-	err = process.cmd.Start()
-	closeAll(requestsRead, responsesWrite)
+	stderr := &headBuffer{limit: stderrHeadBytes}
+	cmd := exec.Command(image)
+	cmd.Env = w.env()
+	cmd.ExtraFiles = []*os.File{requestsRead, repliesWrite}
+	cmd.Stderr = stderr
+	cmd.SysProcAttr = evaluatorProcAttr()
+	err = cmd.Start()
+	closeAll(requestsRead, repliesWrite)
 	if err != nil {
-		closeAll(requestsWrite, responsesRead)
-		return nil, fmt.Errorf("starting the evaluator: %w", err)
-	}
-	go process.readResponses(responsesRead)
-	go process.wait(requestsWrite)
-	answer, err := process.roundTrip(ctx, request{Op: opCompile, Sources: spec.sources})
-	if err == nil && answer.Error != "" {
-		err = errors.New(answer.Error)
-	}
-	if err != nil {
-		process.kill()
+		closeAll(requestsWrite, repliesRead)
 		return nil, err
 	}
+	process := &evaluatorProcess{cmd: cmd, requests: requestsWrite, replies: json.NewDecoder(repliesRead), dead: make(chan struct{})}
+	unbind := context.AfterFunc(lifetime, func() { process.die(fmt.Errorf("template closed: %w", context.Cause(lifetime))) })
+	go process.reap(func() error {
+		closeAll(requestsWrite, repliesRead)
+		unbind()
+		return w.describeExit(cmd.ProcessState, stderr)
+	})
 	return process, nil
 }
 
-func (p *evaluatorProcess) readResponses(from *os.File) {
-	defer close(p.responses)
-	defer closeAll(from)
-	decoder := json.NewDecoder(from)
-	for {
-		var next response
-		if err := decoder.Decode(&next); err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-				p.unread = fmt.Errorf("reading the evaluator's answer: %w", err)
-			}
-			return
-		}
-		select {
-		case p.responses <- next:
-		case <-p.exited:
-			return
-		}
+func (w evaluatorWorld) describeExit(state *os.ProcessState, stderr *headBuffer) error {
+	if state.ExitCode() == exitMemoryLimit {
+		return fmt.Errorf("exceeded the memory limit of %d bytes", w.limit)
+	}
+	if reason := stderr.reason(); reason != "" {
+		return fmt.Errorf("evaluator died (%s): %s", state, reason)
+	}
+	return fmt.Errorf("evaluator died (%s)", state)
+}
+
+func (p *evaluatorProcess) reap(bury func() error) {
+	_ = p.cmd.Wait()
+	p.die(bury())
+	close(p.dead)
+}
+
+func (p *evaluatorProcess) die(cause error) {
+	if cause != nil {
+		p.once.Do(func() { p.cause = cause })
+	}
+	_ = p.cmd.Process.Kill()
+}
+
+func (p *evaluatorProcess) failWith(cause error) error {
+	p.die(cause)
+	<-p.dead
+	return p.cause
+}
+
+func (p *evaluatorProcess) alive() bool {
+	select {
+	case <-p.dead:
+		return false
+	default:
+		return true
 	}
 }
 
-func (p *evaluatorProcess) wait(requests *os.File) {
-	_ = p.cmd.Wait()
-	closeAll(requests)
-	close(p.exited)
+func (p *evaluatorProcess) greet(ctx context.Context, nonce string) error {
+	var greeting hello
+	err := p.within(ctx, func() error { return p.read(&greeting) })
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return err
+	case err != nil:
+		return fault.From(Unsupported, fmt.Sprintf("this executable is not a jaml evaluator (C shared library or plugin host?): %s", err))
+	case greeting.Magic != evaluatorMagic || greeting.Nonce != nonce:
+		return p.failWith(fault.From(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): it answered with a foreign greeting"))
+	case greeting.Version != protocolVersion:
+		return p.failWith(fault.From(Unsupported, fmt.Sprintf("the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)))
+	}
+	return nil
 }
 
 func (p *evaluatorProcess) roundTrip(ctx context.Context, next request) (response, error) {
-	if ctx.Err() != nil {
-		p.kill()
-		return response{}, fmt.Errorf("cancelled: %w", context.Cause(ctx))
-	}
-	if p.hasExited() {
-		return response{}, p.failure()
-	}
 	encoded, err := json.Marshal(next)
 	if err != nil {
 		return response{}, fmt.Errorf("writing the evaluator's request: %w", err)
 	}
-	if _, err := p.requests.Write(append(encoded, '\n')); err != nil {
-		return response{}, p.failure()
-	}
-	select {
-	case answer, open := <-p.responses:
-		if !open {
-			return response{}, p.failure()
+	var answer response
+	err = p.within(ctx, func() error {
+		if _, err := p.requests.Write(append(encoded, '\n')); err != nil {
+			return errHungUp
 		}
-		return answer, nil
-	case <-ctx.Done():
-		p.kill()
-		return response{}, fmt.Errorf("cancelled: %w", context.Cause(ctx))
-	}
+		return p.read(&answer)
+	})
+	return answer, err
 }
 
-func (p *evaluatorProcess) hasExited() bool {
-	select {
-	case <-p.exited:
-		return true
+func (p *evaluatorProcess) within(ctx context.Context, exchange func() error) error {
+	if ctx.Err() != nil {
+		return cancelled(ctx)
+	}
+	stop := context.AfterFunc(ctx, func() { p.die(cancelled(ctx)) })
+	err := exchange()
+	stopped := stop()
+	switch {
+	case !stopped:
+		return p.failWith(cancelled(ctx))
+	case err == nil:
+		return nil
+	case errors.Is(err, errHungUp):
+		return p.failWith(nil)
 	default:
-		return false
+		return p.failWith(err)
 	}
 }
 
-func (p *evaluatorProcess) kill() {
-	if !p.hasExited() {
-		_ = p.cmd.Process.Kill()
+func (p *evaluatorProcess) read(into any) error {
+	err := p.replies.Decode(into)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, os.ErrClosed):
+		return errHungUp
+	default:
+		return fmt.Errorf("reading the evaluator's answer: %w", err)
 	}
-	<-p.exited
 }
 
-func (p *evaluatorProcess) failure() error {
-	p.kill()
-	for range p.responses {
-	}
-	if p.unread != nil {
-		return p.unread
-	}
-	if p.cmd.ProcessState.ExitCode() == exitMemoryLimit {
-		return fmt.Errorf("exceeded the memory limit of %d bytes", p.limit)
-	}
-	return fmt.Errorf("evaluator died (%s): %s", p.cmd.ProcessState, bytes.TrimSpace(p.stderr.bytes()))
+func cancelled(ctx context.Context) error {
+	return fmt.Errorf("cancelled: %w", context.Cause(ctx))
 }
 
 func closeAll(files ...*os.File) {
@@ -163,24 +236,28 @@ func closeAll(files ...*os.File) {
 	}
 }
 
-type tailBuffer struct {
+type headBuffer struct {
 	limit int
 	mu    sync.Mutex
 	kept  []byte
 }
 
-func (t *tailBuffer) Write(written []byte) (int, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.kept = append(t.kept, written...)
-	if overflow := len(t.kept) - t.limit; overflow > 0 {
-		t.kept = t.kept[overflow:]
-	}
+func (h *headBuffer) Write(written []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	room := max(h.limit-len(h.kept), 0)
+	h.kept = append(h.kept, written[:min(room, len(written))]...)
 	return len(written), nil
 }
 
-func (t *tailBuffer) bytes() []byte {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return bytes.Clone(t.kept)
+func (h *headBuffer) reason() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lines := strings.Split(string(bytes.TrimSpace(h.kept)), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "fatal error:") || strings.HasPrefix(line, "panic:") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return strings.TrimSpace(lines[0])
 }

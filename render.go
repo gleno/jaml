@@ -19,12 +19,6 @@ type renderer struct {
 	runtime  runtime
 }
 
-func (r *renderer) close() {
-	if r.runtime != nil {
-		r.runtime.close()
-	}
-}
-
 func (r *renderer) render(node any, at string) (any, error) {
 	switch typed := node.(type) {
 	case map[string]any:

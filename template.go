@@ -35,7 +35,7 @@ func makeTemplate(written string, configured settings) (*template, error) {
 
 func (t *template) eval(runs engine, call evalCall) error {
 	if t == nil {
-		return fault.From(InvalidTemplate, "Eval on a template not made by MakeTrustedTemplate or MakeSecureTemplate")
+		return unmadeTemplate()
 	}
 	target := reflect.ValueOf(call.into)
 	if target.Kind() != reflect.Pointer || target.IsNil() {
@@ -50,7 +50,6 @@ func (t *template) eval(runs engine, call evalCall) error {
 		return err
 	}
 	renderer := &renderer{template: t, engine: runs, vars: vars}
-	defer renderer.close()
 	rendered, err := renderer.render(selected, at)
 	if err != nil {
 		return err
@@ -63,4 +62,8 @@ func (t *template) eval(runs engine, call evalCall) error {
 		return fault.From(CoercionFailed, fmt.Sprintf("%s: %s", at, err))
 	}
 	return nil
+}
+
+func unmadeTemplate() error {
+	return fault.From(InvalidTemplate, "Eval on a template not made by MakeTrustedTemplate or MakeSecureTemplate")
 }

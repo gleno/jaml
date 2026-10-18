@@ -15,7 +15,6 @@ type engine interface {
 
 type runtime interface {
 	evaluate(compiled expression) (any, error)
-	close()
 }
 
 func encodeVars(vars map[string]any) (encodedVars, error) {

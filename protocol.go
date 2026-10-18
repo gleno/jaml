@@ -5,10 +5,20 @@ import "encoding/json"
 const (
 	evaluatorMarker      = "JAML_EVALUATOR"
 	evaluatorMemoryLimit = "JAML_MEMORY_LIMIT"
+	evaluatorNonce       = "JAML_NONCE"
+	evaluatorParent      = "JAML_PARENT"
+	evaluatorMagic       = "jaml-evaluator"
+	protocolVersion      = 1
 	exitMemoryLimit      = 86
 	requestsFD           = 3
 	responsesFD          = 4
 )
+
+type hello struct {
+	Magic   string `json:"magic"`
+	Version int    `json:"version"`
+	Nonce   string `json:"nonce"`
+}
 
 type operation string
 
@@ -16,7 +26,6 @@ const (
 	opCompile operation = "compile"
 	opOpen    operation = "open"
 	opEval    operation = "eval"
-	opClose   operation = "close"
 )
 
 type request struct {
