@@ -84,7 +84,7 @@ func (c *compiler) compileText(written string) (text, error) {
 
 func (c *compiler) compileWhole(trimmed string) (text, error) {
 	after := trimmed[len(wholeValue.opens):]
-	end, err := expressionEnd(after, wholeValue)
+	end, err := searchingEndsIn(trimmed).expressionEnd(after, wholeValue)
 	if err != nil {
 		return text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, preview(after), err)
 	}
@@ -101,6 +101,7 @@ func (c *compiler) compileWhole(trimmed string) (text, error) {
 
 func (c *compiler) compileInterpolations(written string) (text, error) {
 	var compiled text
+	search := searchingEndsIn(written)
 	rest := written
 	for {
 		start := strings.Index(rest, interpolation.opens)
@@ -109,7 +110,7 @@ func (c *compiler) compileInterpolations(written string) (text, error) {
 		}
 		compiled = compiled.withLiteral(rest[:start])
 		after := rest[start+len(interpolation.opens):]
-		end, err := expressionEnd(after, interpolation)
+		end, err := search.expressionEnd(after, interpolation)
 		if err != nil {
 			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, preview(after), err)
 		}

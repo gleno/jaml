@@ -3,6 +3,7 @@ package jaml
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"reflect"
 	"sort"
 	"strings"
@@ -19,9 +20,12 @@ const closerStop = "Unexpected token }"
 
 const maxCodeBytes = 64 << 10
 
+const endSearchParsesPerByte = 32
+
 var (
 	errEmptyExpression  = errors.New("empty expression")
 	errNotOneExpression = errors.New("syntax error: write a single JavaScript expression")
+	errCostlyEnds       = fmt.Errorf("finding where its expressions end would parse more than %d times its length", endSearchParsesPerByte)
 )
 
 type expression struct {
@@ -138,21 +142,41 @@ func (s parseStop) closes(after string, opened delimiter) bool {
 	return s.message == closerStop && strings.HasPrefix(after[s.offset:], opened.closes)
 }
 
-func expressionEnd(after string, opened delimiter) (int, error) {
-	closers := occurrences(after, opened.closes)
-	for reach := 1; reach < len(closers); reach *= 2 {
-		window := after[:closers[reach-1]+len(opened.closes)]
-		if stop, failed := firstParseError(window); failed && stop.closes(after, opened) {
+type endSearch struct {
+	unparsed int
+}
+
+func searchingEndsIn(value string) *endSearch {
+	return &endSearch{unparsed: endSearchParsesPerByte * len(value)}
+}
+
+func (s *endSearch) expressionEnd(after string, opened delimiter) (int, error) {
+	for window := range truncatedWindows(after, opened.closes) {
+		if err := s.spend(window); err != nil {
+			return 0, err
+		}
+		if stop, failed := firstParseError(after[:window]); failed && stop.closes(after, opened) {
 			return stop.offset, nil
 		}
 	}
+	if err := s.spend(len(after)); err != nil {
+		return 0, err
+	}
 	return finalEnd(after, opened)
+}
+
+func (s *endSearch) spend(parsed int) error {
+	if parsed > s.unparsed {
+		return errCostlyEnds
+	}
+	s.unparsed -= parsed
+	return nil
 }
 
 func finalEnd(after string, opened delimiter) (int, error) {
 	stop, failed := firstParseError(after)
 	switch {
-	case failed && stop.closes(after, opened):
+	case failed && strings.HasPrefix(after[stop.offset:], opened.closes):
 		return stop.offset, nil
 	case !failed || strings.HasPrefix(opened.closes, after[stop.offset:]):
 		return 0, fmt.Errorf("unclosed %s", opened.opens)
@@ -160,17 +184,35 @@ func finalEnd(after string, opened delimiter) (int, error) {
 	return 0, placeSyntaxError(after, stop.at, stop.message)
 }
 
-func occurrences(text, closer string) []int {
-	var found []int
-	for at := strings.Index(text, closer); at >= 0; {
-		found = append(found, at)
-		next := strings.Index(text[at+1:], closer)
-		if next < 0 {
-			break
+func truncatedWindows(after, closer string) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		seen, pending := 0, 0
+		for at := range occurrences(after, closer) {
+			if pending > 0 && !yield(pending) {
+				return
+			}
+			seen++
+			pending = 0
+			if seen&(seen-1) == 0 {
+				pending = at + len(closer)
+			}
 		}
-		at += 1 + next
 	}
-	return found
+}
+
+func occurrences(text, closer string) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for at := strings.Index(text, closer); at >= 0; {
+			if !yield(at) {
+				return
+			}
+			next := strings.Index(text[at+1:], closer)
+			if next < 0 {
+				return
+			}
+			at += 1 + next
+		}
+	}
 }
 
 func firstParseError(code string) (parseStop, bool) {

@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -89,9 +90,10 @@ func TestWindowedEndSearchAgreesWithOneParseOfTheRest(t *testing.T) {
 		" 1 }} tail }}", " '}}' }}", " {a: 1}}}", " `${ {b: '}}'}.b }` }} x }}", " /}}/.test(s) }} }}",
 		" x // }}\n }} y }}", " /* }} */ 1 }}", " a }x}}", " 1}", " ) }}", " (1 }} }}", " '}}}' }} '}}' }}",
 		" x => { return {a: '}}'} } }} }}", " [1, {b: 2}]}}}}",
+		" `\\1` }} b }}", " 1 + `\\u` }} }}",
 	}
 	for _, after := range corpus {
-		windowed, windowedErr := expressionEnd(after, interpolation)
+		windowed, windowedErr := searchingEndsIn(after).expressionEnd(after, interpolation)
 		whole, wholeErr := finalEnd(after, interpolation)
 		if windowed != whole || (windowedErr == nil) != (wholeErr == nil) {
 			t.Fatalf("%q: windowed %d %v, whole %d %v", after, windowed, windowedErr, whole, wholeErr)
@@ -141,4 +143,53 @@ func TestMillionDeepExpressionTextFailsCleanlyInsteadOfOverflowingTheParser(t *t
 			expectError(t, err, InvalidTemplate, "$.v", "longer than 65536 bytes")
 		}
 	})
+}
+
+func TestDistinctValuesFullOfInterpolationsMakeQuickly(t *testing.T) {
+	var written strings.Builder
+	for value := range 10 {
+		fmt.Fprintf(&written, "v%d: '%d%s'\n", value, value, strings.Repeat("${{a}}", 10_900))
+	}
+	started := time.Now()
+	template := mustTemplate(t, written.String())
+	if took := time.Since(started); took > raceSlowdown*time.Second {
+		t.Fatalf("making %d bytes took %v", written.Len(), took)
+	}
+	expectEqual(t, evalAs[string](t, template, map[string]any{"a": 1}, "v3"), "3"+strings.Repeat("1", 10_900))
+}
+
+func TestAnEndHiddenBehindClusteredClosersIsStillFound(t *testing.T) {
+	inString := "'}}" + strings.Repeat(" ", 50_000) + strings.Repeat("}}", 5_000) + "'"
+	template := mustTemplate(t, "v: \"${{ "+inString+".length }}\"\n")
+	expectEqual(t, evalAs[string](t, template, nil, "v"), fmt.Sprint(len(inString)-2))
+}
+
+func TestAnEndSearchThatOutgrowsItsValueIsRefused(t *testing.T) {
+	after := " `}}" + strings.Repeat(" ", 1_000) + strings.Repeat("}}", 100) + "` }}"
+	search := &endSearch{unparsed: 4 * len(after)}
+	if _, err := search.expressionEnd(after, interpolation); err != errCostlyEnds {
+		t.Fatalf("expected the costly-ends refusal, got %v", err)
+	}
+	if end, err := searchingEndsIn(after).expressionEnd(after, interpolation); err != nil || end != len(after)-2 {
+		t.Fatalf("expected the end at %d, got %d %v", len(after)-2, end, err)
+	}
+}
+
+func TestAClosedExpressionReportsItsOwnSyntaxError(t *testing.T) {
+	for written, fragments := range map[string][]string{
+		"v: \"${ `\\\\1` }\"\n":         {"${`\\1`}:", "Octal escape sequences are not allowed in this context"},
+		"v: \"a ${{ `\\\\1` }} b\"\n":   {"${{`\\1`}}:", "Octal escape sequences are not allowed in this context"},
+		"v: \"${ 1 + `\\\\u` }\"\n":     {"${1 + `\\u`}:", "invalid escape"},
+		"v: \"${ /a/z }\"\n":            {"Invalid flags supplied to RegExp constructor 'z'"},
+		"v: \"${ /(/ }\"\n":             {"Unterminated group"},
+		"v: \"a ${{ /(/ }} b\"\n":       {"${{/(/}}:", "Unterminated group"},
+		"v: \"${ '\\\\u{110000}' }\"\n": {"Unexpected token ILLEGAL"},
+		"v: \"${ '\\\\x4' }\"\n":        {"Unexpected token ILLEGAL"},
+		"v: \"${ 'abc }\"\n":            {"Unexpected token ILLEGAL"},
+		"v: \"${ `${1` }\"\n":           {"unclosed ${"},
+	} {
+		_, err := MakeTrustedTemplate(written)
+		expectError(t, err, InvalidTemplate, append([]string{"$.v"}, fragments...)...)
+		expectNoFragment(t, err, "unclosed ${{", "}} b")
+	}
 }
