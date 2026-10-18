@@ -6,18 +6,32 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/dop251/goja"
 )
 
 var replacementEscape = []byte(`ufffd`)
 
 type encodedVars map[string]json.RawMessage
 
+var engineGlobals = sync.OnceValue(func() map[string]bool {
+	names := map[string]bool{}
+	for _, name := range goja.New().GlobalObject().GetOwnPropertyNames() {
+		names[name] = true
+	}
+	return names
+})
+
 func encodeVars(vars map[string]any) (encodedVars, error) {
 	encoded := make(encodedVars, len(vars))
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		if !utf8.ValidString(name) {
 			return nil, fmt.Errorf("var %q is not named in valid UTF-8", name)
+		}
+		if engineGlobals()[name] {
+			return nil, fmt.Errorf("var %q collides with a JavaScript global", name)
 		}
 		value, err := json.Marshal(vars[name])
 		if err != nil {

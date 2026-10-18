@@ -30,3 +30,28 @@ func TestVarsCannotRedefineImmutableGlobals(t *testing.T) {
 	var out int
 	expectError(t, template.Eval(&out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `binding vars: var "undefined" collides with a JavaScript global`)
 }
+
+func TestEvalsWithoutExpressionsBuildNoEngine(t *testing.T) {
+	cases := map[string]struct {
+		text string
+		path []string
+	}{
+		"template without code":         {"a: 1\nb: [x, y]\nc: {d: e}\n", nil},
+		"selected subtree without code": {"a: ${ 1 }\nc: {d: e}\n", []string{"c"}},
+	}
+	vars := map[string]any{"fine": map[string]any{"k": []any{1, "two"}}}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			template := mustTemplate(t, c.text)
+			allocations := testing.AllocsPerRun(20, func() {
+				var out any
+				if err := template.Eval(&out, vars, c.path...); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if allocations > 200 {
+				t.Fatalf("an Eval without expressions allocated %v times, as if it built an engine", allocations)
+			}
+		})
+	}
+}

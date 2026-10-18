@@ -11,6 +11,23 @@ import (
 
 const maxCallStackSize = 4096
 
+type lazySession struct {
+	vars   encodedVars
+	opened *session
+}
+
+func (l *lazySession) open() (*session, error) {
+	if l.opened != nil {
+		return l.opened, nil
+	}
+	opened, err := openSession(l.vars)
+	if err != nil {
+		return nil, fail(EvaluationFailed, "binding vars: %w", err)
+	}
+	l.opened = opened
+	return opened, nil
+}
+
 type session struct {
 	vm     *goja.Runtime
 	realm  realm
@@ -31,11 +48,7 @@ func (s *session) bind(vars encodedVars) (err error) {
 	defer s.breakOnEngineFailure(&err)
 	parse := s.guardJSONParse()
 	global := s.vm.GlobalObject()
-	builtIn := global.GetOwnPropertyNames()
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		if slices.Contains(builtIn, name) {
-			return fmt.Errorf("var %q collides with a JavaScript global", name)
-		}
 		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
 		if err != nil {
 			return fmt.Errorf("var %q: %w", name, err)

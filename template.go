@@ -58,15 +58,11 @@ func (t *template) eval(renders renderSite, call evalCall) error {
 }
 
 func (t *template) render(job rendering) ([]byte, error) {
-	opened, err := openSession(job.Vars)
-	if err != nil {
-		return nil, fail(EvaluationFailed, "binding vars: %w", err)
-	}
 	selected, at, err := t.selectPath(job.Path)
 	if err != nil {
 		return nil, err
 	}
-	renderer := &renderer{template: t, session: opened}
+	renderer := &renderer{template: t, engine: &lazySession{vars: job.Vars}}
 	tree, err := renderer.render(selected, at)
 	if err != nil {
 		return nil, err

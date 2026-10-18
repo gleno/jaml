@@ -10,7 +10,7 @@ const sourcePreviewLength = 60
 
 type renderer struct {
 	template *template
-	session  *session
+	engine   *lazySession
 }
 
 func (r *renderer) render(node any, at *dataPath) (any, error) {
@@ -94,7 +94,11 @@ func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, er
 }
 
 func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
-	result, err := r.session.evaluate(compiled)
+	session, err := r.engine.open()
+	if err != nil {
+		return nil, err
+	}
+	result, err := session.evaluate(compiled)
 	if err != nil {
 		return nil, fail(EvaluationFailed, "%s: %s: %w", at, compiled.written(), err)
 	}
