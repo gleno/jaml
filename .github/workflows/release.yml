@@ -1,0 +1,41 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Figure out next tag
+        id: next
+        run: python3 .github/release.py
+      - name: Tag and push
+        if: steps.next.outputs.next != ''
+        env:
+          NEXT: ${{ steps.next.outputs.next }}
+          BUMP: ${{ steps.next.outputs.bump }}
+        run: |
+          git tag "${NEXT}"
+          git push origin "${NEXT}"
+          echo "Released **${NEXT}** (${BUMP} bump)" >> "${GITHUB_STEP_SUMMARY}"
