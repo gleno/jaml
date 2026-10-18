@@ -4,16 +4,23 @@ import (
 	"os"
 	"os/exec"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-const stackCappedChild = "JAML_STACK_CAPPED_CHILD"
+const (
+	stackCappedChild    = "JAML_STACK_CAPPED_CHILD"
+	childStackBytes     = 64 << 20
+	childMemoryBytes    = 256 << 20
+	depthAWalkOverflows = 250_000
+)
 
 func survivesInAStackCappedChild(t *testing.T, body func(t *testing.T)) {
 	t.Helper()
 	if os.Getenv(stackCappedChild) == t.Name() {
-		debug.SetMaxStack(64 << 20)
+		debug.SetMaxStack(childStackBytes)
+		debug.SetMemoryLimit(childMemoryBytes)
 		body(t)
 		return
 	}
@@ -38,7 +45,7 @@ func expressionTemplate(source string) string {
 }
 
 func deeplyThrown(thrown string) string {
-	return expressionTemplate("(() => { let a = []; for (let i = 0; i < 1000000; i++) a = [a]; throw " + thrown + " })()")
+	return expressionTemplate("(() => { let a = []; for (let i = 0; i < " + strconv.Itoa(depthAWalkOverflows) + "; i++) a = [a]; throw " + thrown + " })()")
 }
 
 func TestJSONParseRefusesTextNestedDeeperThan4096InBothModes(t *testing.T) {
