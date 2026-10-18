@@ -14,6 +14,7 @@ const maxCallStackSize = 4096
 type session struct {
 	vm              *goja.Runtime
 	objectPrototype *goja.Object
+	broken          error
 }
 
 func openSession(vars encodedVars) (*session, error) {
@@ -28,8 +29,9 @@ func openSession(vars encodedVars) (*session, error) {
 
 func (s *session) close() {}
 
-func (s *session) bind(vars encodedVars) error {
-	parse, _ := goja.AssertFunction(s.vm.Get("JSON").ToObject(s.vm).Get("parse"))
+func (s *session) bind(vars encodedVars) (err error) {
+	defer s.breakOnEngineFailure(&err)
+	parse := s.guardJSONParse()
 	global := s.vm.GlobalObject()
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
@@ -43,7 +45,58 @@ func (s *session) bind(vars encodedVars) error {
 	return nil
 }
 
-func (s *session) evaluate(compiled expression) (any, error) {
+func (s *session) guardJSONParse() goja.Callable {
+	json := s.vm.Get("JSON").ToObject(s.vm)
+	parse, _ := goja.AssertFunction(json.Get("parse"))
+	rangeError := s.vm.Get("RangeError")
+	guarded := s.vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		text := call.Argument(0).ToString()
+		if jsonDepth([]byte(text.String())) > maxDataDepth {
+			refusal, err := s.vm.New(rangeError, s.vm.ToValue(fmt.Sprintf("JSON text nests deeper than %d", maxDataDepth)))
+			if err != nil {
+				panic(err)
+			}
+			panic(refusal)
+		}
+		parsed, err := parse(call.This, append([]goja.Value{text}, call.Arguments[min(1, len(call.Arguments)):]...)...)
+		if err != nil {
+			panic(err)
+		}
+		return parsed
+	})
+	if err := json.Set("parse", guarded); err != nil {
+		panic(err)
+	}
+	callable, _ := goja.AssertFunction(guarded)
+	return callable
+}
+
+func (s *session) evaluate(compiled expression) (result any, err error) {
+	if s.broken != nil {
+		return nil, fmt.Errorf("an earlier expression broke the engine: %w", s.broken)
+	}
+	defer s.breakOnEngineFailure(&err)
+	return s.run(compiled)
+}
+
+func (s *session) breakOnEngineFailure(err *error) {
+	if failure := engineFailure(recover()); failure != nil {
+		s.broken, *err = failure, failure
+	}
+}
+
+func engineFailure(recovered any) error {
+	switch cause := recovered.(type) {
+	case nil:
+		return nil
+	case error:
+		return fmt.Errorf("the engine failed: %w", cause)
+	default:
+		return fmt.Errorf("the engine failed: %v", cause)
+	}
+}
+
+func (s *session) run(compiled expression) (any, error) {
 	wrapper, err := s.vm.RunProgram(compiled.program)
 	if err != nil {
 		return nil, s.describe(err)
@@ -103,13 +156,24 @@ func describeThrown(thrown goja.Value) string {
 	if !isObject {
 		return "threw " + thrown.String()
 	}
-	message := object.Get("message")
-	if message == nil || goja.IsUndefined(message) || goja.IsNull(message) {
-		return "threw " + object.String()
+	message, hasMessage := primitiveField(object, "message")
+	if !hasMessage {
+		return "threw [object " + object.ClassName() + "]"
 	}
-	name := object.Get("name")
-	if name == nil || goja.IsUndefined(name) || goja.IsNull(name) {
-		return message.String()
+	name, hasName := primitiveField(object, "name")
+	if !hasName {
+		return message
 	}
-	return name.String() + ": " + message.String()
+	return name + ": " + message
+}
+
+func primitiveField(object *goja.Object, key string) (string, bool) {
+	field := object.Get(key)
+	if field == nil || goja.IsUndefined(field) || goja.IsNull(field) {
+		return "", false
+	}
+	if _, isObject := field.(*goja.Object); isObject {
+		return "", false
+	}
+	return field.String(), true
 }

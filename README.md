@@ -125,7 +125,7 @@ YAML `~`, `null` and empty values are null and decode as JSON null. The settings
 
 goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted inside a built-in call such as `'x'.repeat(1e9)`. So jaml does not pretend to bound an expression running in your process. You choose:
 
-**`MakeTrustedTemplate`** runs expressions in your process, with no time or memory limit. An infinite loop hangs `Eval`; an allocation bomb takes the process down. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run.
+**`MakeTrustedTemplate`** runs expressions in your process, with no time or memory limit. An infinite loop hangs `Eval`; an allocation bomb takes the process down. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code, and deep nesting in that string can still overflow goja's recursive parser; trusted mode makes no promise about running untrusted code.
 
 **`MakeSecureTemplate(ctx, …)`** runs expressions in a child process that jaml starts and owns:
 
@@ -141,8 +141,11 @@ The child is your own binary, started again with a marker in its environment. ja
 
 Both kinds share the same limits:
 
-- Calls nest at most 4096 deep.
-- Data, whether a var, a result or a template, nests at most 4096 deep. Deeper data is refused, naming the var or the path where it crosses the limit: a template with `InvalidTemplate`, a var or a result with `EvaluationFailed`.
+- JavaScript calls nest at most 4096 deep; deeper recursion fails with `EvaluationFailed`.
+- Vars, results and templates nest at most 4096 deep. Deeper data is refused, naming the var or the path where it crosses the limit: a template with `InvalidTemplate`, a var or a result with `EvaluationFailed`.
+- `JSON.parse` refuses text nested deeper than 4096 with a `RangeError`, so a deep string var cannot be turned into deep data.
+- Data an expression builds for itself is not bounded. Some built-ins (`JSON.stringify`, `String` or `join` of an array, `flat`) walk it recursively on the Go stack, and a value nested about a million deep overflows that stack, which Go cannot recover from. It is the template's own risk, like an allocation bomb: a trusted template takes your process down, a secure template's child dies, and that `Eval` fails.
+- A Go panic inside the engine, such as goja's `'x'.repeat(2 ** 52)`, fails the `Eval` with `EvaluationFailed` instead of reaching your code.
 - A result may hold at most 1,048,576 values.
 - The runtime has no I/O, no `require`, no timers, and source-map comments are not followed.
 
