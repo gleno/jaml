@@ -1,184 +1,13 @@
 package jaml
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"maps"
-	"math"
-	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/gleno/fault"
-	"go.yaml.in/yaml/v3"
 )
-
-var (
-	legacyOctal = regexp.MustCompile(`^[-+]?0[0-9]+$`)
-	integerLike = regexp.MustCompile(`^[-+]?(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)$`)
-	floatLike   = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9][0-9_]*(\.[0-9_]*)?)([eE][-+]?[0-9]+)?$`)
-)
-
-func parseYAML(source string) (any, error) {
-	document, err := readOneDocument(source)
-	if err != nil {
-		return nil, err
-	}
-	if document.Kind == 0 {
-		return nil, nil
-	}
-	if err := settleScalars(document, "$"); err != nil {
-		return nil, err
-	}
-	var root any
-	if err := document.Decode(&root); err != nil {
-		return nil, fault.From(InvalidTemplate, err.Error())
-	}
-	return asJSONData(root, nodeAt{path: "$"})
-}
-
-func readOneDocument(source string) (*yaml.Node, error) {
-	decoder := yaml.NewDecoder(strings.NewReader(source))
-	var document yaml.Node
-	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fault.From(InvalidTemplate, err.Error())
-	}
-	for {
-		var another yaml.Node
-		err := decoder.Decode(&another)
-		if errors.Is(err, io.EOF) {
-			return &document, nil
-		}
-		if err != nil {
-			return nil, fault.From(InvalidTemplate, err.Error())
-		}
-		if another.Kind != 0 && !isEmptyDocument(&another) {
-			return nil, fault.From(InvalidTemplate, fmt.Sprintf("line %d starts a second YAML document; a template is one document", another.Line))
-		}
-	}
-}
-
-func isEmptyDocument(document *yaml.Node) bool {
-	return document.Kind == yaml.DocumentNode && (len(document.Content) == 0 || document.Content[0].ShortTag() == "!!null" && document.Content[0].Value == "")
-}
-
-func settleScalars(node *yaml.Node, at string) error {
-	switch node.Kind {
-	case yaml.DocumentNode, yaml.SequenceNode:
-		for index, child := range node.Content {
-			childAt := at
-			if node.Kind == yaml.SequenceNode {
-				childAt = at + indexStep(index)
-			}
-			if err := settleScalars(child, childAt); err != nil {
-				return err
-			}
-		}
-	case yaml.MappingNode:
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			key, value := node.Content[i], node.Content[i+1]
-			if err := settleScalars(key, at); err != nil {
-				return err
-			}
-			if err := settleScalars(value, at+keyStep(key.Value)); err != nil {
-				return err
-			}
-		}
-	case yaml.ScalarNode:
-		return settleScalar(node, at)
-	}
-	return nil
-}
-
-func settleScalar(node *yaml.Node, at string) error {
-	if node.ShortTag() == "!!timestamp" {
-		node.Tag = "!!str"
-		return nil
-	}
-	if node.Style != 0 {
-		return nil
-	}
-	switch {
-	case legacyOctal.MatchString(node.Value), integerLike.MatchString(node.Value) && outOfInt64(node.Value):
-		node.Tag = "!!str"
-	case floatLike.MatchString(node.Value) && outOfFloat64(node.Value):
-		return fault.From(InvalidTemplate, fmt.Sprintf("%s: %s is out of the range of a 64-bit float; quote it to keep it as text", at, node.Value))
-	}
-	return nil
-}
-
-func outOfInt64(written string) bool {
-	_, err := strconv.ParseInt(written, 0, 64)
-	return errors.Is(err, strconv.ErrRange)
-}
-
-func outOfFloat64(written string) bool {
-	number, err := strconv.ParseFloat(strings.ReplaceAll(written, "_", ""), 64)
-	return errors.Is(err, strconv.ErrRange) && math.IsInf(number, 0)
-}
-
-type nodeAt struct {
-	path  string
-	depth int
-}
-
-func (n nodeAt) child(step string) nodeAt {
-	return nodeAt{path: n.path + step, depth: n.depth + 1}
-}
-
-func asJSONData(node any, at nodeAt) (any, error) {
-	switch node.(type) {
-	case map[string]any, map[any]any, []any:
-		if at.depth >= maxDataDepth {
-			return nil, fault.From(InvalidTemplate, tooDeep(at.path).Error())
-		}
-	}
-	switch typed := node.(type) {
-	case map[string]any:
-		data := make(map[string]any, len(typed))
-		for key, item := range typed {
-			converted, err := asJSONData(item, at.child(keyStep(key)))
-			if err != nil {
-				return nil, err
-			}
-			data[key] = converted
-		}
-		return data, nil
-	case map[any]any:
-		data := make(map[string]any, len(typed))
-		for key, item := range typed {
-			name, isString := key.(string)
-			if !isString {
-				return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: key %v is a %T; keys must be strings, so quote it", at.path, key, key))
-			}
-			converted, err := asJSONData(item, at.child(keyStep(name)))
-			if err != nil {
-				return nil, err
-			}
-			data[name] = converted
-		}
-		return data, nil
-	case []any:
-		data := make([]any, len(typed))
-		for index, item := range typed {
-			converted, err := asJSONData(item, at.child(indexStep(index)))
-			if err != nil {
-				return nil, err
-			}
-			data[index] = converted
-		}
-		return data, nil
-	case float64:
-		if math.IsInf(typed, 0) || math.IsNaN(typed) {
-			return nil, fault.From(InvalidTemplate, fmt.Sprintf("%s: %v is not a finite number, which JSON cannot carry", at.path, typed))
-		}
-		return typed, nil
-	default:
-		return typed, nil
-	}
-}
 
 func (t *template) selectPath(path []string) (any, string, error) {
 	current, at := t.root, "$"
@@ -223,17 +52,17 @@ func missingPath(at string, message string) error {
 	return fault.From(MissingPath, at+" "+message)
 }
 
-func eachChild(node any, at string, visit func(child any, at string) error) error {
+func eachChild(node any, at *dataPath, visit func(child any, at *dataPath) error) error {
 	switch typed := node.(type) {
 	case map[string]any:
 		for _, key := range slices.Sorted(maps.Keys(typed)) {
-			if err := visit(typed[key], at+keyStep(key)); err != nil {
+			if err := visit(typed[key], at.atKey(key)); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for index, item := range typed {
-			if err := visit(item, at+indexStep(index)); err != nil {
+			if err := visit(item, at.atIndex(index)); err != nil {
 				return err
 			}
 		}

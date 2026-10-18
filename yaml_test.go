@@ -1,7 +1,10 @@
 package jaml
 
 import (
+	"fmt"
 	"math/big"
+	goruntime "runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -150,4 +153,119 @@ func TestCommentsDoNotLeakIntoValues(t *testing.T) {
 	template := mustTemplate(t, "a: ${1+1} # two\nb: \"# not a comment\"\n")
 	got := evalAs[map[string]any](t, template, nil)
 	expectEqual(t, got, map[string]any{"a": float64(2), "b": "# not a comment"})
+}
+
+func TestUnderscoredLegacyOctalStaysText(t *testing.T) {
+	template := mustTemplate(t, "a: 0_644\nb: -0_644\nc: 0_89\nd: +0_7\ngrouped: 1_000\nhex: 0x_ff\n")
+	got := evalAs[map[string]any](t, template, nil)
+	expectEqual(t, got, map[string]any{"a": "0_644", "b": "-0_644", "c": "0_89", "d": "+0_7", "grouped": float64(1000), "hex": float64(255)})
+}
+
+func TestBinaryBecomesItsDecodedText(t *testing.T) {
+	got := evalAs[map[string]any](t, mustTemplate(t, "v: !!binary aGk=\n!!binary YQ==: key\n"), nil)
+	expectEqual(t, got, map[string]any{"v": "hi", "a": "key"})
+}
+
+func TestBinaryThatIsNotUTF8IsRefused(t *testing.T) {
+	_, err := MakeTrustedTemplate("outer:\n  v: !!binary /w==\n")
+	expectError(t, err, InvalidTemplate, "$.outer.v", "UTF-8")
+	_, err = MakeTrustedTemplate("!!binary /w==: 1\n")
+	expectError(t, err, InvalidTemplate, "$", "UTF-8")
+	_, err = MakeTrustedTemplate("v: !!binary '!!'\n")
+	expectError(t, err, InvalidTemplate, "$.v", "base64")
+}
+
+func TestBinaryKeysAreCheckedForDuplicates(t *testing.T) {
+	_, err := MakeTrustedTemplate("a: 1\n!!binary YQ==: 2\n")
+	expectError(t, err, InvalidTemplate, `mapping key "a" already defined at line 1`)
+}
+
+func TestErrorsUnderMergeKeysNameTheDataPath(t *testing.T) {
+	_, err := MakeTrustedTemplate("x:\n  <<: {a: 1e400}\n")
+	expectError(t, err, InvalidTemplate, "$.x.a: 1e400")
+	_, err = MakeTrustedTemplate("x:\n  <<: {a: !!binary /w==}\n")
+	expectError(t, err, InvalidTemplate, "$.x.a")
+	if strings.Contains(err.Error(), "<<") {
+		t.Fatalf("path runs through the merge key: %v", err)
+	}
+}
+
+func TestMergeKeysFollowTheMergeSpec(t *testing.T) {
+	template := mustTemplate(t, `
+a: &a {k: 1, p: a, deep: {x: 1}}
+b: &b {k: 2, q: b, r: b}
+m:
+  r: own
+  <<: [*a, *b]
+inline:
+  <<: {z: 1}
+  z: 2
+`)
+	expectEqual(t, evalAs[map[string]any](t, template, nil, "m"), map[string]any{"k": float64(1), "p": "a", "q": "b", "r": "own", "deep": map[string]any{"x": float64(1)}})
+	expectEqual(t, evalAs[map[string]any](t, template, nil, "inline"), map[string]any{"z": float64(2)})
+	for _, text := range []string{"m:\n  <<: 1\n", "a: &a [1]\nm:\n  <<: *a\n", "m:\n  <<: [1]\n"} {
+		_, err := MakeTrustedTemplate(text)
+		expectError(t, err, InvalidTemplate, "$.m", "merge")
+	}
+	_, err := MakeTrustedTemplate("m:\n  <<: {a: 1}\n  <<: {b: 1}\n")
+	expectError(t, err, InvalidTemplate, "$.m", `mapping key "<<" already defined at line 2`)
+}
+
+func TestQuotedMergeKeyIsAPlainKey(t *testing.T) {
+	got := evalAs[map[string]any](t, mustTemplate(t, "\"<<\": {a: 1}\n"), nil)
+	expectEqual(t, got, map[string]any{"<<": map[string]any{"a": float64(1)}})
+}
+
+func TestAliasBombsAreRefused(t *testing.T) {
+	var text strings.Builder
+	text.WriteString("l0: &l0 [lol, lol, lol, lol, lol, lol, lol, lol, lol, lol]\n")
+	for level := 1; level <= 9; level++ {
+		fmt.Fprintf(&text, "l%d: &l%d [", level, level)
+		for i := range 10 {
+			if i > 0 {
+				text.WriteString(", ")
+			}
+			fmt.Fprintf(&text, "*l%d", level-1)
+		}
+		text.WriteString("]\n")
+	}
+	_, err := MakeTrustedTemplate(text.String())
+	expectError(t, err, InvalidTemplate, "aliases expand to more than 1048576 values")
+}
+
+func TestScalarTagsResolveByJamlRules(t *testing.T) {
+	template := mustTemplate(t, "s: !!str 12\ni: !!int 0644\nf: !!float 3\nb: !!bool true\nn: !!null ~\ncustom: !thing 12\nquoted: '12'\nnul: null\ntilde: ~\nempty:\ncapital: True\n")
+	got := evalAs[map[string]any](t, template, nil)
+	expectEqual(t, got, map[string]any{"s": "12", "i": float64(420), "f": float64(3), "b": true, "n": nil, "custom": "12", "quoted": "12", "nul": nil, "tilde": nil, "empty": nil, "capital": true})
+	for _, text := range []string{"v: !!int x\n", "v: !!int 089\n", "v: !!float x\n", "v: !!bool yes\n", "v: !!null x\n"} {
+		_, err := MakeTrustedTemplate(text)
+		expectError(t, err, InvalidTemplate, "$.v")
+	}
+}
+
+func TestLongAliasedKeysNestedDeepStaySmall(t *testing.T) {
+	var text strings.Builder
+	text.WriteString("anchor: &k " + strings.Repeat("x", 100_000) + "\nnest:\n")
+	for level := 1; level <= 200; level++ {
+		text.WriteString(strings.Repeat("  ", level) + "*k :\n")
+	}
+	text.WriteString(strings.Repeat("  ", 201) + "1\n")
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	if _, err := MakeTrustedTemplate(text.String()); err != nil {
+		t.Fatal(err)
+	}
+	goruntime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<20 {
+		t.Fatalf("making the template allocated %d bytes", allocated)
+	}
+}
+
+func TestTheFirstErrorInDocumentOrderIsReported(t *testing.T) {
+	tooDeep := deepTemplate(4097, "1")[len("v: "):]
+	for _, text := range []string{"a: " + tooDeep + "b: " + tooDeep, "a: " + tooDeep + "b: {1: x}\n"} {
+		for range 50 {
+			makeInBothModes(t, text).expectRefused(t, InvalidTemplate, "$.a", "nests deeper than 4096")
+		}
+	}
 }

@@ -89,17 +89,18 @@ steps: |
 
 ### YAML gotchas
 
-YAML is read by `go.yaml.in/yaml/v3` into plain data, then checked to be JSON data.
+`go.yaml.in/yaml/v3` parses the YAML; jaml resolves every value itself, by the rules below, into JSON data.
 
 - **Quote expressions that contain `: `, `#`, or start a flow collection.** `limits: ${ {cpu: 2} }` is a YAML error, because `: ` inside a plain scalar starts a mapping. Write `limits: "${ {cpu: 2} }"`. Inside flow collections (`[…]`, `{…}`) every expression needs quotes. The same goes for `?:` ternaries.
-- **Only `true` and `false` are bools.** `y`, `yes`, `on`, `n` stay text.
+- **Only `true` and `false` are bools**, in any of their YAML spellings (`True`, `FALSE`). `y`, `yes`, `on`, `n` stay text.
 - **Keys must be strings.** `1: x` or `true: x` is an `InvalidTemplate` error naming the path; quote the key.
-- **Duplicate keys are refused**, with the line of the first one.
+- **Duplicate keys are refused**, with the line of the first one. Keys are compared after they resolve, so `a` and `!!binary YQ==` are the same key.
 - **`.inf` and `.nan` are refused**, since JSON cannot carry them, and so are numbers too large for a 64-bit float (`1e400`). Quote them to keep them as text.
 - **Dates stay text.** `2026-10-18` is the string `"2026-10-18"`, as written. A `time.Time` target still parses an RFC 3339 date-time such as `2026-10-18T10:00:00Z`.
 - **Integers beyond int64 are text.** `123456789012345678901234567890` is the string `"123456789012345678901234567890"`, digits intact. Integers that fit int64 are numbers.
-- **No silent octal.** `0644` is 420 in YAML 1.1 and 644 in YAML 1.2, so jaml keeps it as the text `"0644"`. Write `0o644` for octal or `644` for decimal; `!!int 0644` is octal.
-- Anchors, aliases and merge keys (`<<`) expand. Tags are applied by the parser and then forgotten: `!!str 12` is the text `"12"`.
+- **No silent octal.** `0644` is 420 in YAML 1.1 and 644 in YAML 1.2, so jaml keeps it as the text `"0644"`, and the same goes for every integer with a leading zero, underscores included (`0_644`, `-0_755`). Write `0o644` for octal or `644` for decimal; `!!int 0644` is octal.
+- Anchors, aliases and merge keys (`<<`) expand. A merge key takes a mapping or a list of mappings; the mapping's own keys win, then earlier mappings in the list win over later ones. Errors inside merged or aliased values name the path where the value lands, such as `$.x.a`. Aliases may expand to at most 1,048,576 values, and expanded data counts toward the 4096 depth limit.
+- Tags are applied and then forgotten: `!!str 12` is the text `"12"`, `!!float 3` the number 3. A tag jaml does not know keeps the value as text. `!!binary` is base64 that must decode to UTF-8 text, which becomes the value; other bytes are an `InvalidTemplate` error naming the path.
 - **One document per template.** A second document (`---` followed by content) is an error.
 
 ## Decoding

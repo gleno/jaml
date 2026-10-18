@@ -28,13 +28,13 @@ type compiler struct {
 
 func compileTexts(root any) (map[string]text, []source, error) {
 	c := &compiler{texts: map[string]text{}}
-	if err := c.visit(root, "$"); err != nil {
+	if err := c.visit(root, nil); err != nil {
 		return nil, nil, err
 	}
 	return c.texts, c.sources, nil
 }
 
-func (c *compiler) visit(node any, at string) error {
+func (c *compiler) visit(node any, at *dataPath) error {
 	written, isString := node.(string)
 	if !isString {
 		return eachChild(node, at, c.visit)
