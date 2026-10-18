@@ -13,7 +13,6 @@ var (
 )
 
 type SecureTemplate struct {
-	core     *template
 	lifetime context.Context
 	end      context.CancelCauseFunc
 	slot     chan *evaluatorSlot
@@ -33,10 +32,6 @@ func MakeSecureTemplate(ctx context.Context, written string, options ...Option) 
 	if err != nil {
 		return nil, err
 	}
-	core, err := makeTemplate(written, configured)
-	if err != nil {
-		return nil, err
-	}
 	lifetime, end := context.WithCancelCause(ctx)
 	plan := blueprint{Written: written, Null: configured.null, Undefined: configured.undefined}
 	spec := evaluatorSpec{blueprint: plan, memoryLimit: configured.memoryLimitOrDefault()}
@@ -50,7 +45,7 @@ func MakeSecureTemplate(ctx context.Context, written string, options ...Option) 
 	}
 	slot := make(chan *evaluatorSlot, 1)
 	slot <- &evaluatorSlot{lifetime: lifetime, spec: spec, process: first}
-	secured := &SecureTemplate{core: core, lifetime: lifetime, end: end, slot: slot}
+	secured := &SecureTemplate{lifetime: lifetime, end: end, slot: slot}
 	goruntime.AddCleanup(secured, func(end context.CancelCauseFunc) { end(errAbandoned) }, end)
 	return secured, nil
 }
@@ -75,7 +70,7 @@ func (t *SecureTemplate) Eval(ctx context.Context, into any, vars map[string]any
 	select {
 	case slot := <-t.slot:
 		defer func() { t.slot <- slot }()
-		err := t.core.eval(slot.renderer(ctx), evalCall{into: into, vars: vars, path: path})
+		err := evalThrough(slot.renderer(ctx), evalCall{into: into, vars: vars, path: path})
 		if err != nil && t.lifetime.Err() != nil {
 			return fail(Closed, "closed during Eval")
 		}
@@ -110,10 +105,10 @@ func (s *evaluatorSlot) ready(ctx context.Context) (*evaluatorProcess, error) {
 }
 
 func (s *evaluatorSlot) renderer(ctx context.Context) renderSite {
-	return func(job rendering) ([]byte, error) {
+	return func(job rendering) (string, []byte, error) {
 		process, err := s.ready(ctx)
 		if err != nil {
-			return nil, err
+			return "", nil, located("", err)
 		}
 		return process.render(ctx, job)
 	}

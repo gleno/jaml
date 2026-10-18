@@ -12,7 +12,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 2
+	protocolVersion      = 3
 	exitMemoryLimit      = 86
 	requestsFD           = 3
 	responsesFD          = 4
@@ -33,6 +33,11 @@ type blueprint struct {
 type rendering struct {
 	Path []string    `json:"path"`
 	Vars encodedVars `json:"vars"`
+}
+
+type selection struct {
+	At      string   `json:"at,omitempty"`
+	Failure *failure `json:"failure,omitempty"`
 }
 
 type rendered struct {
@@ -89,13 +94,21 @@ func describeFailure(err error) failure {
 	return failure{Kind: "EvaluationFailed", Message: failed.Error()}
 }
 
+func (s selection) malformed() error {
+	return malformedReply(s.At != "", s.Failure)
+}
+
 func (r rendered) malformed() error {
+	return malformedReply(len(r.Data) != 0, r.Failure)
+}
+
+func malformedReply(answered bool, failed *failure) error {
 	switch {
-	case r.Failure != nil && len(r.Data) != 0:
+	case failed != nil && answered:
 		return errors.New("the evaluator answered with both data and a failure")
-	case r.Failure != nil && r.Failure.kind() == nil:
-		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", r.Failure.Kind)
-	case r.Failure == nil && len(r.Data) == 0:
+	case failed != nil && failed.kind() == nil:
+		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", failed.Kind)
+	case failed == nil && !answered:
 		return errors.New("the evaluator answered with neither data nor a failure")
 	}
 	return nil

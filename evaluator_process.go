@@ -64,8 +64,12 @@ func (p *evaluatorProcess) handshake(ctx context.Context, nonce string, plan blu
 	if err := p.greet(ctx, nonce); err != nil {
 		return err
 	}
+	encoded, err := encodeRequest(plan)
+	if err != nil {
+		return err
+	}
 	var refused *failure
-	if err := p.exchange(ctx, plan, &refused); err != nil {
+	if err := p.within(ctx, func() error { return p.ask(encoded, &refused) }); err != nil {
 		return err
 	}
 	if refused != nil {
@@ -215,31 +219,62 @@ func (p *evaluatorProcess) greet(ctx context.Context, nonce string) error {
 	return nil
 }
 
-func (p *evaluatorProcess) render(ctx context.Context, job rendering) ([]byte, error) {
+func (p *evaluatorProcess) render(ctx context.Context, job rendering) (string, []byte, error) {
+	encoded, err := encodeRequest(job)
+	if err != nil {
+		return "", nil, located("", err)
+	}
+	var choice selection
 	var reply rendered
-	if err := p.exchange(ctx, job, &reply); err != nil {
-		return nil, err
+	err = p.within(ctx, func() error {
+		if err := p.ask(encoded, &choice); err != nil {
+			return err
+		}
+		if err := choice.malformed(); err != nil || choice.Failure != nil {
+			return err
+		}
+		return p.read(&reply)
+	})
+	switch {
+	case err != nil && choice.malformed() != nil:
+		return "", nil, located("", err)
+	case err != nil:
+		return "", nil, located(choice.At, err)
+	case choice.Failure != nil:
+		return "", nil, choice.Failure.rebuild()
 	}
 	if err := reply.malformed(); err != nil {
-		return nil, p.failWith(err)
+		return "", nil, located(choice.At, p.failWith(err))
 	}
 	if reply.Failure != nil {
-		return nil, reply.Failure.rebuild()
+		return "", nil, reply.Failure.rebuild()
 	}
-	return reply.Data, nil
+	return choice.At, reply.Data, nil
 }
 
-func (p *evaluatorProcess) exchange(ctx context.Context, outgoing any, incoming any) error {
+func encodeRequest(outgoing any) ([]byte, error) {
 	encoded, err := json.Marshal(outgoing)
 	if err != nil {
-		return fmt.Errorf("writing the evaluator's request: %w", err)
+		return nil, fmt.Errorf("writing the evaluator's request: %w", err)
 	}
-	return p.within(ctx, func() error {
-		if _, err := p.requests.Write(append(encoded, '\n')); err != nil {
-			return errHungUp
-		}
-		return p.read(incoming)
-	})
+	return append(encoded, '\n'), nil
+}
+
+func (p *evaluatorProcess) ask(encoded []byte, incoming any) error {
+	if _, err := p.requests.Write(encoded); err != nil {
+		return errHungUp
+	}
+	return p.read(incoming)
+}
+
+func located(at string, err error) error {
+	if _, isLocated := err.(templateError); isLocated {
+		return err
+	}
+	if at == "" {
+		return fail(EvaluationFailed, "%w", err)
+	}
+	return fail(EvaluationFailed, "%s: %w", at, err)
 }
 
 func (p *evaluatorProcess) within(ctx context.Context, exchange func() error) error {

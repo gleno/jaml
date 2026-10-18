@@ -38,8 +38,8 @@ func serveEvaluations() int {
 		return exitProtocolBroken
 	}
 	adoptTheHostsZone()
-	guard := guardTheEvaluator(world)
-	if guard.orphaned() {
+	building := guardTheEvaluator(world)
+	if building.orphaned() {
 		return exitOrphaned
 	}
 	requestsFile := os.NewFile(requestsFD, "jaml-requests")
@@ -49,7 +49,8 @@ func serveEvaluations() int {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: greeting: %v\n", err)
 		return exitProtocolBroken
 	}
-	built, err := receiveTemplate(requests, responses)
+	var built *template
+	building.during(func() { built, err = receiveTemplate(requests, responses) })
 	if errors.Is(err, errTemplateRefused) {
 		_, _ = io.Copy(io.Discard, requestsFile)
 		return 0
@@ -58,6 +59,7 @@ func serveEvaluations() int {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
 		return exitProtocolBroken
 	}
+	serving := guardTheEvaluator(world)
 	for {
 		var job rendering
 		if err := requests.Decode(&job); err != nil {
@@ -68,7 +70,7 @@ func serveEvaluations() int {
 			return exitProtocolBroken
 		}
 		var written error
-		guard.during(func() { written = responses.Encode(answer(built.render(job))) })
+		serving.during(func() { written = built.serve(job, responses) })
 		if written != nil {
 			fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", written)
 			return exitProtocolBroken
@@ -87,6 +89,18 @@ func receiveTemplate(requests *json.Decoder, responses *json.Encoder) (*template
 		return nil, errors.Join(errTemplateRefused, responses.Encode(&refused))
 	}
 	return built, responses.Encode((*failure)(nil))
+}
+
+func (t *template) serve(job rendering, replies *json.Encoder) error {
+	chosen, err := t.selectPath(job.Path)
+	if err != nil {
+		missing := describeFailure(err)
+		return replies.Encode(selection{Failure: &missing})
+	}
+	if err := replies.Encode(selection{At: chosen.at.String()}); err != nil {
+		return err
+	}
+	return replies.Encode(answer(t.renderSubtree(chosen, job.Vars)))
 }
 
 func adoptTheHostsZone() {

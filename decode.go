@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-func (p *dataPath) blame(encoded []byte, err error) *dataPath {
+func blame(at string, encoded []byte, err error) string {
 	mismatch, isOwn := err.(*json.UnmarshalTypeError)
 	if !isOwn {
-		return p
+		return at
 	}
-	found, token := p.within(encoded, mismatch.Offset)
-	if found == nil || !holdsKind(token, mismatch.Value) || !namesField(found, mismatch.Field) {
-		return p
+	found, token, reached := mismatchedValue(encoded, mismatch.Offset)
+	if !reached || !holdsKind(token, mismatch.Value) || !namesField(found, mismatch.Field) {
+		return at
 	}
-	return found
+	return found.spelledFrom(at)
 }
 
 func holdsKind(token json.Token, kind string) bool {
@@ -53,20 +53,21 @@ type jsonFrame struct {
 	index     int
 }
 
-func (p *dataPath) within(encoded []byte, offset int64) (*dataPath, json.Token) {
+func mismatchedValue(encoded []byte, offset int64) (*dataPath, json.Token, bool) {
+	var root *dataPath
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	var open []*jsonFrame
 	for {
 		token, err := decoder.Token()
 		if err != nil {
-			return nil, nil
+			return nil, nil, false
 		}
 		delim, isDelim := token.(json.Delim)
 		if isDelim && (delim == '}' || delim == ']') {
 			open = open[:len(open)-1]
 			continue
 		}
-		valueAt := p
+		valueAt := root
 		if len(open) > 0 {
 			top := open[len(open)-1]
 			switch {
@@ -81,7 +82,7 @@ func (p *dataPath) within(encoded []byte, offset int64) (*dataPath, json.Token) 
 			}
 		}
 		if decoder.InputOffset() >= offset {
-			return valueAt, token
+			return valueAt, token, true
 		}
 		if isDelim {
 			open = append(open, &jsonFrame{at: valueAt, object: delim == '{', expectKey: true})

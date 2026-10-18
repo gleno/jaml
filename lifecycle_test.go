@@ -118,7 +118,7 @@ func answerOnce(requests, replies *os.File, greeting hello, reply string) {
 	_ = incoming.Decode(&next)
 	_, _ = replies.WriteString("null\n")
 	_ = incoming.Decode(&next)
-	_, _ = replies.WriteString(reply)
+	_, _ = replies.WriteString("{\"at\": \"$.v\"}\n" + reply)
 }
 
 func TestAForeignExecutableIsUnsupported(t *testing.T) {
@@ -128,7 +128,7 @@ func TestAForeignExecutableIsUnsupported(t *testing.T) {
 
 func TestAReplacedExecutableIsUnsupported(t *testing.T) {
 	_, err := MakeSecureTemplate(within(t, 10*time.Second), "v: ${ 1 }\n", WithMemoryLimit(futureProtocolLimit))
-	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v2")
+	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v3")
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {
@@ -281,5 +281,61 @@ func TestAHandshakeCutShortEndsItsEvaluator(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if after := liveChildren(t); after > before {
 		t.Fatalf("cut-short handshakes left %d evaluators running", after-before)
+	}
+}
+
+func hostCPU(t *testing.T) time.Duration {
+	t.Helper()
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		t.Fatal(err)
+	}
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {
+	text := "v: '${" + strings.Repeat("a=>", 21000) + "1}'\n"
+	goruntime.GC()
+	spentBefore, started := hostCPU(t), time.Now()
+	_, err := MakeSecureTemplate(within(t, 200*time.Millisecond), text)
+	waited, spent := time.Since(started), hostCPU(t)-spentBefore
+	expectError(t, err, EvaluationFailed, "cancelled", "deadline exceeded")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded in %v", err)
+	}
+	if waited > time.Second {
+		t.Fatalf("constructing a hostile template held the host for %s past its 200ms context", waited)
+	}
+	if spent > 150*time.Millisecond {
+		t.Fatalf("the host spent %s of CPU on a template it should only carry", spent)
+	}
+}
+
+func listOfPlainServers(count int) string {
+	var written strings.Builder
+	written.WriteString("expr: ${ 1 + 1 }\nitems:\n")
+	for index := range count {
+		written.WriteString("  - {name: item-" + strconv.Itoa(index) + ", port: " + strconv.Itoa(index) + ", host: host-" + strconv.Itoa(index) + ".example.com}\n")
+	}
+	return written.String()
+}
+
+func TestAnEvalGetsTheWholeLimitOverTheBuiltTemplate(t *testing.T) {
+	text := listOfPlainServers(27000) + "big: ${ 'x'.repeat(56 << 20).length }\n"
+	template := mustSecure(t, text, WithMemoryLimit(64<<20))
+	expectEqual(t, secureEvalAs[int](t, template, nil, "expr"), 2)
+	expectEqual(t, secureEvalAs[int](t, template, nil, "big"), 56<<20)
+}
+
+func TestABuildPastTheLimitFailsConstruction(t *testing.T) {
+	for name, text := range map[string]string{
+		"one huge value":     "v: " + strings.Repeat("x", 40<<20) + "\n",
+		"many plain servers": listOfPlainServers(100000),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := MakeSecureTemplate(within(t, 60*time.Second), text, WithMemoryLimit(16<<20))
+			expectError(t, err, MemoryLimit, "exceeded the memory limit of 16777216 bytes")
+			expectError(t, err, EvaluationFailed)
+		})
 	}
 }

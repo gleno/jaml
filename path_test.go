@@ -35,8 +35,7 @@ func TestPathDoesNotEvaluateSiblings(t *testing.T) {
 	expectEqual(t, evalAs[int](t, template, nil, "good"), 1)
 }
 
-func TestAMissingPathIsAnError(t *testing.T) {
-	template := mustTemplate(t, nestedTemplate)
+func TestAMissingPathIsAnErrorInBothModes(t *testing.T) {
 	cases := map[string]struct {
 		path      []string
 		fragments []string
@@ -54,8 +53,7 @@ func TestAMissingPathIsAnError(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			var out any
-			expectError(t, template.Eval(&out, nil, c.path...), MissingPath, c.fragments...)
+			agreement{text: nestedTemplate, path: c.path}.eval(t, intoAny).expectRefused(t, MissingPath, c.fragments...)
 		})
 	}
 }

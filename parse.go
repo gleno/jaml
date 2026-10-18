@@ -7,27 +7,32 @@ import (
 	"strconv"
 )
 
-func (t *template) selectPath(path []string) (any, *dataPath, error) {
+type subtree struct {
+	node any
+	at   *dataPath
+}
+
+func (t *template) selectPath(path []string) (subtree, error) {
 	current, at := t.root, (*dataPath)(nil)
 	for _, step := range path {
 		switch typed := current.(type) {
 		case map[string]any:
 			found, ok := typed[step]
 			if !ok {
-				return nil, nil, missingPath(at, fmt.Sprintf("has no key %q", step))
+				return subtree{}, missingPath(at, fmt.Sprintf("has no key %q", step))
 			}
 			current, at = found, at.atKey(step)
 		case []any:
 			index, err := strconv.Atoi(step)
 			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
-				return nil, nil, missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
+				return subtree{}, missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
 			current, at = typed[index], at.atIndex(index)
 		default:
-			return nil, nil, missingPath(at, fmt.Sprintf("is %s, which has no key %q", t.describe(current), step))
+			return subtree{}, missingPath(at, fmt.Sprintf("is %s, which has no key %q", t.describe(current), step))
 		}
 	}
-	return current, at, nil
+	return subtree{node: current, at: at}, nil
 }
 
 func (t *template) describe(node any) string {

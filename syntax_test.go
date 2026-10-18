@@ -168,7 +168,7 @@ func TestExpressionsRunInStrictMode(t *testing.T) {
 	expectError(t, template.Eval(&out, nil, "b"), EvaluationFailed, "ReferenceError")
 }
 
-func TestInvalidExpressionsFailAtMakeTrustedTemplate(t *testing.T) {
+func TestInvalidExpressionsFailAtMakeInBothModes(t *testing.T) {
 	cases := map[string]struct {
 		text      string
 		fragments []string
@@ -188,8 +188,7 @@ func TestInvalidExpressionsFailAtMakeTrustedTemplate(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := MakeTrustedTemplate(c.text)
-			expectError(t, err, InvalidTemplate, c.fragments...)
+			makeInBothModes(t, c.text).expectRefused(t, InvalidTemplate, c.fragments...)
 		})
 	}
 }

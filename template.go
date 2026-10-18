@@ -11,7 +11,7 @@ type template struct {
 	settings settings
 }
 
-type renderSite func(job rendering) ([]byte, error)
+type renderSite func(job rendering) (string, []byte, error)
 
 type evalCall struct {
 	into any
@@ -31,10 +31,7 @@ func makeTemplate(written string, configured settings) (*template, error) {
 	return &template{root: root, texts: texts, settings: configured}, nil
 }
 
-func (t *template) eval(renders renderSite, call evalCall) error {
-	if t == nil {
-		return unmadeTemplate()
-	}
+func evalThrough(renders renderSite, call evalCall) error {
 	target := reflect.ValueOf(call.into)
 	if target.Kind() != reflect.Pointer || target.IsNil() {
 		return fail(InvalidTarget, "Eval needs a non-nil pointer, got %s", describeTarget(call.into))
@@ -43,42 +40,36 @@ func (t *template) eval(renders renderSite, call evalCall) error {
 	if err != nil {
 		return fail(EvaluationFailed, "binding vars: %w", err)
 	}
-	_, at, err := t.selectPath(call.path)
+	at, rendered, err := renders(rendering{Path: call.path, Vars: vars})
 	if err != nil {
 		return err
 	}
-	rendered, err := renders(rendering{Path: call.path, Vars: vars})
-	if err != nil {
-		return located(at, err)
-	}
 	if err := json.Unmarshal(rendered, call.into); err != nil {
-		return fail(CoercionFailed, "%s: %w", at.blame(rendered, err), err)
+		return fail(CoercionFailed, "%s: %w", blame(at, rendered, err), err)
 	}
 	return nil
 }
 
-func (t *template) render(job rendering) ([]byte, error) {
-	selected, at, err := t.selectPath(job.Path)
+func (t *template) render(job rendering) (string, []byte, error) {
+	chosen, err := t.selectPath(job.Path)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	renderer := &renderer{template: t, engine: &lazySession{vars: job.Vars}}
-	tree, err := renderer.render(selected, at)
+	rendered, err := t.renderSubtree(chosen, job.Vars)
+	return chosen.at.String(), rendered, err
+}
+
+func (t *template) renderSubtree(chosen subtree, vars encodedVars) ([]byte, error) {
+	renderer := &renderer{template: t, engine: &lazySession{vars: vars}}
+	tree, err := renderer.render(chosen.node, chosen.at)
 	if err != nil {
 		return nil, err
 	}
 	encoded, err := json.Marshal(tree)
 	if err != nil {
-		return nil, fail(CoercionFailed, "%s: %w", at, err)
+		return nil, fail(CoercionFailed, "%s: %w", chosen.at, err)
 	}
 	return encoded, nil
-}
-
-func located(at *dataPath, err error) error {
-	if _, isLocated := err.(templateError); isLocated {
-		return err
-	}
-	return fail(EvaluationFailed, "%s: %w", at, err)
 }
 
 func unmadeTemplate() error {
