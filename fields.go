@@ -11,12 +11,22 @@ type structField struct {
 }
 
 func fieldsOf(structType reflect.Type) map[string]structField {
-	fields := map[string]structField{}
-	collectFields(structType, nil, fields)
-	return fields
+	collector := fieldCollector{fields: map[string]structField{}, onPath: map[reflect.Type]bool{}}
+	collector.collect(structType, nil)
+	return collector.fields
 }
 
-func collectFields(structType reflect.Type, parent []int, fields map[string]structField) {
+type fieldCollector struct {
+	fields map[string]structField
+	onPath map[reflect.Type]bool
+}
+
+func (c fieldCollector) collect(structType reflect.Type, parent []int) {
+	if c.onPath[structType] {
+		return
+	}
+	c.onPath[structType] = true
+	defer delete(c.onPath, structType)
 	for i := range structType.NumField() {
 		declared := structType.Field(i)
 		index := append(append([]int(nil), parent...), i)
@@ -33,7 +43,7 @@ func collectFields(structType reflect.Type, parent []int, fields map[string]stru
 				embedded = embedded.Elem()
 			}
 			if embedded.Kind() == reflect.Struct {
-				collectFields(embedded, index, fields)
+				c.collect(embedded, index)
 				continue
 			}
 		}
@@ -43,11 +53,11 @@ func collectFields(structType reflect.Type, parent []int, fields map[string]stru
 		if name == "" {
 			name = declared.Name
 		}
-		existing, taken := fields[name]
+		existing, taken := c.fields[name]
 		if taken && existing.depth <= len(parent) {
 			continue
 		}
-		fields[name] = structField{index: index, depth: len(parent)}
+		c.fields[name] = structField{index: index, depth: len(parent)}
 	}
 }
 

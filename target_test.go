@@ -159,3 +159,29 @@ func TestTheLastOptionWins(t *testing.T) {
 	template := mustTemplate(t, "v: ~\n", WithNullCoercion(Strict), WithNullCoercion(Loose))
 	expectEqual(t, evalAs[string](t, template, nil, "v"), "")
 }
+
+type SelfEmbedding struct {
+	*SelfEmbedding
+	V int `json:"v"`
+}
+
+type MutualLeft struct {
+	*MutualRight
+	L int `json:"l"`
+}
+
+type MutualRight struct {
+	*MutualLeft
+	R int `json:"r"`
+}
+
+func TestRecursiveEmbeddingTerminates(t *testing.T) {
+	self := evalAs[SelfEmbedding](t, mustTemplate(t, "v: 1\n"), nil)
+	expectEqual(t, self.V, 1)
+	expectEqual(t, self.SelfEmbedding, (*SelfEmbedding)(nil))
+
+	mutual := evalAs[MutualLeft](t, mustTemplate(t, "l: 1\nr: 2\n"), nil)
+	expectEqual(t, mutual.L, 1)
+	expectEqual(t, mutual.MutualRight.R, 2)
+	expectEqual(t, mutual.MutualRight.MutualLeft, (*MutualLeft)(nil))
+}
