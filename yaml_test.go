@@ -230,7 +230,30 @@ func TestAliasBombsAreRefused(t *testing.T) {
 		text.WriteString("]\n")
 	}
 	_, err := MakeTrustedTemplate(text.String())
-	expectError(t, err, InvalidTemplate, "aliases expand to more than 1048576 values")
+	expectError(t, err, InvalidTemplate, "$.l3[", "excessive aliasing")
+}
+
+func TestAWideAliasFanOutIsExcessiveAliasing(t *testing.T) {
+	item := "{k0: v,k1: v,k2: v,k3: v,k4: v,k5: v,k6: v,k7: v,k8: v,k9: v}"
+	text := "a: &a [" + strings.TrimSuffix(strings.Repeat(item+",", 1000), ",") + "]\nb: [" + strings.TrimSuffix(strings.Repeat("*a,", 90), ",") + "]\n"
+	_, err := MakeTrustedTemplate(text)
+	expectError(t, err, InvalidTemplate, "$.b[", "excessive aliasing")
+}
+
+func TestModestAliasingIsAccepted(t *testing.T) {
+	var text strings.Builder
+	text.WriteString("defaults: &defaults {")
+	for key := range 20 {
+		fmt.Fprintf(&text, "d%d: %d, ", key, key)
+	}
+	text.WriteString("}\nlabel: &label release\nservices:\n")
+	for service := range 300 {
+		fmt.Fprintf(&text, "  s%d: {<<: *defaults, name: s%d, tag: *label, port: %d}\n", service, service, 8000+service)
+	}
+	got := evalAs[map[string]map[string]any](t, mustTemplate(t, text.String()), nil, "services")
+	expectEqual(t, len(got), 300)
+	expectEqual(t, got["s299"]["d19"], float64(19))
+	expectEqual(t, got["s299"]["tag"], "release")
 }
 
 func TestScalarTagsResolveByJamlRules(t *testing.T) {
@@ -241,6 +264,56 @@ func TestScalarTagsResolveByJamlRules(t *testing.T) {
 		_, err := MakeTrustedTemplate(text)
 		expectError(t, err, InvalidTemplate, "$.v")
 	}
+}
+
+func TestEmptyTaggedValuesAreNamedInErrors(t *testing.T) {
+	for tag, fragment := range map[string]string{"!!bool": `!!bool "" is not one of its spellings`, "!!int": `!!int "" is not an integer`, "!!float": `!!float "" is not a number`} {
+		_, err := MakeTrustedTemplate("v: " + tag + "\n")
+		expectError(t, err, InvalidTemplate, "$.v", fragment)
+	}
+}
+
+func TestUnderscoresSeparateDigitsInEveryNumber(t *testing.T) {
+	template := mustTemplate(t, `
+fraction: .5_0
+exponent: 1e1_0
+wide: 1e3_0
+decimal: 1.5_0
+grouped: 1_000
+mixed: -1_000.2_5e0_1
+hex: 0x1_F
+octal: 0o1_7
+binary: -0b1_01
+prefixedHex: 0x_ff
+prefixedOctal: 0o_17
+prefixedBinary: +0b_101
+taggedPrefixed: !!int 0x_1_0
+taggedFloat: !!float 1e1_0
+taggedFraction: !!float .5_0
+taggedInt: !!int 1_000
+`)
+	got := evalAs[map[string]any](t, template, nil)
+	expectEqual(t, got, map[string]any{
+		"fraction": 0.5, "exponent": 1e10, "wide": 1e30, "decimal": 1.5, "grouped": float64(1000), "mixed": -10002.5,
+		"hex": float64(31), "octal": float64(15), "binary": float64(-5),
+		"prefixedHex": float64(255), "prefixedOctal": float64(15), "prefixedBinary": float64(5), "taggedPrefixed": float64(16),
+		"taggedFloat": 1e10, "taggedFraction": 0.5, "taggedInt": float64(1000),
+	})
+}
+
+func TestMisplacedUnderscoresInNumbersAreRefused(t *testing.T) {
+	for _, written := range []string{"1_", "1__0", "0x__ff", "0_x10", "0xff_", "1_.5", "1._5", "1_e3", "1e_3", "1e3_", "0_", "-1_", "!!int 1_", "!!float 1e_3", "!!float .5_"} {
+		t.Run(written, func(t *testing.T) {
+			_, err := MakeTrustedTemplate("outer:\n  v: " + written + "\n")
+			expectError(t, err, InvalidTemplate, "$.outer.v", "underscore")
+		})
+	}
+}
+
+func TestSpellingsOutsideTheNumberGrammarAreText(t *testing.T) {
+	template := mustTemplate(t, "a: 0X1F\nb: 0B101\nc: 0O17\nd: _1\ne: -_1\nf: _\ng: 1.2.3\nh: 0b12\ni: 1e\nj: 0x_\n")
+	got := evalAs[map[string]any](t, template, nil)
+	expectEqual(t, got, map[string]any{"a": "0X1F", "b": "0B101", "c": "0O17", "d": "_1", "e": "-_1", "f": "_", "g": "1.2.3", "h": "0b12", "i": "1e", "j": "0x_"})
 }
 
 func TestLongAliasedKeysNestedDeepStaySmall(t *testing.T) {
@@ -267,5 +340,16 @@ func TestTheFirstErrorInDocumentOrderIsReported(t *testing.T) {
 		for range 50 {
 			makeInBothModes(t, text).expectRefused(t, InvalidTemplate, "$.a", "nests deeper than 4096")
 		}
+	}
+}
+
+func TestAliasesExpandToAtMostAMillionValues(t *testing.T) {
+	budget := aliasBudget{decoded: 2 * maxAliasedValues, aliased: maxAliasedValues}
+	if err := budget.spend(true); err == nil || !strings.Contains(err.Error(), "aliases expand to more than 1048576 values") {
+		t.Fatalf("got %v", err)
+	}
+	unaliased := aliasBudget{decoded: 2 * maxAliasedValues, aliased: maxAliasedValues}
+	if err := unaliased.spend(false); err != nil {
+		t.Fatal(err)
 	}
 }

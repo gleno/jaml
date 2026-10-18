@@ -15,12 +15,22 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-const maxAliasedValues = 1 << 20
+const (
+	maxAliasedValues     = 1 << 20
+	aliasRatioFloor      = 400_000
+	aliasRatioCeiling    = 4_000_000
+	aliasGuardMinAliased = 100
+	aliasGuardMinDecoded = 1000
+	generousAliasRatio   = 0.99
+	strictAliasRatio     = 0.10
+	hexDigits            = "0123456789abcdefABCDEF"
+	decimalDigits        = "0123456789"
+)
 
 var (
-	integerSyntax = regexp.MustCompile(`^[-+]?(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)$`)
-	legacyOctal   = regexp.MustCompile(`^[-+]?0[0-9]+$`)
-	floatSyntax   = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9][0-9_]*(\.[0-9_]*)?)([eE][-+]?[0-9]+)?$`)
+	integerShape = regexp.MustCompile(`^[-+]?(0x[0-9a-fA-F]+|0o[0-7]+|0b[01]+|[0-9]+)$`)
+	decimalShape = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$`)
+	legacyOctal  = regexp.MustCompile(`^[-+]?0[0-9]+$`)
 )
 
 func parseYAML(source string) (any, error) {
@@ -78,19 +88,47 @@ func (a dataAt) atIndex(index int) dataAt {
 }
 
 type yamlReader struct {
-	expanding     map[*yaml.Node]bool
-	aliasedValues int
+	expanding map[*yaml.Node]bool
+	budget    aliasBudget
+}
+
+type aliasBudget struct {
+	decoded int
+	aliased int
+}
+
+func (b *aliasBudget) spend(aliased bool) error {
+	b.decoded++
+	if !aliased {
+		return nil
+	}
+	b.aliased++
+	if b.aliased > maxAliasedValues {
+		return fmt.Errorf("aliases expand to more than %d values", maxAliasedValues)
+	}
+	if b.aliased > aliasGuardMinAliased && b.decoded > aliasGuardMinDecoded && float64(b.aliased) > allowedAliasRatio(b.decoded)*float64(b.decoded) {
+		return fmt.Errorf("aliases expand to %d of the %d values read so far, which is excessive aliasing", b.aliased, b.decoded)
+	}
+	return nil
+}
+
+func allowedAliasRatio(decoded int) float64 {
+	switch {
+	case decoded <= aliasRatioFloor:
+		return generousAliasRatio
+	case decoded >= aliasRatioCeiling:
+		return strictAliasRatio
+	}
+	progress := float64(decoded-aliasRatioFloor) / float64(aliasRatioCeiling-aliasRatioFloor)
+	return generousAliasRatio - (generousAliasRatio-strictAliasRatio)*progress
 }
 
 func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
 	if node.Kind == yaml.AliasNode {
 		return r.alias(node, at)
 	}
-	if at.aliased {
-		r.aliasedValues++
-		if r.aliasedValues > maxAliasedValues {
-			return nil, refuse(at.path, fmt.Sprintf("aliases expand to more than %d values", maxAliasedValues))
-		}
+	if err := r.budget.spend(at.aliased); err != nil {
+		return nil, refuse(at.path, err.Error())
 	}
 	if node.Kind == yaml.ScalarNode {
 		return resolveScalar(node, at.path)
@@ -261,18 +299,16 @@ func plainScalar(written string) (any, error) {
 	if isNonFinite(written) {
 		return nil, notFinite(written)
 	}
-	if integerSyntax.MatchString(written) {
-		digits := strings.ReplaceAll(written, "_", "")
-		if legacyOctal.MatchString(digits) {
-			return written, nil
-		}
-		if number, err := parseInteger(written); err == nil {
-			return number, nil
-		}
+	number, err := readNumeral(written)
+	switch {
+	case err != nil:
+		return nil, err
+	case number.isInteger() && legacyOctal.MatchString(number.digits):
 		return written, nil
-	}
-	if floatSyntax.MatchString(written) {
-		return finiteFloat(written)
+	case number.isInteger():
+		return number.integer()
+	case number.isDecimal():
+		return number.float()
 	}
 	return written, nil
 }
@@ -282,31 +318,46 @@ func taggedScalar(tag string, written string) (any, error) {
 	case "!!binary":
 		decoded, err := base64.StdEncoding.DecodeString(written)
 		if err != nil {
-			return nil, fmt.Errorf("!!binary %s is not base64: %w", preview(written), err)
+			return nil, fmt.Errorf("!!binary %s is not base64: %w", shown(written), err)
 		}
 		return string(decoded), nil
 	case "!!int":
-		if !integerSyntax.MatchString(written) {
-			return nil, fmt.Errorf("!!int %s is not an integer", preview(written))
+		number, err := readNumeral(written)
+		if err != nil {
+			return nil, err
 		}
-		return parseInteger(written)
+		if !number.isInteger() {
+			return nil, fmt.Errorf("!!int %s is not an integer", shown(written))
+		}
+		return number.integer()
 	case "!!float":
 		if isNonFinite(written) {
 			return nil, notFinite(written)
 		}
-		if !floatSyntax.MatchString(written) {
-			return nil, fmt.Errorf("!!float %s is not a number", preview(written))
+		number, err := readNumeral(written)
+		if err != nil {
+			return nil, err
 		}
-		return finiteFloat(written)
+		if !number.isDecimal() {
+			return nil, fmt.Errorf("!!float %s is not a number", shown(written))
+		}
+		return number.float()
 	case "!!bool", "!!null":
 		value, known := spelledScalar(written)
 		if !known || tag == "!!bool" && value == nil || tag == "!!null" && value != nil {
-			return nil, fmt.Errorf("%s %s is not one of its spellings", tag, preview(written))
+			return nil, fmt.Errorf("%s %s is not one of its spellings", tag, shown(written))
 		}
 		return value, nil
 	default:
 		return written, nil
 	}
+}
+
+func shown(written string) string {
+	if written == "" {
+		return `""`
+	}
+	return preview(written)
 }
 
 func spelledScalar(written string) (any, bool) {
@@ -333,25 +384,70 @@ func notFinite(written string) error {
 	return fmt.Errorf("%s is not a finite number, which JSON cannot carry", written)
 }
 
-func parseInteger(written string) (any, error) {
-	number, err := strconv.ParseInt(strings.ReplaceAll(written, "_", ""), 0, 64)
+type numeral struct {
+	written string
+	digits  string
+}
+
+func readNumeral(written string) (numeral, error) {
+	if !strings.Contains(written, "_") || strings.HasPrefix(strings.TrimLeft(written, "+-"), "_") {
+		return numeral{written: written, digits: written}, nil
+	}
+	number := numeral{written: written, digits: strings.ReplaceAll(written, "_", "")}
+	if (number.isInteger() || number.isDecimal()) && !number.underscoresSeparateDigits() {
+		return numeral{}, fmt.Errorf("%s has an underscore that does not sit between two digits", preview(written))
+	}
+	return number, nil
+}
+
+func (n numeral) isInteger() bool {
+	return integerShape.MatchString(n.digits)
+}
+
+func (n numeral) isDecimal() bool {
+	return decimalShape.MatchString(n.digits)
+}
+
+func (n numeral) underscoresSeparateDigits() bool {
+	digits := decimalDigits
+	if strings.HasPrefix(strings.TrimLeft(n.digits, "+-"), "0x") {
+		digits = hexDigits
+	}
+	unsigned := strings.TrimLeft(n.written, "+-")
+	prefixEnd := -1
+	if len(unsigned) > 2 && unsigned[0] == '0' && strings.IndexByte("xob", unsigned[1]) >= 0 {
+		prefixEnd = len(n.written) - len(unsigned) + 1
+	}
+	isDigit := func(index int) bool {
+		return index >= 0 && index < len(n.written) && strings.IndexByte(digits, n.written[index]) >= 0
+	}
+	for index := range len(n.written) {
+		if n.written[index] == '_' && (!isDigit(index-1) && index-1 != prefixEnd || !isDigit(index+1)) {
+			return false
+		}
+	}
+	return true
+}
+
+func (n numeral) integer() (any, error) {
+	number, err := strconv.ParseInt(n.digits, 0, 64)
 	switch {
 	case err == nil:
 		return number, nil
 	case errors.Is(err, strconv.ErrRange):
-		return written, nil
+		return n.written, nil
 	default:
-		return nil, fmt.Errorf("%s is not an integer", preview(written))
+		return nil, fmt.Errorf("%s is not an integer", preview(n.written))
 	}
 }
 
-func finiteFloat(written string) (any, error) {
-	number, err := strconv.ParseFloat(strings.ReplaceAll(written, "_", ""), 64)
+func (n numeral) float() (any, error) {
+	number, err := strconv.ParseFloat(n.digits, 64)
 	if errors.Is(err, strconv.ErrRange) && math.IsInf(number, 0) {
-		return nil, fmt.Errorf("%s is out of the range of a 64-bit float; quote it to keep it as text", written)
+		return nil, fmt.Errorf("%s is out of the range of a 64-bit float; quote it to keep it as text", n.written)
 	}
 	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		return nil, fmt.Errorf("%s is not a number", written)
+		return nil, fmt.Errorf("%s is not a number", n.written)
 	}
 	return number, nil
 }
