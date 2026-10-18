@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -47,21 +48,25 @@ func WithTimeout(timeout time.Duration) Option {
 }
 
 type Template struct {
-	root     value
-	rootAt   position
+	root     any
+	texts    map[string]text
 	settings settings
 }
 
-func MakeTemplate(text string, options ...Option) (*Template, error) {
+func MakeTemplate(source string, options ...Option) (*Template, error) {
 	configured, err := configure(options)
 	if err != nil {
 		return nil, err
 	}
-	root, rootAt, err := parseTemplate(text)
+	root, err := parseYAML(source)
 	if err != nil {
 		return nil, err
 	}
-	return &Template{root: root, rootAt: rootAt, settings: configured}, nil
+	texts, err := compileTexts(root)
+	if err != nil {
+		return nil, err
+	}
+	return &Template{root: root, texts: texts, settings: configured}, nil
 }
 
 func (t *Template) Eval(into any, vars map[string]any, path ...string) error {
@@ -69,13 +74,24 @@ func (t *Template) Eval(into any, vars map[string]any, path ...string) error {
 	if target.Kind() != reflect.Pointer || target.IsNil() {
 		return fault.From(InvalidTarget, fmt.Sprintf("Eval needs a non-nil pointer, got %s", describeTarget(into)))
 	}
-	selected, at, err := selectPath(t.root, rootLocation(t.rootAt), path)
+	selected, at, err := t.selectPath(path)
 	if err != nil {
 		return err
 	}
-	evaluation := openEvaluation(t.settings, vars)
-	defer evaluation.close()
-	return evaluation.decode(selected, destination{target: target.Elem(), at: at})
+	renderer := openRenderer(t, vars)
+	defer renderer.close()
+	rendered, err := renderer.render(selected, at)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(rendered)
+	if err != nil {
+		return fault.From(CoercionFailed, fmt.Sprintf("%s: %s", at, err))
+	}
+	if err := json.Unmarshal(encoded, into); err != nil {
+		return fault.From(CoercionFailed, fmt.Sprintf("%s: %s", at, err))
+	}
+	return nil
 }
 
 func configure(options []Option) (settings, error) {

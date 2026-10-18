@@ -61,7 +61,7 @@ func (s *session) bind(vars map[string]any) error {
 	return nil
 }
 
-func (s *session) evaluate(compiled expression) (value, error) {
+func (s *session) evaluate(compiled expression) (any, error) {
 	wrapper, err := s.vm.RunProgram(compiled.program)
 	if err != nil {
 		return nil, s.describe(err)
@@ -74,7 +74,7 @@ func (s *session) evaluate(compiled expression) (value, error) {
 	if err != nil {
 		return nil, s.describe(err)
 	}
-	var result value
+	var result any
 	var readErr error
 	if err := s.guarded(func() { result, readErr = s.read(returned) }); err != nil {
 		return nil, s.describe(err)
@@ -91,9 +91,9 @@ func (s *session) guarded(run func()) error {
 	return err
 }
 
-func (s *session) read(returned goja.Value) (value, error) {
+func (s *session) read(returned goja.Value) (any, error) {
 	reader := resultReader{objectPrototype: s.objectPrototype, ancestors: map[*goja.Object]bool{}}
-	return reader.read(returned, rootLocation(position{}))
+	return reader.read(returned, "")
 }
 
 func (s *session) describe(err error) error {

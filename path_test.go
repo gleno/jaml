@@ -37,13 +37,13 @@ func TestAMissingPathIsAnError(t *testing.T) {
 		path      []string
 		fragments []string
 	}{
-		"missing key":        {[]string{"nope"}, []string{`$ (line 2, column 1) has no key "nope"`}},
-		"missing nested key": {[]string{"config", "nope"}, []string{`$.config (line 3, column 3) has no key "nope"`}},
-		"index out of range": {[]string{"config", "servers", "2"}, []string{"$.config.servers (line 4, column 5) is a list of 2", `no item "2"`}},
+		"missing key":        {[]string{"nope"}, []string{`$ has no key "nope"`}},
+		"missing nested key": {[]string{"config", "nope"}, []string{`$.config has no key "nope"`}},
+		"index out of range": {[]string{"config", "servers", "2"}, []string{"$.config.servers is a list of 2", `no item "2"`}},
 		"index not a number": {[]string{"config", "servers", "first"}, []string{`no item "first"`}},
 		"negative index":     {[]string{"config", "servers", "-1"}, []string{`no item "-1"`}},
 		"into a scalar":      {[]string{"config", "servers", "1", "name", "x"}, []string{"$.config.servers[1].name", `is a string, which has no key "x"`}},
-		"into an expression": {[]string{"config", "computed", "inner"}, []string{"$.config.computed", "is an expression", "until it is evaluated"}},
+		"into an expression": {[]string{"config", "computed", "inner"}, []string{"$.config.computed", "is an expression, unevaluated until Eval"}},
 		"into interpolation": {[]string{"config", "label", "x"}, []string{"is an expression"}},
 		"into an evaluated":  {[]string{"config", "servers", "0", "port", "x"}, []string{"is an expression"}},
 		"into a null":        {[]string{"config", "empty", "x"}, []string{"$.config.empty", "is a null"}},
@@ -63,7 +63,7 @@ func TestPathIntoAnEmptyDocumentIsMissing(t *testing.T) {
 }
 
 func TestKeysWithSpecialCharactersAreQuotedInPaths(t *testing.T) {
-	template := mustTemplate(t, "\"a b\":\n  \"x.y\": ${'nope'}\n")
-	var out map[string]map[string]int
-	expectError(t, template.Eval(&out, nil), CoercionFailed, `$["a b"]["x.y"]`)
+	template := mustTemplate(t, "\"a b\":\n  \"x.y\": ${missing}\n")
+	var out any
+	expectError(t, template.Eval(&out, nil), EvaluationFailed, `$["a b"]["x.y"]`)
 }

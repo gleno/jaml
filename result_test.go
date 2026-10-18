@@ -33,7 +33,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			template := mustTemplate(t, "v: \""+c.source+"\"\n")
 			var out any
-			expectError(t, template.Eval(&out, nil, "v"), EvaluationFailed, append([]string{"$.v (line 1, column 4)"}, c.fragments...)...)
+			expectError(t, template.Eval(&out, nil, "v"), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
 		})
 	}
 }
@@ -51,20 +51,20 @@ nonEnumerableIgnored: "${ Object.defineProperty({a: 1}, 'hidden', {value: 2}) }"
 `, WithUndefinedCoercion(Loose))
 	got := evalAs[map[string]any](t, template, nil)
 	expectEqual(t, got, map[string]any{
-		"shared":               []any{map[string]any{"n": int64(1)}, map[string]any{"n": int64(1)}},
-		"nullProto":            map[string]any{"a": int64(1)},
-		"sparse":               []any{int64(1), nil, int64(3)},
-		"negativeZero":         int64(0),
-		"json":                 map[string]any{"a": []any{int64(1), 2.5, "x", true, nil}},
-		"getter":               map[string]any{"g": int64(2)},
-		"symbolKeysIgnored":    map[string]any{"a": int64(1)},
-		"nonEnumerableIgnored": map[string]any{"a": int64(1)},
+		"shared":               []any{map[string]any{"n": float64(1)}, map[string]any{"n": float64(1)}},
+		"nullProto":            map[string]any{"a": float64(1)},
+		"sparse":               []any{float64(1), nil, float64(3)},
+		"negativeZero":         float64(0),
+		"json":                 map[string]any{"a": []any{float64(1), 2.5, "x", true, nil}},
+		"getter":               map[string]any{"g": float64(2)},
+		"symbolKeysIgnored":    map[string]any{"a": float64(1)},
+		"nonEnumerableIgnored": map[string]any{"a": float64(1)},
 	})
 }
 
-func TestObjectKeysKeepInsertionOrderInText(t *testing.T) {
-	template := mustTemplate(t, "v: \"${ ({z: 1, a: 2, m: 3}) }\"\n")
-	expectEqual(t, evalAs[string](t, template, nil, "v"), `{"z":1,"a":2,"m":3}`)
+func TestObjectsInterpolateAsJSON(t *testing.T) {
+	template := mustTemplate(t, "v: \"is ${{ ({z: 1, a: [2]}) }}\"\n")
+	expectEqual(t, evalAs[string](t, template, nil, "v"), `is {"a":[2],"z":1}`)
 }
 
 func TestHugeResultsAreRefused(t *testing.T) {
@@ -98,7 +98,7 @@ func TestRuntimeErrorsNameTheExpression(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			template := mustTemplate(t, "v: \""+c.source+"\"\n")
 			var out any
-			expectError(t, template.Eval(&out, nil, "v"), EvaluationFailed, append([]string{"$.v (line 1, column 4)"}, c.fragments...)...)
+			expectError(t, template.Eval(&out, nil, "v"), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
 		})
 	}
 }

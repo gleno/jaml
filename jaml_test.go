@@ -69,14 +69,14 @@ config:
 func TestTheExampleIntoAMap(t *testing.T) {
 	template := mustTemplate(t, "config:\n  value1: 123\n  value2: ${1+1}\n  value3: \"some string ${{name}}\"\n")
 	got := evalAs[map[string]any](t, template, map[string]any{"name": "abc"}, "config")
-	expectEqual(t, got, map[string]any{"value1": int64(123), "value2": int64(2), "value3": "some string abc"})
+	expectEqual(t, got, map[string]any{"value1": float64(123), "value2": float64(2), "value3": "some string abc"})
 }
 
 func TestATemplateEvaluatesNothingUntilEval(t *testing.T) {
 	template := mustTemplate(t, "a: ${ (() => { throw new Error('boom') })() }\nb: 1\n")
 	expectEqual(t, evalAs[int](t, template, nil, "b"), 1)
 	var out map[string]any
-	expectError(t, template.Eval(&out, nil), EvaluationFailed, "$.a (line 1, column 4)", "Error: boom")
+	expectError(t, template.Eval(&out, nil), EvaluationFailed, "$.a", "Error: boom")
 }
 
 func TestATemplateIsReusableWithDifferentVars(t *testing.T) {

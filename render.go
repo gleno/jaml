@@ -1,0 +1,144 @@
+package jaml
+
+import (
+	"encoding/json"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+
+	"github.com/gleno/fault"
+)
+
+const sourcePreviewLength = 60
+
+type renderer struct {
+	template *Template
+	vars     map[string]any
+	session  *session
+}
+
+func openRenderer(template *Template, vars map[string]any) *renderer {
+	return &renderer{template: template, vars: vars}
+}
+
+func (r *renderer) close() {
+	if r.session != nil {
+		r.session.close()
+	}
+}
+
+func (r *renderer) render(node any, at string) (any, error) {
+	switch typed := node.(type) {
+	case map[string]any:
+		rendered := make(map[string]any, len(typed))
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			value, err := r.render(typed[key], at+keyStep(key))
+			if err != nil {
+				return nil, err
+			}
+			rendered[key] = value
+		}
+		return rendered, nil
+	case []any:
+		rendered := make([]any, len(typed))
+		for index, item := range typed {
+			value, err := r.render(item, at+indexStep(index))
+			if err != nil {
+				return nil, err
+			}
+			rendered[index] = value
+		}
+		return rendered, nil
+	case string:
+		compiled, hasCode := r.template.texts[typed]
+		if !hasCode {
+			return typed, nil
+		}
+		return r.renderText(compiled, at)
+	default:
+		return node, nil
+	}
+}
+
+func (r *renderer) renderText(compiled text, at string) (any, error) {
+	if compiled.whole != nil {
+		result, err := r.evaluate(*compiled.whole, at)
+		if err != nil {
+			return nil, err
+		}
+		return r.admit(result, *compiled.whole, at)
+	}
+	var rendered strings.Builder
+	for _, piece := range compiled.segments {
+		if piece.code == nil {
+			rendered.WriteString(piece.literal)
+			continue
+		}
+		result, err := r.evaluate(*piece.code, at)
+		if err != nil {
+			return nil, err
+		}
+		admitted, err := r.admit(result, *piece.code, at)
+		if err != nil {
+			return nil, err
+		}
+		written, err := stringify(admitted)
+		if err != nil {
+			return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: %s: %s", at, piece.code.written(), err))
+		}
+		rendered.WriteString(written)
+	}
+	return rendered.String(), nil
+}
+
+func (r *renderer) admit(result any, compiled expression, at string) (any, error) {
+	absent, coercion := "", Loose
+	switch result.(type) {
+	case nil:
+		absent, coercion = "null", r.template.settings.null
+	case undefined:
+		absent, coercion = "undefined", r.template.settings.undefined
+	default:
+		return result, nil
+	}
+	if coercion == Strict {
+		return nil, fault.From(CoercionFailed, fmt.Sprintf("%s: %s is %s, which strict %s coercion refuses", at, compiled.written(), absent, absent))
+	}
+	return nil, nil
+}
+
+func (r *renderer) evaluate(compiled expression, at string) (any, error) {
+	if r.session == nil {
+		opened, err := openSession(r.vars, r.template.settings.timeout)
+		if err != nil {
+			return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: binding vars: %s", at, err))
+		}
+		r.session = opened
+	}
+	result, err := r.session.evaluate(compiled)
+	if err != nil {
+		return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: %s: %s", at, compiled.written(), err))
+	}
+	return result, nil
+}
+
+func stringify(value any) (string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return "", nil
+	case string:
+		return typed, nil
+	default:
+		encoded, err := json.Marshal(typed)
+		return string(encoded), err
+	}
+}
+
+func preview(source string) string {
+	flattened := strings.Join(strings.Fields(source), " ")
+	if len(flattened) <= sourcePreviewLength {
+		return flattened
+	}
+	return flattened[:sourcePreviewLength] + "…"
+}
