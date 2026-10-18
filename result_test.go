@@ -90,7 +90,7 @@ func TestRuntimeErrorsNameTheExpression(t *testing.T) {
 		"type":          {"${ null.x }", []string{"TypeError"}},
 		"thrown error":  {"${ (() => { throw new RangeError('too far') })() }", []string{"RangeError: too far"}},
 		"thrown string": {"${ (() => { throw 'plain' })() }", []string{"threw plain"}},
-		"thrown object": {"${ (() => { throw {code: 1} })() }", []string{"threw [object Object]"}},
+		"thrown object": {"${ (() => { throw {code: 1} })() }", []string{"threw an object"}},
 		"bad toString":  {"${ (() => { throw { get message() { throw 1 } } })() }", []string{"threw a value whose message cannot be read"}},
 		"interpolated":  {"x ${{ missing }}", []string{"${{missing}}", "ReferenceError"}},
 	}

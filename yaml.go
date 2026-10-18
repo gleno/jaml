@@ -275,7 +275,7 @@ func resolveScalar(node *yaml.Node, at *dataPath) (any, error) {
 		return nil, refuse(at, err.Error())
 	}
 	if text, isText := value.(string); isText && !utf8.ValidString(text) {
-		return nil, refuse(at, fmt.Sprintf("%s %s does not hold UTF-8 text", node.Tag, preview(node.Value)))
+		return nil, refuse(at, fmt.Sprintf("%s %s does not hold UTF-8 text", node.Tag, excerpt(node.Value, codeExcerptLength)))
 	}
 	return value, nil
 }
@@ -356,7 +356,7 @@ func shown(written string) string {
 	if written == "" {
 		return `""`
 	}
-	return preview(written)
+	return excerpt(written, codeExcerptLength)
 }
 
 func spelledScalar(written string) (any, bool) {
@@ -394,7 +394,7 @@ func readNumeral(written string) (numeral, error) {
 	}
 	number := numeral{written: written, digits: strings.ReplaceAll(written, "_", "")}
 	if (number.isInteger() || number.isDecimal()) && !number.underscoresSeparateDigits() {
-		return numeral{}, fmt.Errorf("%s has an underscore that does not sit between two digits", preview(written))
+		return numeral{}, fmt.Errorf("%s has an underscore that does not sit between two digits", shown(written))
 	}
 	return number, nil
 }
@@ -436,17 +436,17 @@ func (n numeral) integer() (any, error) {
 	case errors.Is(err, strconv.ErrRange):
 		return n.written, nil
 	default:
-		return nil, fmt.Errorf("%s is not an integer", preview(n.written))
+		return nil, fmt.Errorf("%s is not an integer", shown(n.written))
 	}
 }
 
 func (n numeral) float() (any, error) {
 	number, err := strconv.ParseFloat(n.digits, 64)
 	if errors.Is(err, strconv.ErrRange) && math.IsInf(number, 0) {
-		return nil, fmt.Errorf("%s is out of the range of a 64-bit float; quote it to keep it as text", n.written)
+		return nil, fmt.Errorf("%s is out of the range of a 64-bit float; quote it to keep it as text", shown(n.written))
 	}
 	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		return nil, fmt.Errorf("%s is not a number", n.written)
+		return nil, fmt.Errorf("%s is not a number", shown(n.written))
 	}
 	return number, nil
 }

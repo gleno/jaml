@@ -42,7 +42,7 @@ var (
 )
 
 func (d delimiter) around(code string) string {
-	return d.opens + preview(code) + d.closes
+	return d.opens + excerpt(code, codeExcerptLength) + d.closes
 }
 
 func (c *compiler) visit(node any, at *dataPath) error {
@@ -86,7 +86,7 @@ func (c *compiler) compileWhole(trimmed string) (text, error) {
 	after := trimmed[len(wholeValue.opens):]
 	end, err := searchingEndsIn(trimmed).expressionEnd(after, wholeValue)
 	if err != nil {
-		return text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, preview(after), err)
+		return text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, excerpt(after, codeExcerptLength), err)
 	}
 	if end != len(after)-len(wholeValue.closes) {
 		return text{}, errNotAWholeExpression
@@ -112,7 +112,7 @@ func (c *compiler) compileInterpolations(written string) (text, error) {
 		after := rest[start+len(interpolation.opens):]
 		end, err := search.expressionEnd(after, interpolation)
 		if err != nil {
-			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, preview(after), err)
+			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, excerpt(after, codeExcerptLength), err)
 		}
 		code, err := compileExpression(after[:end], true)
 		if err != nil {

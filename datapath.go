@@ -4,10 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
-
-const keyExcerptLength = 60
 
 type dataPath struct {
 	parent *dataPath
@@ -55,25 +52,13 @@ func (p *dataPath) spelledFrom(root string) string {
 
 func keyStep(key string) string {
 	if isPlainKey(key) {
-		return "." + excerpt(key)
+		return "." + clip(key, keyExcerptLength)
 	}
-	return "[" + strconv.Quote(excerpt(key)) + "]"
+	return "[" + strconv.Quote(clip(key, keyExcerptLength)) + "]"
 }
 
 func indexStep(index int) string {
 	return "[" + strconv.Itoa(index) + "]"
-}
-
-func excerpt(key string) string {
-	cut := 0
-	for range keyExcerptLength {
-		_, size := utf8.DecodeRuneInString(key[cut:])
-		cut += size
-	}
-	if cut >= len(key) {
-		return key
-	}
-	return key[:cut] + "…"
 }
 
 func isPlainKey(key string) bool {

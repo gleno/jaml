@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -51,10 +50,10 @@ func (s *session) bind(vars encodedVars) (err error) {
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
 		if err != nil {
-			return fmt.Errorf("var %q: %w", name, err)
+			return fmt.Errorf("var %q: %w", clip(name, keyExcerptLength), s.realm.explain(err))
 		}
 		if err := global.DefineDataProperty(name, parsed, goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_TRUE); err != nil {
-			return fmt.Errorf("var %q cannot be bound: %w", name, err)
+			return fmt.Errorf("var %q cannot be bound: %w", clip(name, keyExcerptLength), s.realm.explain(err))
 		}
 	}
 	return nil
@@ -106,85 +105,28 @@ func (s *session) breakOnEngineFailure(err *error) {
 }
 
 func engineFailure(recovered any) error {
-	switch cause := recovered.(type) {
-	case nil:
+	cause, isError := recovered.(error)
+	switch {
+	case recovered == nil:
 		return nil
-	case error:
+	case isEngineValue(recovered) || isError && holdsEngineValue(cause):
+		return fmt.Errorf("the engine failed with a %T", recovered)
+	case isError:
 		return fmt.Errorf("the engine failed: %w", cause)
 	default:
-		return fmt.Errorf("the engine failed: %v", cause)
+		return fmt.Errorf("the engine failed: %v", recovered)
 	}
 }
 
 func (s *session) run(compiled expression) (any, error) {
 	returned, err := s.vm.RunProgram(compiled.program)
 	if err != nil {
-		return nil, s.describe(err)
+		return nil, s.realm.explain(err)
 	}
 	var result any
 	var readErr error
-	if err := s.guarded(func() { result, readErr = s.read(returned) }); err != nil {
-		return nil, s.describe(err)
+	if err := s.realm.guarded(func() { result, readErr = readResult(s.realm, returned) }); err != nil {
+		return nil, s.realm.explain(err)
 	}
 	return result, readErr
-}
-
-func (s *session) guarded(run func()) error {
-	native, _ := goja.AssertFunction(s.vm.ToValue(func(goja.FunctionCall) goja.Value {
-		run()
-		return goja.Undefined()
-	}))
-	_, err := native(goja.Undefined())
-	return err
-}
-
-func (s *session) read(returned goja.Value) (any, error) {
-	return readResult(s.realm, returned)
-}
-
-func (s *session) describe(err error) error {
-	var overflowed *goja.StackOverflowError
-	if errors.As(err, &overflowed) {
-		return fmt.Errorf("exceeded the maximum call depth of %d", maxCallStackSize)
-	}
-	var exception *goja.Exception
-	if errors.As(err, &exception) {
-		return errors.New(s.thrownMessage(exception))
-	}
-	return err
-}
-
-func (s *session) thrownMessage(exception *goja.Exception) string {
-	var message string
-	if err := s.guarded(func() { message = describeThrown(exception.Value()) }); err != nil {
-		return "threw a value whose message cannot be read"
-	}
-	return message
-}
-
-func describeThrown(thrown goja.Value) string {
-	object, isObject := thrown.(*goja.Object)
-	if !isObject {
-		return "threw " + thrown.String()
-	}
-	message, hasMessage := primitiveField(object, "message")
-	if !hasMessage {
-		return "threw [object " + object.ClassName() + "]"
-	}
-	name, hasName := primitiveField(object, "name")
-	if !hasName {
-		return message
-	}
-	return name + ": " + message
-}
-
-func primitiveField(object *goja.Object, key string) (string, bool) {
-	field := object.Get(key)
-	if field == nil || goja.IsUndefined(field) || goja.IsNull(field) {
-		return "", false
-	}
-	if _, isObject := field.(*goja.Object); isObject {
-		return "", false
-	}
-	return field.String(), true
 }

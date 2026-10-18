@@ -23,6 +23,7 @@ var proxyType = reflect.TypeFor[goja.Proxy]()
 type undefined struct{}
 
 type realm struct {
+	vm              *goja.Runtime
 	objectPrototype *goja.Object
 	ownKeys         goja.Callable
 }
@@ -30,7 +31,21 @@ type realm struct {
 func captureRealm(vm *goja.Runtime) realm {
 	object := vm.Get("Object").ToObject(vm)
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
-	return realm{objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys}
+	return realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys}
+}
+
+func (r realm) guarded(run func()) error {
+	native, _ := goja.AssertFunction(r.vm.ToValue(func(goja.FunctionCall) goja.Value {
+		run()
+		return goja.Undefined()
+	}))
+	_, err := native(goja.Undefined())
+	return err
+}
+
+func (r realm) isPlain(object *goja.Object) bool {
+	prototype := object.Prototype()
+	return prototype == nil || prototype.SameAs(r.objectPrototype)
 }
 
 type resultReader struct {
@@ -149,11 +164,31 @@ func (r *resultReader) readObject(object *goja.Object, at *dataPath) (any, error
 	switch {
 	case object.ClassName() == "Array":
 		return r.readArray(object, at)
-	case object.ClassName() == "Object" && r.isPlain(object):
+	case object.ClassName() == "Object" && r.realm.isPlain(object):
 		return r.readPlainObject(object, at)
-	default:
-		return nil, notJamlable(at, describeInstance(object))
 	}
+	var described string
+	if err := r.attempt(at, func() { described = describeInstance(object) }); err != nil {
+		return nil, err
+	}
+	return nil, notJamlable(at, described)
+}
+
+func (r *resultReader) attempt(at *dataPath, run func()) error {
+	if exception := r.realm.vm.Try(run); exception != nil {
+		return r.failedReading(at, exception)
+	}
+	return nil
+}
+
+func (r *resultReader) failedReading(at *dataPath, err error) error {
+	return fmt.Errorf("reading %s: %w", describeResultAt(at), r.realm.explain(err))
+}
+
+func (r *resultReader) property(object *goja.Object, key string, at *dataPath) (goja.Value, error) {
+	var value goja.Value
+	err := r.attempt(at, func() { value = object.Get(key) })
+	return value, err
 }
 
 func describeInstance(object *goja.Object) string {
@@ -164,16 +199,11 @@ func describeInstance(object *goja.Object) string {
 	if !isObject {
 		return "an object with a custom prototype"
 	}
-	name := constructor.Get("name")
-	if name == nil || name.String() == "" {
+	name, isString := constructor.Get("name").(goja.String)
+	if !isString || name.Length() == 0 {
 		return "an object with a custom prototype"
 	}
-	return "an instance of " + name.String()
-}
-
-func (r *resultReader) isPlain(object *goja.Object) bool {
-	prototype := object.Prototype()
-	return prototype == nil || prototype.SameAs(r.realm.objectPrototype)
+	return "an instance of " + excerpt(name.String(), codeExcerptLength)
 }
 
 func (r *resultReader) readArray(array *goja.Object, at *dataPath) (any, error) {
@@ -183,7 +213,12 @@ func (r *resultReader) readArray(array *goja.Object, at *dataPath) (any, error) 
 	}
 	list := make([]any, length)
 	for i := range list {
-		item, err := r.read(array.Get(strconv.Itoa(i)), at.atIndex(i))
+		itemAt := at.atIndex(i)
+		value, err := r.property(array, strconv.Itoa(i), itemAt)
+		if err != nil {
+			return nil, err
+		}
+		item, err := r.read(value, itemAt)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +236,12 @@ func (r *resultReader) readPlainObject(object *goja.Object, at *dataPath) (any, 
 	}
 	fields := make(map[string]any, len(keys))
 	for _, key := range keys {
-		item, err := r.read(object.Get(key), at.atKey(key))
+		fieldAt := at.atKey(key)
+		value, err := r.property(object, key, fieldAt)
+		if err != nil {
+			return nil, err
+		}
+		item, err := r.read(value, fieldAt)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +255,7 @@ func (r *resultReader) readPlainObject(object *goja.Object, at *dataPath) (any, 
 func (r *resultReader) keysOf(object *goja.Object, at *dataPath) ([]string, error) {
 	listed, err := r.realm.ownKeys(goja.Undefined(), object)
 	if err != nil {
-		return nil, err
+		return nil, r.failedReading(at, err)
 	}
 	written, isObject := listed.(*goja.Object)
 	if !isObject {

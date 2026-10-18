@@ -86,14 +86,14 @@ func TestAnUntrustedMillionDeepJSONVarFailsTheEvalInsteadOfTheHost(t *testing.T)
 func TestADeeplyNestedThrownArrayIsDescribedWithoutWalkingIt(t *testing.T) {
 	survivesInAStackCappedChild(t, func(t *testing.T) {
 		var out any
-		expectError(t, mustTemplate(t, deeplyThrown("a")).Eval(&out, nil, "v"), EvaluationFailed, "threw [object Array]")
+		expectError(t, mustTemplate(t, deeplyThrown("a")).Eval(&out, nil, "v"), EvaluationFailed, "threw an array")
 	})
 }
 
 func TestADeeplyNestedThrownMessageIsNotWalked(t *testing.T) {
 	survivesInAStackCappedChild(t, func(t *testing.T) {
 		var out any
-		expectError(t, mustTemplate(t, deeplyThrown("{ message: a }")).Eval(&out, nil, "v"), EvaluationFailed, "threw [object Object]")
+		expectError(t, mustTemplate(t, deeplyThrown("{ message: a }")).Eval(&out, nil, "v"), EvaluationFailed, "threw an object")
 		expectError(t, mustTemplate(t, deeplyThrown("{ name: a, message: 'unnamed' }")).Eval(&out, nil, "v"), EvaluationFailed, ": unnamed")
 	})
 }
@@ -103,10 +103,10 @@ func TestThrownValuesAreDescribedWithoutConvertingObjects(t *testing.T) {
 		source   string
 		expected string
 	}{
-		"array":          {"throw [1, 2]", "threw [object Array]"},
+		"array":          {"throw [1, 2]", "threw an array"},
 		"error":          {"throw new TypeError('t')", "TypeError: t"},
 		"numeric fields": {"throw { name: 7, message: 8 }", "7: 8"},
-		"object message": {"throw { message: { toString() { return 'm' } } }", "threw [object Object]"},
+		"object message": {"throw { message: { toString() { return 'm' } } }", "threw an object"},
 		"object name":    {"throw { name: { toString() { return 'n' } }, message: 'unnamed' }", "}: unnamed"},
 	}
 	for name, c := range cases {

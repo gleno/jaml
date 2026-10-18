@@ -27,22 +27,23 @@ var engineGlobals = sync.OnceValue(func() map[string]bool {
 func encodeVars(vars map[string]any) (encodedVars, error) {
 	encoded := make(encodedVars, len(vars))
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
+		shown := clip(name, keyExcerptLength)
 		if !utf8.ValidString(name) {
-			return nil, fmt.Errorf("var %q is not named in valid UTF-8", name)
+			return nil, fmt.Errorf("var %q is not named in valid UTF-8", shown)
 		}
 		if engineGlobals()[name] {
-			return nil, fmt.Errorf("var %q collides with a JavaScript global", name)
+			return nil, fmt.Errorf("var %q collides with a JavaScript global", shown)
 		}
 		value, err := json.Marshal(vars[name])
 		if err != nil {
-			return nil, fmt.Errorf("var %q is not JSON data: %w", name, err)
+			return nil, fmt.Errorf("var %q is not JSON data: %w", shown, err)
 		}
 		deepest, replaced := measureJSON(value)
 		if deepest > maxDataDepth {
-			return nil, tooDeep(fmt.Sprintf("var %q", name))
+			return nil, tooDeep(fmt.Sprintf("var %q", shown))
 		}
 		if replaced {
-			return nil, fmt.Errorf("var %q holds text that is not valid UTF-8", name)
+			return nil, fmt.Errorf("var %q holds text that is not valid UTF-8", shown)
 		}
 		encoded[name] = value
 	}

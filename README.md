@@ -187,13 +187,13 @@ var (
 )
 ```
 
-All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches any of them, and trusted and secure templates return the same kind for the same failure. An error also wraps its cause: a secure `Eval` that ran out of time matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), and a failed decode reaches `encoding/json`'s error. Messages lead with the location, for example:
+All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches any of them, and trusted and secure templates return the same kind for the same failure. An error also wraps its cause: a secure `Eval` that ran out of time matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), and a failed decode reaches `encoding/json`'s error. No JavaScript value escapes an `Eval`: what an expression threw is described as text when it is caught, so reading an error never runs template code. Messages lead with the location, for example:
 
 ```
 $.config.servers[0].port: ${port}: ReferenceError: port is not defined: evaluation failed: template error
 ```
 
-A key longer than 60 characters appears in a location as its first 60 followed by `…`.
+A key longer than 60 characters appears in a location as its first 60 followed by `…`. Messages stay on one line and stay short: quoted code is collapsed to single spaces and cut at 60 characters, a thrown message at 200, and a syntax error gives its line and column in characters and quotes the code from that point. A getter that throws while jaml reads a result names where it was: `reading result.a.b: Error: x`.
 
 ## License
 

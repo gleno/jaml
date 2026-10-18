@@ -3,15 +3,46 @@ package jaml
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
+	"strings"
 )
 
 func (p *dataPath) blame(encoded []byte, err error) *dataPath {
-	var mismatch *json.UnmarshalTypeError
-	if !errors.As(err, &mismatch) {
+	mismatch, isOwn := err.(*json.UnmarshalTypeError)
+	if !isOwn {
 		return p
 	}
-	return p.within(encoded, mismatch.Offset)
+	found, token := p.within(encoded, mismatch.Offset)
+	if found == nil || !holdsKind(token, mismatch.Value) || !namesField(found, mismatch.Field) {
+		return p
+	}
+	return found
+}
+
+func holdsKind(token json.Token, kind string) bool {
+	switch typed := token.(type) {
+	case string:
+		return kind == "string"
+	case float64:
+		return kind == "number" || strings.HasPrefix(kind, "number ")
+	case bool:
+		return kind == "bool"
+	case json.Delim:
+		return typed == '{' && kind == "object" || typed == '[' && kind == "array"
+	}
+	return false
+}
+
+func namesField(found *dataPath, field string) bool {
+	if field == "" {
+		return true
+	}
+	last := field[strings.LastIndexByte(field, '.')+1:]
+	for step := found; step != nil; step = step.parent {
+		if step.keyed && step.key == last {
+			return true
+		}
+	}
+	return false
 }
 
 type jsonFrame struct {
@@ -22,13 +53,13 @@ type jsonFrame struct {
 	index     int
 }
 
-func (p *dataPath) within(encoded []byte, offset int64) *dataPath {
+func (p *dataPath) within(encoded []byte, offset int64) (*dataPath, json.Token) {
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	var open []*jsonFrame
 	for {
 		token, err := decoder.Token()
 		if err != nil {
-			return p
+			return nil, nil
 		}
 		delim, isDelim := token.(json.Delim)
 		if isDelim && (delim == '}' || delim == ']') {
@@ -50,7 +81,7 @@ func (p *dataPath) within(encoded []byte, offset int64) *dataPath {
 			}
 		}
 		if decoder.InputOffset() >= offset {
-			return valueAt
+			return valueAt, token
 		}
 		if isDelim {
 			open = append(open, &jsonFrame{at: valueAt, object: delim == '{', expectKey: true})

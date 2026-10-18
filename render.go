@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const sourcePreviewLength = 60
-
 type renderer struct {
 	template *template
 	engine   *lazySession
@@ -114,12 +112,4 @@ func stringify(value any) (string, error) {
 	default:
 		return dataText(typed)
 	}
-}
-
-func preview(source string) string {
-	flattened := strings.Join(strings.Fields(source), " ")
-	if len(flattened) <= sourcePreviewLength {
-		return flattened
-	}
-	return flattened[:sourcePreviewLength] + "…"
 }

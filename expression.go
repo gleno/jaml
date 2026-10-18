@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja/ast"
@@ -247,12 +248,16 @@ func describeSyntaxError(source string, err error) error {
 }
 
 func placeSyntaxError(source string, at file.Position, message string) error {
-	line := at.Line - strings.Count(expressionOpens, "\n")
+	reason := excerpt(message, thrownExcerptLength)
+	offset := offsetOf(expressionOpens+source, at) - len(expressionOpens)
 	switch {
-	case line < 1:
-		return fmt.Errorf("syntax error in the expression: %s", message)
-	case line > strings.Count(source, "\n")+1:
-		return fmt.Errorf("syntax error at the end of the expression: %s", message)
+	case offset < 0:
+		return fmt.Errorf("syntax error in the expression: %s", reason)
+	case offset >= len(source) || strings.TrimSpace(source[offset:]) == "":
+		return fmt.Errorf("syntax error at the end of the expression: %s", reason)
 	}
-	return fmt.Errorf("syntax error at line %d, column %d of the expression: %s", line, at.Column, message)
+	before := source[:offset]
+	line := strings.Count(before, "\n") + 1
+	column := utf8.RuneCountInString(before[strings.LastIndexByte(before, '\n')+1:]) + 1
+	return fmt.Errorf("syntax error at line %d, column %d of the expression: %s at %q", line, column, reason, excerpt(source[offset:], codeExcerptLength))
 }
