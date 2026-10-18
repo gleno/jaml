@@ -168,7 +168,7 @@ func TestExpressionsRunInStrictMode(t *testing.T) {
 	expectError(t, template.Eval(&out, nil, "b"), EvaluationFailed, "ReferenceError")
 }
 
-func TestInvalidExpressionsFailAtMakeTemplate(t *testing.T) {
+func TestInvalidExpressionsFailAtMakeTrustedTemplate(t *testing.T) {
 	cases := map[string]struct {
 		text      string
 		fragments []string
@@ -187,7 +187,7 @@ func TestInvalidExpressionsFailAtMakeTemplate(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := MakeTemplate(c.text)
+			_, err := MakeTrustedTemplate(c.text)
 			expectError(t, err, InvalidTemplate, c.fragments...)
 		})
 	}
@@ -206,19 +206,19 @@ func TestAnExpressionCannotCloseItsWrapper(t *testing.T) {
 	}
 }
 
-func TestStrictModeCompileErrorsFailAtMakeTemplate(t *testing.T) {
-	_, err := MakeTemplate("a: |\n  ${\n    delete x\n  }\n")
+func TestStrictModeCompileErrorsFailAtMakeTrustedTemplate(t *testing.T) {
+	_, err := MakeTrustedTemplate("a: |\n  ${\n    delete x\n  }\n")
 	expectError(t, err, InvalidTemplate, "$.a", "syntax error at line 2")
 }
 
 func TestUnclosedJavaScriptTokensAreUnclosedExpressions(t *testing.T) {
 	for _, text := range []string{"a: ${ 'x }\n", "a: \"${ `x }\"\n", "a: \"${ `${ 1 }\"\n", "a: ${ /* x }\n", "a: \"x ${{ 'y }}\"\n"} {
-		_, err := MakeTemplate(text)
+		_, err := MakeTrustedTemplate(text)
 		expectError(t, err, InvalidTemplate, "unclosed")
 	}
 }
 
 func TestAnAliasCannotContainItself(t *testing.T) {
-	_, err := MakeTemplate("a: &a [*a]\n")
+	_, err := MakeTrustedTemplate("a: &a [*a]\n")
 	expectError(t, err, InvalidTemplate)
 }

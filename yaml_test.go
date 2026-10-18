@@ -20,11 +20,11 @@ func TestNonStringKeysAreRefused(t *testing.T) {
 	}
 	for name, text := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := MakeTemplate(text)
+			_, err := MakeTrustedTemplate(text)
 			expectError(t, err, InvalidTemplate, "keys must be strings")
 		})
 	}
-	_, err := MakeTemplate("outer:\n  true: x\n")
+	_, err := MakeTrustedTemplate("outer:\n  true: x\n")
 	expectError(t, err, InvalidTemplate, "$.outer: key true is a bool")
 }
 
@@ -35,13 +35,13 @@ func TestQuotedKeysAreStrings(t *testing.T) {
 
 func TestInfinityAndNaNAreRefused(t *testing.T) {
 	for _, text := range []string{"a: .inf\n", "a: -.inf\n", "a: [.nan]\n"} {
-		_, err := MakeTemplate(text)
+		_, err := MakeTrustedTemplate(text)
 		expectError(t, err, InvalidTemplate, "not a finite number")
 	}
 }
 
 func TestDuplicateKeysAreRefused(t *testing.T) {
-	_, err := MakeTemplate("a: 1\na: 2\n")
+	_, err := MakeTrustedTemplate("a: 1\na: 2\n")
 	expectError(t, err, InvalidTemplate, `mapping key "a" already defined at line 1`)
 }
 
@@ -93,8 +93,8 @@ func TestAnEmptyDocumentIsNull(t *testing.T) {
 	expectEqual(t, out, 5)
 }
 
-func TestInvalidYAMLFailsAtMakeTemplate(t *testing.T) {
-	_, err := MakeTemplate("a: [1, 2\n")
+func TestInvalidYAMLFailsAtMakeTrustedTemplate(t *testing.T) {
+	_, err := MakeTrustedTemplate("a: [1, 2\n")
 	expectError(t, err, InvalidTemplate)
 }
 

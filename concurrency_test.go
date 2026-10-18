@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestConcurrentEvalsDoNotInterfere(t *testing.T) {
@@ -49,29 +48,6 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 	for err := range failures {
 		t.Error(err)
 	}
-}
-
-func TestConcurrentEvalsKeepSeparateBudgets(t *testing.T) {
-	template := mustTemplate(t, "v: \"${ spin ? (() => { while (true) {} })() : 1 }\"\n", WithTimeout(100*time.Millisecond))
-	var wait sync.WaitGroup
-	results := make(chan error, 8)
-	for i := range 8 {
-		wait.Go(func() {
-			var out int
-			results <- template.Eval(&out, map[string]any{"spin": i%2 == 0}, "v")
-		})
-	}
-	wait.Wait()
-	close(results)
-	var failed, passed int
-	for err := range results {
-		if err != nil {
-			failed++
-			continue
-		}
-		passed++
-	}
-	expectEqual(t, [2]int{failed, passed}, [2]int{4, 4})
 }
 
 func TestSharedVarsAreNotMutated(t *testing.T) {

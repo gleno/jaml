@@ -1,10 +1,8 @@
 package jaml
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
-	"time"
 
 	"github.com/gleno/fault"
 )
@@ -16,6 +14,8 @@ var (
 	MissingPath      = TemplateError.WithMessage("missing path")
 	EvaluationFailed = TemplateError.WithMessage("evaluation failed")
 	CoercionFailed   = TemplateError.WithMessage("coercion failed")
+	Closed           = TemplateError.WithMessage("template closed")
+	Unsupported      = TemplateError.WithMessage("unsupported")
 )
 
 type Coercion int
@@ -25,14 +25,14 @@ const (
 	Strict
 )
 
-const defaultTimeout = time.Second
+const defaultMemoryLimit = 256 << 20
 
 type Option func(*settings)
 
 type settings struct {
-	null      Coercion
-	undefined Coercion
-	timeout   time.Duration
+	null        Coercion
+	undefined   Coercion
+	memoryLimit int64
 }
 
 func WithNullCoercion(coercion Coercion) Option {
@@ -43,59 +43,12 @@ func WithUndefinedCoercion(coercion Coercion) Option {
 	return func(s *settings) { s.undefined = coercion }
 }
 
-func WithTimeout(timeout time.Duration) Option {
-	return func(s *settings) { s.timeout = timeout }
-}
-
-type Template struct {
-	root     any
-	texts    map[string]text
-	settings settings
-}
-
-func MakeTemplate(source string, options ...Option) (*Template, error) {
-	configured, err := configure(options)
-	if err != nil {
-		return nil, err
-	}
-	root, err := parseYAML(source)
-	if err != nil {
-		return nil, err
-	}
-	texts, err := compileTexts(root)
-	if err != nil {
-		return nil, err
-	}
-	return &Template{root: root, texts: texts, settings: configured}, nil
-}
-
-func (t *Template) Eval(into any, vars map[string]any, path ...string) error {
-	target := reflect.ValueOf(into)
-	if target.Kind() != reflect.Pointer || target.IsNil() {
-		return fault.From(InvalidTarget, fmt.Sprintf("Eval needs a non-nil pointer, got %s", describeTarget(into)))
-	}
-	selected, at, err := t.selectPath(path)
-	if err != nil {
-		return err
-	}
-	renderer := openRenderer(t, vars)
-	defer renderer.close()
-	rendered, err := renderer.render(selected, at)
-	if err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(rendered)
-	if err != nil {
-		return fault.From(CoercionFailed, fmt.Sprintf("%s: %s", at, err))
-	}
-	if err := json.Unmarshal(encoded, into); err != nil {
-		return fault.From(CoercionFailed, fmt.Sprintf("%s: %s", at, err))
-	}
-	return nil
+func WithMemoryLimit(bytes int64) Option {
+	return func(s *settings) { s.memoryLimit = bytes }
 }
 
 func configure(options []Option) (settings, error) {
-	configured := settings{null: Loose, undefined: Strict, timeout: defaultTimeout}
+	configured := settings{null: Loose, undefined: Strict}
 	for _, option := range options {
 		option(&configured)
 	}
@@ -104,8 +57,8 @@ func configure(options []Option) (settings, error) {
 			return settings{}, fault.From(InvalidTemplate, fmt.Sprintf("%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion))
 		}
 	}
-	if configured.timeout <= 0 {
-		return settings{}, fault.From(InvalidTemplate, fmt.Sprintf("timeout must be positive, got %s", configured.timeout))
+	if configured.memoryLimit < 0 {
+		return settings{}, fault.From(InvalidTemplate, fmt.Sprintf("memory limit must be positive, got %d", configured.memoryLimit))
 	}
 	return configured, nil
 }

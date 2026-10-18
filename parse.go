@@ -82,7 +82,7 @@ func asJSONData(node any, at string) (any, error) {
 	}
 }
 
-func (t *Template) selectPath(path []string) (any, string, error) {
+func (t *template) selectPath(path []string) (any, string, error) {
 	current, at := t.root, "$"
 	for _, step := range path {
 		switch typed := current.(type) {
@@ -105,7 +105,7 @@ func (t *Template) selectPath(path []string) (any, string, error) {
 	return current, at, nil
 }
 
-func (t *Template) describe(node any) string {
+func (t *template) describe(node any) string {
 	switch typed := node.(type) {
 	case nil:
 		return "a null"

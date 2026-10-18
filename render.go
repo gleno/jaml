@@ -13,18 +13,15 @@ import (
 const sourcePreviewLength = 60
 
 type renderer struct {
-	template *Template
+	template *template
+	engine   engine
 	vars     map[string]any
-	session  *session
-}
-
-func openRenderer(template *Template, vars map[string]any) *renderer {
-	return &renderer{template: template, vars: vars}
+	runtime  runtime
 }
 
 func (r *renderer) close() {
-	if r.session != nil {
-		r.session.close()
+	if r.runtime != nil {
+		r.runtime.close()
 	}
 }
 
@@ -109,18 +106,26 @@ func (r *renderer) admit(result any, compiled expression, at string) (any, error
 }
 
 func (r *renderer) evaluate(compiled expression, at string) (any, error) {
-	if r.session == nil {
-		opened, err := openSession(r.vars, r.template.settings.timeout)
+	if r.runtime == nil {
+		opened, err := r.openRuntime()
 		if err != nil {
 			return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: binding vars: %s", at, err))
 		}
-		r.session = opened
+		r.runtime = opened
 	}
-	result, err := r.session.evaluate(compiled)
+	result, err := r.runtime.evaluate(compiled)
 	if err != nil {
 		return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: %s: %s", at, compiled.written(), err))
 	}
 	return result, nil
+}
+
+func (r *renderer) openRuntime() (runtime, error) {
+	encoded, err := encodeVars(r.vars)
+	if err != nil {
+		return nil, err
+	}
+	return r.engine.open(encoded)
 }
 
 func stringify(value any) (string, error) {

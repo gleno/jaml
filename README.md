@@ -11,11 +11,11 @@ go get github.com/gleno/jaml
 ## What it gives you
 
 - **Two expression forms.** `${ … }` as a whole value is a typed result (a number stays a number, a list stays a list). `${{ … }}` inside text interpolates.
-- **Nothing runs until the data arrives.** `MakeTemplate` parses the YAML and compiles every expression, so syntax errors surface immediately, but evaluates nothing.
+- **Nothing runs until the data arrives.** Making a template parses the YAML and compiles every expression, so syntax errors surface immediately, but evaluates nothing.
 - **Results are data.** An expression must produce JSON data: scalars, lists, objects. Functions, symbols, cycles, `NaN`, `Date`s and class instances are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does.
 - **Null and undefined on your terms.** `Loose` or `Strict` for expression results, configured separately.
-- **Bounded evaluation.** A time budget per `Eval`, a call-depth limit, and a cap on result size.
+- **Trusted or secure, chosen up front.** A trusted template runs expressions in your process with no limits. A secure template runs them in a child process with a memory limit, cancelled through `context.Context`.
 - **Safe to share.** A `Template` is immutable; call `Eval` from as many goroutines as you like.
 
 ## Usage
@@ -36,9 +36,7 @@ type Config struct {
 	Value3 string `json:"value3"`
 }
 
-template, err := jaml.MakeTemplate(text,
-	jaml.WithNullCoercion(jaml.Loose),
-	jaml.WithUndefinedCoercion(jaml.Strict))
+template, err := jaml.MakeTrustedTemplate(text)
 if err != nil {
 	return err
 }
@@ -49,6 +47,20 @@ err = template.Eval(&cfg, map[string]any{"name": "abc"}, "config")
 ```
 
 `Eval(into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A path that does not exist is a `MissingPath` error.
+
+### Templates you do not trust
+
+```go
+template, err := jaml.MakeSecureTemplate(ctx, text, jaml.WithMemoryLimit(128<<20))
+if err != nil {
+	return err
+}
+defer template.Close()
+
+evalCtx, cancel := context.WithTimeout(ctx, time.Second)
+defer cancel()
+err = template.Eval(evalCtx, &cfg, vars, "config")
+```
 
 ## Syntax
 
@@ -107,30 +119,43 @@ YAML `~`, `null` and empty values are null and decode as JSON null. The settings
 - Inside a returned list, `undefined` becomes `null`; inside a returned object, a key holding `undefined` is dropped, as `JSON.stringify` does.
 - JSON null leaves a non-pointer field as `encoding/json` leaves it: unchanged.
 
-## Safety
+## Trusted and secure templates
 
-Expressions are meant for configuration you mostly trust, but they cannot hang or crash your process:
+goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted inside a built-in call such as `'x'.repeat(1e9)`. So jaml does not pretend to bound an expression running in your process. You choose:
 
-- Each `Eval` has a time budget, one second by default, shared by all its expressions. Change it with `WithTimeout`. Once it runs out, the running expression and every one after it fail.
+**`MakeTrustedTemplate`** runs expressions in your process, with no time or memory limit. An infinite loop hangs `Eval`; an allocation bomb takes the process down. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run.
+
+**`MakeSecureTemplate(ctx, …)`** runs expressions in a child process that jaml starts and owns:
+
+- **Memory.** The child watches its own heap every millisecond and exits once it passes the limit (`WithMemoryLimit`, 256 MiB by default). One huge allocation is caught before it is touched; a doubling loop can reach about twice the limit before it is stopped. On Linux an address-space rlimit of 8× the limit (at least 4 GiB) backs it up.
+- **Time.** `Eval(ctx, …)` takes a context. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`.
+- **Recovery.** A child that is killed or dies fails only the `Eval` it was serving; the next `Eval` starts a fresh one. A JavaScript error does not kill the child.
+- **Lifetime.** The child lives until `Close()` or until the template's context is done, whichever comes first. After that, `Eval` returns `Closed`. A child also exits when its parent dies.
+- **One at a time.** `Eval` calls on one secure template take turns, so one bad input cannot fail another's work. Use several templates for parallelism.
+- **Clean environment.** The child gets none of your environment variables, only its marker and its limit.
+- **Cost.** Starting a child takes about 5 ms; a secure `Eval` adds about 50 µs of round trips per expression over a trusted one.
+
+The child is your own binary, started again with a marker in its environment. jaml's `init()` sees the marker, serves evaluations over file descriptors 3 and 4, and exits, so your `main()` never runs in the child. The `init()` functions of packages that Go initializes before jaml do run there. Secure templates need a binary that can start itself again: they are not supported on Windows (`Unsupported`), or when jaml is built into a C shared library or a plugin.
+
+Both kinds share the same limits:
+
 - Calls nest at most 4096 deep.
 - A result may hold at most 1,048,576 values.
 - The runtime has no I/O, no `require`, no timers, and source-map comments are not followed.
 
-Memory is not bounded: a single built-in call such as `'x'.repeat(1e9)` can allocate before the budget can interrupt it. For hostile input, run in a process with a memory limit.
-
 ## API
 
 ```go
-// Parse and compile a template. Nothing is evaluated.
-func MakeTemplate(text string, options ...Option) (*Template, error)
+func MakeTrustedTemplate(text string, options ...Option) (*TrustedTemplate, error)
+func (t *TrustedTemplate) Eval(into any, vars map[string]any, path ...string) error
 
-// Evaluate the subtree at path and decode it into the non-nil pointer into.
-func (t *Template) Eval(into any, vars map[string]any, path ...string) error
+func MakeSecureTemplate(ctx context.Context, text string, options ...Option) (*SecureTemplate, error)
+func (t *SecureTemplate) Eval(ctx context.Context, into any, vars map[string]any, path ...string) error
+func (t *SecureTemplate) Close() error
 
-// Options. Coercion is Loose or Strict.
-func WithNullCoercion(coercion Coercion) Option      // default Loose
-func WithUndefinedCoercion(coercion Coercion) Option // default Strict
-func WithTimeout(timeout time.Duration) Option       // default 1s per Eval
+func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
+func WithUndefinedCoercion(coercion Coercion) Option // Loose or Strict (default)
+func WithMemoryLimit(bytes int64) Option             // secure only; default 256 MiB
 ```
 
 ### Errors
@@ -141,8 +166,10 @@ var (
 	InvalidTemplate  // bad YAML, bad JavaScript syntax, bad options
 	InvalidTarget    // into is not a non-nil pointer
 	MissingPath      // the path names nothing in the template
-	EvaluationFailed // an expression threw, ran out of budget, or produced something that is not data
+	EvaluationFailed // an expression threw or produced something that is not data; a secure evaluator was cancelled, ran out of memory or died
 	CoercionFailed   // json.Unmarshal refused the data, or strict null/undefined refused a result
+	Closed           // Eval on a secure template after Close or after its context ended
+	Unsupported      // secure templates on a platform that cannot run them
 )
 ```
 

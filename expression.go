@@ -19,6 +19,7 @@ const (
 var errEscapesItsWrapper = errors.New("write a single JavaScript expression")
 
 type expression struct {
+	id           int
 	source       string
 	interpolated bool
 	program      *goja.Program

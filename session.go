@@ -1,56 +1,38 @@
 package jaml
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
-	"time"
 
 	"github.com/dop251/goja"
 )
 
 const maxCallStackSize = 4096
 
-type budgetExceeded struct {
-	timeout time.Duration
-}
-
-func (b budgetExceeded) Error() string {
-	return fmt.Sprintf("ran past its time budget of %s", b.timeout)
-}
-
 type session struct {
 	vm              *goja.Runtime
 	objectPrototype *goja.Object
-	timer           *time.Timer
 }
 
-func openSession(vars map[string]any, timeout time.Duration) (*session, error) {
+func openSession(vars encodedVars) (*session, error) {
 	vm := goja.New()
 	vm.SetMaxCallStackSize(maxCallStackSize)
 	opened := &session{vm: vm, objectPrototype: vm.Get("Object").ToObject(vm).Get("prototype").ToObject(vm)}
 	if err := opened.bind(vars); err != nil {
 		return nil, err
 	}
-	opened.timer = time.AfterFunc(timeout, func() { vm.Interrupt(budgetExceeded{timeout: timeout}) })
 	return opened, nil
 }
 
-func (s *session) close() {
-	s.timer.Stop()
-}
+func (s *session) close() {}
 
-func (s *session) bind(vars map[string]any) error {
+func (s *session) bind(vars encodedVars) error {
 	parse, _ := goja.AssertFunction(s.vm.Get("JSON").ToObject(s.vm).Get("parse"))
 	global := s.vm.GlobalObject()
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		encoded, err := json.Marshal(vars[name])
-		if err != nil {
-			return fmt.Errorf("var %q is not JSON data: %w", name, err)
-		}
-		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(encoded)))
+		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
 		if err != nil {
 			return fmt.Errorf("var %q: %w", name, err)
 		}
@@ -97,13 +79,6 @@ func (s *session) read(returned goja.Value) (any, error) {
 }
 
 func (s *session) describe(err error) error {
-	var interrupted *goja.InterruptedError
-	if errors.As(err, &interrupted) {
-		if exceeded, isBudget := interrupted.Value().(budgetExceeded); isBudget {
-			return exceeded
-		}
-		return fmt.Errorf("interrupted: %v", interrupted.Value())
-	}
 	var overflowed *goja.StackOverflowError
 	if errors.As(err, &overflowed) {
 		return fmt.Errorf("exceeded the maximum call depth of %d", maxCallStackSize)

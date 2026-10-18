@@ -54,6 +54,6 @@ func TestNestedUndefinedFollowsJSON(t *testing.T) {
 }
 
 func TestInvalidCoercionOptionsAreRefused(t *testing.T) {
-	_, err := MakeTemplate("a: 1\n", WithNullCoercion(Coercion(7)))
+	_, err := MakeTrustedTemplate("a: 1\n", WithNullCoercion(Coercion(7)))
 	expectError(t, err, InvalidTemplate, "null coercion")
 }

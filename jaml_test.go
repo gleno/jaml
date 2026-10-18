@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-func mustTemplate(t *testing.T, text string, options ...Option) *Template {
+func mustTemplate(t *testing.T, text string, options ...Option) *TrustedTemplate {
 	t.Helper()
-	template, err := MakeTemplate(text, options...)
+	template, err := MakeTrustedTemplate(text, options...)
 	if err != nil {
-		t.Fatalf("MakeTemplate: %v", err)
+		t.Fatalf("MakeTrustedTemplate: %v", err)
 	}
 	return template
 }
 
-func evalAs[T any](t *testing.T, template *Template, vars map[string]any, path ...string) T {
+func evalAs[T any](t *testing.T, template *TrustedTemplate, vars map[string]any, path ...string) T {
 	t.Helper()
 	var out T
 	if err := template.Eval(&out, vars, path...); err != nil {
