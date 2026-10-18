@@ -9,24 +9,24 @@ import (
 	"github.com/gleno/fault"
 )
 
-func (t *template) selectPath(path []string) (any, string, error) {
-	current, at := t.root, "$"
+func (t *template) selectPath(path []string) (any, *dataPath, error) {
+	current, at := t.root, (*dataPath)(nil)
 	for _, step := range path {
 		switch typed := current.(type) {
 		case map[string]any:
 			found, ok := typed[step]
 			if !ok {
-				return nil, "", missingPath(at, fmt.Sprintf("has no key %q", step))
+				return nil, nil, missingPath(at, fmt.Sprintf("has no key %q", step))
 			}
-			current, at = found, at+keyStep(step)
+			current, at = found, at.atKey(step)
 		case []any:
 			index, err := strconv.Atoi(step)
 			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
-				return nil, "", missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
+				return nil, nil, missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
-			current, at = typed[index], at+indexStep(index)
+			current, at = typed[index], at.atIndex(index)
 		default:
-			return nil, "", missingPath(at, fmt.Sprintf("is %s, which has no key %q", t.describe(current), step))
+			return nil, nil, missingPath(at, fmt.Sprintf("is %s, which has no key %q", t.describe(current), step))
 		}
 	}
 	return current, at, nil
@@ -48,8 +48,8 @@ func (t *template) describe(node any) string {
 	}
 }
 
-func missingPath(at string, message string) error {
-	return fault.From(MissingPath, at+" "+message)
+func missingPath(at *dataPath, message string) error {
+	return fault.From(MissingPath, at.String()+" "+message)
 }
 
 func eachChild(node any, at *dataPath, visit func(child any, at *dataPath) error) error {
@@ -68,29 +68,4 @@ func eachChild(node any, at *dataPath, visit func(child any, at *dataPath) error
 		}
 	}
 	return nil
-}
-
-func keyStep(key string) string {
-	if isPlainKey(key) {
-		return "." + key
-	}
-	return "[" + strconv.Quote(key) + "]"
-}
-
-func indexStep(index int) string {
-	return "[" + strconv.Itoa(index) + "]"
-}
-
-func isPlainKey(key string) bool {
-	if key == "" {
-		return false
-	}
-	for i, r := range key {
-		letter := r == '_' || r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-		digit := r >= '0' && r <= '9'
-		if !letter && !(digit && i > 0) {
-			return false
-		}
-	}
-	return true
 }

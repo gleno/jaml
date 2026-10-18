@@ -66,16 +66,15 @@ func isEmptyDocument(document *yaml.Node) bool {
 
 type dataAt struct {
 	path    *dataPath
-	depth   int
 	aliased bool
 }
 
 func (a dataAt) atKey(key string) dataAt {
-	return dataAt{path: a.path.atKey(key), depth: a.depth + 1, aliased: a.aliased}
+	return dataAt{path: a.path.atKey(key), aliased: a.aliased}
 }
 
 func (a dataAt) atIndex(index int) dataAt {
-	return dataAt{path: a.path.atIndex(index), depth: a.depth + 1, aliased: a.aliased}
+	return dataAt{path: a.path.atIndex(index), aliased: a.aliased}
 }
 
 type yamlReader struct {
@@ -96,7 +95,7 @@ func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
 	if node.Kind == yaml.ScalarNode {
 		return resolveScalar(node, at.path)
 	}
-	if at.depth >= maxDataDepth {
+	if at.path.depth() >= maxDataDepth {
 		return nil, fault.From(InvalidTemplate, tooDeep(at.path.String()).Error())
 	}
 	if node.Anchor != "" {

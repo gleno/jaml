@@ -12,15 +12,15 @@ import (
 const maxCallStackSize = 4096
 
 type session struct {
-	vm              *goja.Runtime
-	objectPrototype *goja.Object
-	broken          error
+	vm     *goja.Runtime
+	realm  realm
+	broken error
 }
 
 func openSession(vars encodedVars) (*session, error) {
 	vm := goja.New()
 	vm.SetMaxCallStackSize(maxCallStackSize)
-	opened := &session{vm: vm, objectPrototype: vm.Get("Object").ToObject(vm).Get("prototype").ToObject(vm)}
+	opened := &session{vm: vm, realm: captureRealm(vm)}
 	if err := opened.bind(vars); err != nil {
 		return nil, err
 	}
@@ -125,8 +125,7 @@ func (s *session) guarded(run func()) error {
 }
 
 func (s *session) read(returned goja.Value) (any, error) {
-	reader := resultReader{objectPrototype: s.objectPrototype, ancestors: map[*goja.Object]bool{}}
-	return reader.read(returned, "")
+	return readResult(s.realm, returned)
 }
 
 func (s *session) describe(err error) error {

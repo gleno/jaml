@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -19,12 +18,12 @@ type renderer struct {
 	runtime  runtime
 }
 
-func (r *renderer) render(node any, at string) (any, error) {
+func (r *renderer) render(node any, at *dataPath) (any, error) {
 	switch typed := node.(type) {
 	case map[string]any:
 		rendered := make(map[string]any, len(typed))
 		for _, key := range slices.Sorted(maps.Keys(typed)) {
-			value, err := r.render(typed[key], at+keyStep(key))
+			value, err := r.render(typed[key], at.atKey(key))
 			if err != nil {
 				return nil, err
 			}
@@ -34,7 +33,7 @@ func (r *renderer) render(node any, at string) (any, error) {
 	case []any:
 		rendered := make([]any, len(typed))
 		for index, item := range typed {
-			value, err := r.render(item, at+indexStep(index))
+			value, err := r.render(item, at.atIndex(index))
 			if err != nil {
 				return nil, err
 			}
@@ -52,7 +51,7 @@ func (r *renderer) render(node any, at string) (any, error) {
 	}
 }
 
-func (r *renderer) renderText(compiled text, at string) (any, error) {
+func (r *renderer) renderText(compiled text, at *dataPath) (any, error) {
 	if compiled.whole != nil {
 		result, err := r.evaluate(*compiled.whole, at)
 		if err != nil {
@@ -83,7 +82,7 @@ func (r *renderer) renderText(compiled text, at string) (any, error) {
 	return rendered.String(), nil
 }
 
-func (r *renderer) admit(result any, compiled expression, at string) (any, error) {
+func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, error) {
 	absent, coercion := "", Loose
 	switch result.(type) {
 	case nil:
@@ -99,7 +98,7 @@ func (r *renderer) admit(result any, compiled expression, at string) (any, error
 	return nil, nil
 }
 
-func (r *renderer) evaluate(compiled expression, at string) (any, error) {
+func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
 	if r.runtime == nil {
 		opened, err := r.engine.open(r.vars)
 		if err != nil {
@@ -121,8 +120,7 @@ func stringify(value any) (string, error) {
 	case string:
 		return typed, nil
 	default:
-		encoded, err := json.Marshal(typed)
-		return string(encoded), err
+		return dataText(typed)
 	}
 }
 

@@ -12,7 +12,7 @@ go get github.com/gleno/jaml
 
 - **Two expression forms.** `${ … }` as a whole value is a typed result (a number stays a number, a list stays a list). `${{ … }}` inside text interpolates.
 - **Nothing runs until the data arrives.** Making a template parses the YAML and compiles every expression, so syntax errors surface immediately, but evaluates nothing.
-- **Results are data.** An expression must produce JSON data: scalars, lists, objects. Functions, symbols, cycles, `NaN`, `Date`s and class instances are errors naming the path to the offending value.
+- **Results are data.** An expression must produce JSON data: scalars, lists, objects. Functions, symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does.
 - **Null and undefined on your terms.** `Loose` or `Strict` for expression results, configured separately.
 - **Trusted or secure, chosen up front.** A trusted template runs expressions in your process with no limits. A secure template runs them in a child process with a memory limit, cancelled through `context.Context`.
@@ -80,7 +80,7 @@ steps: |
 
 - A value is a **whole expression** when, after trimming whitespace, it starts with `${`, ends with `}`, and is one balanced expression. Quoting does not matter: `${1+1}`, `"${1+1}"` and `'${1+1}'` are all the number 2.
 - A value that starts with `${` but is not one whole expression (`${a} and ${b}`) is an error. Interpolate with `${{ }}` instead.
-- **Interpolation** with `${{ … }}` always produces text, even when it is the whole value: `${{1+1}}` is `"2"`. To write an object literal as a whole value, put a space between the braces: `${ {a: 1} }`.
+- **Interpolation** with `${{ … }}` always produces text, even when it is the whole value: `${{1+1}}` is `"2"`. To write an object literal as a whole value, put a space between the braces: `${ {a: 1} }`. Strings interpolate as they are; numbers, bools, lists and objects interpolate as JSON, keys sorted, written as `JSON.stringify` writes them: `${{ ({b: '<&>', a: 1}) }}` is `{"a":1,"b":"<&>"}`.
 - A single `${` anywhere other than the start of a value is plain text: `echo ${HOME}` stays as written.
 - To write the delimiters literally, use a JavaScript string: `${{'${{'}}` or `${'${x}'}`.
 - **Keys are never evaluated.**
@@ -149,7 +149,7 @@ Both kinds share the same limits:
 - `JSON.parse` refuses text nested deeper than 4096 with a `RangeError`, so a deep string var cannot be turned into deep data.
 - Data an expression builds for itself is not bounded. Some built-ins (`JSON.stringify`, `String` or `join` of an array, `flat`) walk it recursively on the Go stack, and a value nested about a million deep overflows that stack, which Go cannot recover from. It is the template's own risk, like an allocation bomb: a trusted template takes your process down, a secure template's child dies, and that `Eval` fails.
 - A Go panic inside the engine, such as goja's `'x'.repeat(2 ** 52)`, fails the `Eval` with `EvaluationFailed` instead of reaching your code.
-- A result may hold at most 1,048,576 values.
+- A result may hold at most 1,048,576 values, each list and object counting as one. A bigger result is refused as a whole (`result holds more than 1048576 values`), before jaml allocates room for it, so a sparse list cannot claim more than it holds.
 - The runtime has no I/O, no `require`, no timers, and source-map comments are not followed.
 
 ## API
@@ -187,6 +187,8 @@ All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches
 ```
 $.config.servers[0].port: ${port}: ReferenceError: port is not defined: evaluation failed: template error
 ```
+
+A key longer than 60 characters appears in a location as its first 60 followed by `…`.
 
 ## License
 
