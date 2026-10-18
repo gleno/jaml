@@ -2,6 +2,7 @@ package jaml
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -212,8 +213,37 @@ func TestSecureTemplateErrorsSurfaceEarly(t *testing.T) {
 	expectError(t, err, InvalidTemplate, "$.v")
 	_, err = MakeSecureTemplate(context.Background(), "v: 1\n", WithMemoryLimit(-1))
 	expectError(t, err, InvalidTemplate, "memory limit")
-	_, err = MakeTrustedTemplate("v: 1\n", WithMemoryLimit(1<<20))
+	_, err = MakeTrustedTemplate("v: 1\n", WithMemoryLimit(64<<20))
 	expectError(t, err, InvalidTemplate, "MakeSecureTemplate")
+}
+
+func TestMemoryLimitsOutsideTheirRangeAreRefused(t *testing.T) {
+	for _, bytes := range []int64{0, -1, 16<<20 - 1, 1<<40 + 1, 1 << 62} {
+		_, err := MakeSecureTemplate(context.Background(), "v: 1\n", WithMemoryLimit(bytes))
+		expectError(t, err, InvalidTemplate, "memory limit", "16 MiB", "1 TiB", fmt.Sprintf("got %d", bytes))
+		_, err = MakeTrustedTemplate("v: 1\n", WithMemoryLimit(bytes))
+		expectError(t, err, InvalidTemplate, "memory limit")
+	}
+}
+
+func TestMemoryLimitsAtTheirBoundsServe(t *testing.T) {
+	for _, bytes := range []int64{16 << 20, 1 << 40} {
+		template := mustSecure(t, "v: ${ 1 }\n", WithMemoryLimit(bytes))
+		for range 100 {
+			expectEqual(t, secureEvalAs[int](t, template, nil, "v"), 1)
+		}
+	}
+}
+
+func TestTheEvaluatorRefusesALimitOutsideTheRange(t *testing.T) {
+	t.Setenv(evaluatorParent, "1")
+	t.Setenv(evaluatorNonce, "nonce")
+	for _, written := range []string{"0", "1048576", "1099511627777"} {
+		t.Setenv(evaluatorMemoryLimit, written)
+		if _, err := worldFromEnv(); err == nil {
+			t.Fatalf("the evaluator accepted %s=%s", evaluatorMemoryLimit, written)
+		}
+	}
 }
 
 func TestSecureVarsMustBeJSONData(t *testing.T) {

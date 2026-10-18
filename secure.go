@@ -37,15 +37,12 @@ func MakeSecureTemplate(ctx context.Context, written string, options ...Option) 
 	if err != nil {
 		return nil, err
 	}
-	if configured.memoryLimit == 0 {
-		configured.memoryLimit = defaultMemoryLimit
-	}
 	core, err := makeTemplate(written, configured)
 	if err != nil {
 		return nil, err
 	}
 	lifetime, end := context.WithCancelCause(ctx)
-	spec := evaluatorSpec{sources: core.sources, memoryLimit: configured.memoryLimit}
+	spec := evaluatorSpec{sources: core.sources, memoryLimit: configured.memoryLimitOrDefault()}
 	first, err := spawnEvaluator(lifetime, lifetime, spec)
 	if err != nil {
 		end(err)

@@ -64,9 +64,13 @@ func serveEvaluations() int {
 }
 
 func worldFromEnv() (evaluatorWorld, error) {
-	limit, err := strconv.ParseInt(os.Getenv(evaluatorMemoryLimit), 10, 64)
-	if err != nil || limit <= 0 {
+	written, err := strconv.ParseInt(os.Getenv(evaluatorMemoryLimit), 10, 64)
+	if err != nil {
 		return evaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorMemoryLimit, os.Getenv(evaluatorMemoryLimit))
+	}
+	limit, err := makeMemoryLimit(written)
+	if err != nil {
+		return evaluatorWorld{}, fmt.Errorf("bad %s: %w", evaluatorMemoryLimit, err)
 	}
 	parent, err := strconv.Atoi(os.Getenv(evaluatorParent))
 	if err != nil || parent <= 0 {

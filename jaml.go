@@ -25,26 +25,59 @@ const (
 	Strict
 )
 
-const defaultMemoryLimit = 256 << 20
+const (
+	smallestMemoryLimit = 16 << 20
+	largestMemoryLimit  = 1 << 40
+	defaultMemoryLimit  = memoryLimit(256 << 20)
+)
 
-type Option func(*settings)
+type Option func(*settings) error
 
 type settings struct {
 	null        Coercion
 	undefined   Coercion
-	memoryLimit int64
+	memoryLimit memoryLimit
+}
+
+type memoryLimit int64
+
+func makeMemoryLimit(bytes int64) (memoryLimit, error) {
+	if bytes < smallestMemoryLimit || bytes > largestMemoryLimit {
+		return 0, fault.From(InvalidTemplate, fmt.Sprintf("memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes))
+	}
+	return memoryLimit(bytes), nil
+}
+
+func (s settings) memoryLimitOrDefault() memoryLimit {
+	if s.memoryLimit == 0 {
+		return defaultMemoryLimit
+	}
+	return s.memoryLimit
 }
 
 func WithNullCoercion(coercion Coercion) Option {
-	return func(s *settings) { s.null = coercion }
+	return func(s *settings) error {
+		s.null = coercion
+		return nil
+	}
 }
 
 func WithUndefinedCoercion(coercion Coercion) Option {
-	return func(s *settings) { s.undefined = coercion }
+	return func(s *settings) error {
+		s.undefined = coercion
+		return nil
+	}
 }
 
 func WithMemoryLimit(bytes int64) Option {
-	return func(s *settings) { s.memoryLimit = bytes }
+	return func(s *settings) error {
+		limit, err := makeMemoryLimit(bytes)
+		if err != nil {
+			return err
+		}
+		s.memoryLimit = limit
+		return nil
+	}
 }
 
 func configure(options []Option) (settings, error) {
@@ -53,16 +86,15 @@ func configure(options []Option) (settings, error) {
 		if option == nil {
 			return settings{}, fault.From(InvalidTemplate, fmt.Sprintf("option %d is nil", index+1))
 		}
-		option(&configured)
+		if err := option(&configured); err != nil {
+			return settings{}, err
+		}
 	}
 	if err := checkCoercion("null", configured.null); err != nil {
 		return settings{}, err
 	}
 	if err := checkCoercion("undefined", configured.undefined); err != nil {
 		return settings{}, err
-	}
-	if configured.memoryLimit < 0 {
-		return settings{}, fault.From(InvalidTemplate, fmt.Sprintf("memory limit must be positive, got %d", configured.memoryLimit))
 	}
 	return configured, nil
 }

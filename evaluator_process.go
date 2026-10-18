@@ -24,11 +24,11 @@ var errHungUp = errors.New("the evaluator hung up")
 
 type evaluatorSpec struct {
 	sources     []source
-	memoryLimit int64
+	memoryLimit memoryLimit
 }
 
 type evaluatorWorld struct {
-	limit  int64
+	limit  memoryLimit
 	nonce  string
 	parent int
 	zone   string
@@ -62,7 +62,7 @@ func spawnEvaluator(ctx, lifetime context.Context, spec evaluatorSpec) (*evaluat
 	return process, nil
 }
 
-func currentWorld(limit int64) evaluatorWorld {
+func currentWorld(limit memoryLimit) evaluatorWorld {
 	return evaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: forwardableZone()}
 }
 
@@ -80,7 +80,7 @@ func forwardableZone() string {
 func (w evaluatorWorld) env() []string {
 	env := []string{
 		evaluatorMarker + "=1",
-		evaluatorMemoryLimit + "=" + strconv.FormatInt(w.limit, 10),
+		evaluatorMemoryLimit + "=" + strconv.FormatInt(int64(w.limit), 10),
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),
 	}

@@ -130,7 +130,7 @@ goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted i
 
 **`MakeSecureTemplate(ctx, …)`** runs expressions in a child process that jaml starts and owns:
 
-- **Memory.** The limit (`WithMemoryLimit`, 256 MiB by default) bounds what evaluation allocates, over what the binary holds when the child starts serving: heap that your packages build in their `init()` or package variables does not count against it. While it serves a request, the child checks its heap every millisecond and exits once it passes its starting heap plus the limit. One huge allocation is caught as soon as it is made; a doubling loop can reach about twice the limit before it is stopped. Either way `Eval` fails with `EvaluationFailed` and "exceeded the memory limit".
+- **Memory.** The limit (`WithMemoryLimit`, 256 MiB by default, anywhere from 16 MiB to 1 TiB; any other value, 0 included, is `InvalidTemplate`) bounds what evaluation allocates, over what the binary holds when the child starts serving: heap that your packages build in their `init()` or package variables does not count against it. While it serves a request, the child checks its heap every millisecond and exits once it passes its starting heap plus the limit. One huge allocation is caught as soon as it is made; a doubling loop can reach about twice the limit before it is stopped. Either way `Eval` fails with `EvaluationFailed` and "exceeded the memory limit".
 - **Time.** `Eval(ctx, …)` takes a context, and it bounds the whole call: waiting for a turn, starting a fresh child, the request and the answer. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`. An `Eval` whose context is already done never touches the child.
 - **Recovery.** A child that is killed or dies fails only the `Eval` it was serving; the next `Eval` starts a fresh one. A JavaScript error does not kill the child. A child that crashes is reported with its exit status and the reason line of its crash, never its goroutine dump.
 - **Lifetime.** The child lives until `Close()` or until the template's context is done, whichever comes first, including a child that is still starting. `Close` never blocks. After that, `Eval` returns `Closed`. A template dropped without `Close` kills its child once the garbage collector finds it unreachable; `Close` is still the prompt way. A child also exits when its parent dies: at once when idle, within about a millisecond when busy.
@@ -164,7 +164,7 @@ func (t *SecureTemplate) Close() error
 
 func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
 func WithUndefinedCoercion(coercion Coercion) Option // Loose or Strict (default)
-func WithMemoryLimit(bytes int64) Option             // secure only; default 256 MiB
+func WithMemoryLimit(bytes int64) Option             // secure only; 16 MiB to 1 TiB; default 256 MiB
 ```
 
 ### Errors

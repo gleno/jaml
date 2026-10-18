@@ -68,10 +68,10 @@ func TestADroppedTemplateReleasesItsEvaluator(t *testing.T) {
 }
 
 const (
-	silentLimit          = 1<<20 + 1
-	foreignGreetingLimit = 1<<20 + 2
-	futureProtocolLimit  = 1<<20 + 3
-	malformedAnswerLimit = 1<<20 + 4
+	silentLimit          = 16<<20 + 1
+	foreignGreetingLimit = 16<<20 + 2
+	futureProtocolLimit  = 16<<20 + 3
+	malformedAnswerLimit = 16<<20 + 4
 )
 
 var _ = impersonateAnEvaluator()
