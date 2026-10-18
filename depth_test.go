@@ -2,6 +2,7 @@ package jaml
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -42,6 +43,11 @@ func (b bothModes) expectRefused(t *testing.T, sentinel error, fragments ...stri
 	expectError(t, b.secure, sentinel, fragments...)
 	if b.trusted.Error() != b.secure.Error() {
 		t.Fatalf("modes disagree:\ntrusted: %.300s\nsecure:  %.300s", b.trusted, b.secure)
+	}
+	for _, kind := range everyKind {
+		if errors.Is(b.trusted, kind) != errors.Is(b.secure, kind) {
+			t.Fatalf("modes disagree on %v:\ntrusted: %.300s\nsecure:  %.300s", kind, b.trusted, b.secure)
+		}
 	}
 }
 

@@ -1,21 +1,16 @@
 package jaml
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
-
-	"github.com/gleno/fault"
 )
 
 const sourcePreviewLength = 60
 
 type renderer struct {
 	template *template
-	engine   engine
-	vars     encodedVars
-	runtime  runtime
+	session  *session
 }
 
 func (r *renderer) render(node any, at *dataPath) (any, error) {
@@ -75,7 +70,7 @@ func (r *renderer) renderText(compiled text, at *dataPath) (any, error) {
 		}
 		written, err := stringify(admitted)
 		if err != nil {
-			return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: %s: %s", at, piece.code.written(), err))
+			return nil, fail(EvaluationFailed, "%s: %s: %w", at, piece.code.written(), err)
 		}
 		rendered.WriteString(written)
 	}
@@ -93,22 +88,15 @@ func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, er
 		return result, nil
 	}
 	if coercion == Strict {
-		return nil, fault.From(CoercionFailed, fmt.Sprintf("%s: %s is %s, which strict %s coercion refuses", at, compiled.written(), absent, absent))
+		return nil, fail(CoercionFailed, "%s: %s is %s, which strict %s coercion refuses", at, compiled.written(), absent, absent)
 	}
 	return nil, nil
 }
 
 func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
-	if r.runtime == nil {
-		opened, err := r.engine.open(r.vars)
-		if err != nil {
-			return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: binding vars: %s", at, err))
-		}
-		r.runtime = opened
-	}
-	result, err := r.runtime.evaluate(compiled)
+	result, err := r.session.evaluate(compiled)
 	if err != nil {
-		return nil, fault.From(EvaluationFailed, fmt.Sprintf("%s: %s: %s", at, compiled.written(), err))
+		return nil, fail(EvaluationFailed, "%s: %s: %w", at, compiled.written(), err)
 	}
 	return result, nil
 }

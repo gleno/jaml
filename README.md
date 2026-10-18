@@ -48,7 +48,7 @@ err = template.Eval(&cfg, map[string]any{"name": "abc"}, "config")
 
 `Eval(into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error.
 
-`vars` must be JSON data. Every `Eval` checks all of them before evaluating anything, whatever the path selects; a var that `encoding/json` cannot marshal, or that nests deeper than 4096, is an `EvaluationFailed` error naming the var.
+`vars` must be JSON data. Every `Eval` checks and binds all of them before evaluating anything, whatever the path selects. A var that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …) is an `EvaluationFailed` error naming the var, never a template path.
 
 ### Templates you do not trust
 
@@ -85,7 +85,7 @@ steps: |
 - A single `${` anywhere other than the start of a value is plain text: `echo ${HOME}` stays as written.
 - To write the delimiters literally, use a JavaScript string: `${{'${{'}}` or `${'${x}'}`.
 - **Keys are never evaluated.**
-- An expression is exactly one strict-mode JavaScript expression, evaluated as a top-level script expression: statements (`1; 2`), legacy octal escapes (`"\101"`) and `new.target` are syntax errors, `arguments` is a `ReferenceError`, and `this` is `globalThis`. A body holding only comments is an empty expression. The vars are globals, deep-copied from `vars` the way `encoding/json` marshals them, so an expression cannot change your data. A var name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing var is a `ReferenceError`; a missing property of a var is `undefined`.
+- An expression is exactly one strict-mode JavaScript expression, evaluated as a top-level script expression: statements (`1; 2`), legacy octal escapes (`"\101"`) and `new.target` are syntax errors, `arguments` is a `ReferenceError`, and `this` is `globalThis`. A body holding only comments is an empty expression. The vars are globals, deep-copied from `vars` the way `encoding/json` marshals them, so an expression cannot change your data. They never replace a built-in: a var named like one is refused. A var name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing var is a `ReferenceError`; a missing property of a var is `undefined`.
 - All expressions in one `Eval` share one runtime, so one expression can see globals another one set. Separate `Eval` calls never share anything.
 
 ### YAML gotchas
@@ -107,7 +107,7 @@ steps: |
 
 ## Decoding
 
-After evaluation the selected subtree is plain JSON data, decoded with `json.Unmarshal`. A value that does not fit its target, such as text into an `int` field, is a `CoercionFailed` error carrying `encoding/json`'s message. There is no extra coercion: a number into a `string` field is an error, so interpolate (`"${{port}}"`) when you want text. Numbers into `any` are `float64`.
+After evaluation the selected subtree is plain JSON data, decoded with `json.Unmarshal`. A value that does not fit its target, such as text into an `int` field, is a `CoercionFailed` error that leads with the path of the value that did not fit (`$.servers[1].port`) and wraps `encoding/json`'s error, so `errors.As` reaches a `*json.UnmarshalTypeError` or the error your own `UnmarshalJSON` returned. There is no extra coercion: a number into a `string` field is an error, so interpolate (`"${{port}}"`) when you want text. Numbers into `any` are `float64`.
 
 ## Null and undefined
 
@@ -132,15 +132,16 @@ goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted i
 
 **`MakeSecureTemplate(ctx, …)`** runs expressions in a child process that jaml starts and owns:
 
-- **Memory.** The limit (`WithMemoryLimit`, 256 MiB by default, anywhere from 16 MiB to 1 TiB; any other value, 0 included, is `InvalidTemplate`) bounds what evaluation allocates, over what the binary holds when the child starts serving: heap that your packages build in their `init()` or package variables does not count against it. While it serves a request, the child checks its heap every millisecond and exits once it passes its starting heap plus the limit. One huge allocation is caught as soon as it is made; a doubling loop can reach about twice the limit before it is stopped. Either way `Eval` fails with `EvaluationFailed` and "exceeded the memory limit".
-- **Time.** `Eval(ctx, …)` takes a context, and it bounds the whole call: waiting for a turn, starting a fresh child, the request and the answer. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`. An `Eval` whose context is already done never touches the child.
+- **Memory.** The limit (`WithMemoryLimit`, 256 MiB by default, anywhere from 16 MiB to 1 TiB; any other value, 0 included, is `InvalidTemplate`) bounds what evaluation allocates, over what the binary holds when the child starts serving: heap that your packages build in their `init()` or package variables does not count against it. While it serves a request, the child checks its heap every millisecond and exits once it passes its starting heap plus the limit. One huge allocation is caught as soon as it is made; a doubling loop can reach about twice the limit before it is stopped. Either way `Eval` fails with `MemoryLimit`, which is an `EvaluationFailed`, and "exceeded the memory limit". A child whose allocation the operating system refuses outright, so the Go runtime dies "out of memory", is a `MemoryLimit` too.
+- **Time.** `Eval(ctx, …)` takes a context, and it bounds the whole call: waiting for a turn, starting a fresh child, the request and the answer. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`. An `Eval` whose context is already done fails at once: it never waits for a turn, touches the child or starts a new one, and a child that is still starting when the context ends is killed.
 - **Recovery.** A child that is killed or dies fails only the `Eval` it was serving; the next `Eval` starts a fresh one. A JavaScript error does not kill the child. A child that crashes is reported with its exit status and the reason line of its crash, never its goroutine dump.
 - **Lifetime.** The child lives until `Close()` or until the template's context is done, whichever comes first, including a child that is still starting. `Close` never blocks. After that, `Eval` returns `Closed`. A template dropped without `Close` kills its child once the garbage collector finds it unreachable; `Close` is still the prompt way. A child also exits when its parent dies: at once when idle, within about a millisecond when busy.
 - **One at a time.** `Eval` calls on one secure template take turns, so one bad input cannot fail another's work. Use several templates for parallelism. An idle child uses no CPU.
-- **Clean environment.** The child gets none of your environment variables. It gets exactly `JAML_EVALUATOR`, `JAML_MEMORY_LIMIT`, `JAML_NONCE` (per start), `JAML_PARENT` (your process id) and, when your local zone has a name, `TZ`. A package whose `init()` needs another variable fails in the child, and every secure `Eval` fails with it.
-- **Local time.** The child uses your local zone when it has an IANA name: the zone from `TZ` at startup, or one you set with `time.Local, _ = time.LoadLocation(name)`. Then trusted and secure templates agree on local `Date` methods. A zone without such a name (`time.FixedZone`, a renamed or hand-built location) cannot be forwarded, so the child uses the system zone. The zone is read when a child starts; a later change to `time.Local` reaches only children started after it.
+- **Clean environment.** The child gets none of your environment variables. It gets exactly `JAML_EVALUATOR`, `JAML_MEMORY_LIMIT`, `JAML_NONCE` (per start), `JAML_PARENT` (your process id), `ZONEINFO` when you have it set, and `TZ` when your local zone can be forwarded. A package whose `init()` needs another variable fails in the child, and every secure `Eval` fails with it.
+- **Local time.** The child uses your local zone when it can find it the way you did: a zone from `TZ` at startup, by name or by the path of its file, or one you set with `time.Local, _ = time.LoadLocation(name)`, including one found through `ZONEINFO`. Then trusted and secure templates agree on local `Date` methods. A zone without such a name (`time.FixedZone`, a renamed or hand-built location) cannot be forwarded, so the child uses the system zone. The zone is read when a child starts; a later change to `time.Local` reaches only children started after it.
 - **Signals.** The child runs in its own process group, so a terminal Ctrl-C, `SIGQUIT`, `SIGTSTP` or a signal sent to your process group does not reach it. It still dies with your process.
-- **Cost.** Starting a child takes about 5 ms; a secure `Eval` adds about 50 µs of round trips per expression over a trusted one.
+- **Cost.** Starting a child takes about 5 ms, and the child parses and compiles the template again when it starts. A secure `Eval` is one round trip: the vars go to the child, which renders the selected subtree exactly as a trusted template would and sends back the data, which is then decoded into your target in your process.
+- **Location.** An `Eval` that fails because the child was cancelled, ran out of memory or died names the selected path, not the expression that was running.
 
 The child is your own binary, started again with a marker in its environment; on Linux it is the running image (`/proc/self/exe`), even if the file has been replaced since. jaml's `init()` sees the marker, identifies itself to the parent with a greeting that carries the protocol version and the nonce, serves evaluations over file descriptors 3 and 4, and exits, so your `main()` never runs in the child. The `init()` functions of packages that Go initializes before jaml do run there. A child that does not identify itself, because the executable is not a jaml binary or speaks another protocol version, is `Unsupported`, with a message naming which. Secure templates need a Unix that can start the binary again: they are not supported on Windows, iOS, js or wasip1 (`Unsupported`), or when jaml is built into a C shared library or a plugin.
 
@@ -182,10 +183,11 @@ var (
 	CoercionFailed   // json.Unmarshal refused the data, or strict null/undefined refused a result
 	Closed           // Eval on a secure template after Close or after its context ended
 	Unsupported      // secure templates on a platform that cannot run them, or a child that is not a jaml evaluator
+	MemoryLimit      // derives from EvaluationFailed: a secure evaluator ran out of memory
 )
 ```
 
-All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches any of them. Messages lead with the location, for example:
+All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches any of them, and trusted and secure templates return the same kind for the same failure. An error also wraps its cause: a secure `Eval` that ran out of time matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), and a failed decode reaches `encoding/json`'s error. Messages lead with the location, for example:
 
 ```
 $.config.servers[0].port: ${port}: ReferenceError: port is not defined: evaluation failed: template error

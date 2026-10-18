@@ -31,7 +31,11 @@ func (s *session) bind(vars encodedVars) (err error) {
 	defer s.breakOnEngineFailure(&err)
 	parse := s.guardJSONParse()
 	global := s.vm.GlobalObject()
+	builtIn := global.GetOwnPropertyNames()
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
+		if slices.Contains(builtIn, name) {
+			return fmt.Errorf("var %q collides with a JavaScript global", name)
+		}
 		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
 		if err != nil {
 			return fmt.Errorf("var %q: %w", name, err)
@@ -62,6 +66,11 @@ func (s *session) guardJSONParse() goja.Callable {
 		}
 		return parsed
 	})
+	for key, value := range map[string]any{"name": "parse", "length": 2} {
+		if err := guarded.ToObject(s.vm).DefineDataProperty(key, s.vm.ToValue(value), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE); err != nil {
+			panic(err)
+		}
+	}
 	if err := json.Set("parse", guarded); err != nil {
 		panic(err)
 	}

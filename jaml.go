@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"fmt"
 	"reflect"
 
 	"github.com/gleno/fault"
@@ -16,6 +15,7 @@ var (
 	CoercionFailed   = TemplateError.WithMessage("coercion failed")
 	Closed           = TemplateError.WithMessage("template closed")
 	Unsupported      = TemplateError.WithMessage("unsupported")
+	MemoryLimit      = EvaluationFailed.WithMessage("exceeded the memory limit")
 )
 
 type Coercion int
@@ -43,7 +43,7 @@ type memoryLimit int64
 
 func makeMemoryLimit(bytes int64) (memoryLimit, error) {
 	if bytes < smallestMemoryLimit || bytes > largestMemoryLimit {
-		return 0, fault.From(InvalidTemplate, fmt.Sprintf("memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes))
+		return 0, fail(InvalidTemplate, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)
 	}
 	return memoryLimit(bytes), nil
 }
@@ -84,7 +84,7 @@ func configure(options []Option) (settings, error) {
 	configured := settings{null: Loose, undefined: Strict}
 	for index, option := range options {
 		if option == nil {
-			return settings{}, fault.From(InvalidTemplate, fmt.Sprintf("option %d is nil", index+1))
+			return settings{}, fail(InvalidTemplate, "option %d is nil", index+1)
 		}
 		if err := option(&configured); err != nil {
 			return settings{}, err
@@ -101,7 +101,7 @@ func configure(options []Option) (settings, error) {
 
 func checkCoercion(name string, coercion Coercion) error {
 	if coercion != Loose && coercion != Strict {
-		return fault.From(InvalidTemplate, fmt.Sprintf("%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion))
+		return fail(InvalidTemplate, "%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion)
 	}
 	return nil
 }

@@ -149,3 +149,8 @@ func TestAPanickedSessionRunsNothingMore(t *testing.T) {
 		t.Fatalf("expected the broken session to refuse, got %v", err)
 	}
 }
+
+func TestTheGuardedJSONParseLooksLikeTheBuiltIn(t *testing.T) {
+	text := expressionTemplate("[JSON.parse.name, JSON.parse.length, Object.getOwnPropertyDescriptor(JSON.parse, 'name').writable, Object.getOwnPropertyDescriptor(JSON.parse, 'length').configurable, Object.keys(JSON.parse).length]")
+	expectEqual(t, evalAs[[]any](t, mustTemplate(t, text), nil, "v"), []any{"parse", float64(2), false, true, float64(0)})
+}

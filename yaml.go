@@ -11,7 +11,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/gleno/fault"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -49,7 +48,7 @@ func readOneDocument(source string) (*yaml.Node, error) {
 	decoder := yaml.NewDecoder(strings.NewReader(source))
 	var document yaml.Node
 	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fault.From(InvalidTemplate, err.Error())
+		return nil, fail(InvalidTemplate, "%w", err)
 	}
 	for {
 		var another yaml.Node
@@ -58,10 +57,10 @@ func readOneDocument(source string) (*yaml.Node, error) {
 			return &document, nil
 		}
 		if err != nil {
-			return nil, fault.From(InvalidTemplate, err.Error())
+			return nil, fail(InvalidTemplate, "%w", err)
 		}
 		if another.Kind != 0 && !isEmptyDocument(&another) {
-			return nil, fault.From(InvalidTemplate, fmt.Sprintf("line %d starts a second YAML document; a template is one document", another.Line))
+			return nil, fail(InvalidTemplate, "line %d starts a second YAML document; a template is one document", another.Line)
 		}
 	}
 }
@@ -134,7 +133,7 @@ func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
 		return resolveScalar(node, at.path)
 	}
 	if at.path.depth() >= maxDataDepth {
-		return nil, fault.From(InvalidTemplate, tooDeep(at.path.String()).Error())
+		return nil, fail(InvalidTemplate, "%w", tooDeep(at.path.String()))
 	}
 	if node.Anchor != "" {
 		r.expanding[node] = true
@@ -453,5 +452,5 @@ func (n numeral) float() (any, error) {
 }
 
 func refuse(at *dataPath, message string) error {
-	return fault.From(InvalidTemplate, at.String()+": "+message)
+	return fail(InvalidTemplate, "%s: %s", at, message)
 }

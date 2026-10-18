@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -72,6 +73,8 @@ const (
 	foreignGreetingLimit = 16<<20 + 2
 	futureProtocolLimit  = 16<<20 + 3
 	malformedAnswerLimit = 16<<20 + 4
+	emptyAnswerLimit     = 16<<20 + 5
+	crashAtStartLimit    = 16<<20 + 6
 )
 
 var _ = impersonateAnEvaluator()
@@ -81,7 +84,7 @@ func impersonateAnEvaluator() bool {
 		return false
 	}
 	switch os.Getenv(evaluatorMemoryLimit) {
-	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit):
+	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit):
 	default:
 		return false
 	}
@@ -90,6 +93,8 @@ func impersonateAnEvaluator() bool {
 	greeting := hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: os.Getenv(evaluatorNonce)}
 	switch os.Getenv(evaluatorMemoryLimit) {
 	case strconv.Itoa(silentLimit):
+	case strconv.Itoa(crashAtStartLimit):
+		os.Exit(3)
 	case strconv.Itoa(foreignGreetingLimit):
 		_, _ = replies.WriteString("hello from some other program\n")
 		os.Exit(0)
@@ -97,17 +102,23 @@ func impersonateAnEvaluator() bool {
 		greeting.Version = 999
 		_ = json.NewEncoder(replies).Encode(greeting)
 	case strconv.Itoa(malformedAnswerLimit):
-		_ = json.NewEncoder(replies).Encode(greeting)
-		incoming := json.NewDecoder(requests)
-		var next request
-		_ = incoming.Decode(&next)
-		_, _ = replies.WriteString("{}\n")
-		_ = incoming.Decode(&next)
-		_, _ = replies.WriteString("{\"value\": nope}\n")
+		answerOnce(requests, replies, greeting, "{\"data\": nope}\n")
+	case strconv.Itoa(emptyAnswerLimit):
+		answerOnce(requests, replies, greeting, "{}\n")
 	}
 	_, _ = io.Copy(io.Discard, requests)
 	os.Exit(0)
 	return true
+}
+
+func answerOnce(requests, replies *os.File, greeting hello, reply string) {
+	_ = json.NewEncoder(replies).Encode(greeting)
+	incoming := json.NewDecoder(requests)
+	var next json.RawMessage
+	_ = incoming.Decode(&next)
+	_, _ = replies.WriteString("null\n")
+	_ = incoming.Decode(&next)
+	_, _ = replies.WriteString(reply)
 }
 
 func TestAForeignExecutableIsUnsupported(t *testing.T) {
@@ -117,7 +128,7 @@ func TestAForeignExecutableIsUnsupported(t *testing.T) {
 
 func TestAReplacedExecutableIsUnsupported(t *testing.T) {
 	_, err := MakeSecureTemplate(within(t, 10*time.Second), "v: ${ 1 }\n", WithMemoryLimit(futureProtocolLimit))
-	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v1")
+	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v2")
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {
@@ -137,6 +148,13 @@ func TestAMalformedAnswerKillsTheEvaluatorWithItsCause(t *testing.T) {
 	if waited := time.Since(started); waited > 3*time.Second {
 		t.Fatalf("a malformed answer was noticed only after %s", waited)
 	}
+	expectDeath(t, process)
+}
+
+func TestAnAnswerWithNeitherDataNorFailureKillsTheEvaluator(t *testing.T) {
+	template := mustSecure(t, "v: ${ 1 }\n", WithMemoryLimit(emptyAnswerLimit))
+	process := currentEvaluator(template)
+	expectError(t, evalBounded(t, template, within(t, 30*time.Second), "v"), EvaluationFailed, "$.v", "neither data nor a failure")
 	expectDeath(t, process)
 }
 
@@ -193,4 +211,75 @@ func TestADeathNamesItsReasonNotItsStack(t *testing.T) {
 	plain := &headBuffer{limit: stderrHeadBytes}
 	_, _ = plain.Write([]byte("jaml evaluator: reading request: bad\n"))
 	expectEqual(t, plain.reason(), "jaml evaluator: reading request: bad")
+}
+
+func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
+	for name, limit := range map[string]int64{"foreign greeting": foreignGreetingLimit, "future protocol": futureProtocolLimit, "crash before greeting": crashAtStartLimit} {
+		t.Run(name, func(t *testing.T) {
+			_, constructed := MakeSecureTemplate(within(t, 10*time.Second), "a: 1\n", WithMemoryLimit(limit))
+			template := mustSecure(t, "a: \"${ spin ? (() => { while (true) {} })() : 1 }\"\n")
+			expectEqual(t, secureEvalAs[int](t, template, map[string]any{"spin": false}, "a"), 1)
+			slot := <-template.slot
+			slot.spec.memoryLimit = memoryLimit(limit)
+			template.slot <- slot
+			var out any
+			expectError(t, template.Eval(within(t, 200*time.Millisecond), &out, map[string]any{"spin": true}, "a"), EvaluationFailed, "deadline exceeded")
+			respawned := template.Eval(within(t, 10*time.Second), &out, map[string]any{"spin": false}, "a")
+			expectError(t, respawned, Unsupported)
+			expectEqual(t, respawned.Error(), constructed.Error())
+			for _, kind := range everyKind {
+				if errors.Is(respawned, kind) != errors.Is(constructed, kind) {
+					t.Fatalf("a respawn and a construction disagree on %v:\nrespawn:      %v\nconstruction: %v", kind, respawned, constructed)
+				}
+			}
+			if strings.Contains(respawned.Error(), "binding vars") {
+				t.Fatalf("a respawn failure is blamed on the vars: %v", respawned)
+			}
+		})
+	}
+}
+
+func liveChildren(t *testing.T) int {
+	t.Helper()
+	listed, err := exec.Command("pgrep", "-P", strconv.Itoa(os.Getpid())).Output()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		t.Fatal(err)
+	}
+	return len(strings.Fields(string(listed)))
+}
+
+func TestEvalsWithADoneContextStartNoEvaluator(t *testing.T) {
+	template := mustSecure(t, "a: \"${ spin ? (() => { while (true) {} })() : 1 }\"\n")
+	killed := currentEvaluator(template)
+	var out any
+	expectError(t, template.Eval(within(t, 100*time.Millisecond), &out, map[string]any{"spin": true}, "a"), EvaluationFailed, "deadline exceeded")
+	expectDeath(t, killed)
+	before := liveChildren(t)
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	for range 40 {
+		err := template.Eval(done, &out, map[string]any{"spin": false}, "a")
+		expectError(t, err, EvaluationFailed, "cancelled")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled in %v", err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	if after := liveChildren(t); after > before {
+		t.Fatalf("%d Evals with a done context left %d evaluators running", 40, after-before)
+	}
+	expectEqual(t, secureEvalAs[int](t, template, map[string]any{"spin": false}, "a"), 1)
+}
+
+func TestAHandshakeCutShortEndsItsEvaluator(t *testing.T) {
+	before := liveChildren(t)
+	for range 10 {
+		_, err := MakeSecureTemplate(within(t, 50*time.Millisecond), "v: ${ 1 }\n", WithMemoryLimit(silentLimit))
+		expectError(t, err, EvaluationFailed, "cancelled")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if after := liveChildren(t); after > before {
+		t.Fatalf("cut-short handshakes left %d evaluators running", after-before)
+	}
 }

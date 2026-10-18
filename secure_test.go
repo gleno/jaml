@@ -202,8 +202,9 @@ func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 		}
 	}
 	want := []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorNonce, evaluatorParent}
-	if forwardableZone() != "" {
-		want = append(want, "TZ")
+	for _, entry := range zoneEnv() {
+		name, _, _ := strings.Cut(entry, "=")
+		want = append(want, name)
 	}
 	expectEqual(t, names, want)
 }
@@ -250,7 +251,7 @@ func TestSecureVarsMustBeJSONData(t *testing.T) {
 	template := mustSecure(t, "v: ${ 1 }\n")
 	var out int
 	expectError(t, template.Eval(within(t, 10*time.Second), &out, map[string]any{"f": func() {}}, "v"), EvaluationFailed, `var "f" is not JSON data`)
-	expectError(t, template.Eval(within(t, 10*time.Second), &out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `var "undefined" cannot be bound`)
+	expectError(t, template.Eval(within(t, 10*time.Second), &out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `var "undefined" collides with a JavaScript global`)
 }
 
 func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {

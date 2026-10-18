@@ -5,8 +5,6 @@ import (
 	"maps"
 	"slices"
 	"strconv"
-
-	"github.com/gleno/fault"
 )
 
 func (t *template) selectPath(path []string) (any, *dataPath, error) {
@@ -49,7 +47,7 @@ func (t *template) describe(node any) string {
 }
 
 func missingPath(at *dataPath, message string) error {
-	return fault.From(MissingPath, at.String()+" "+message)
+	return fail(MissingPath, "%s %s", at, message)
 }
 
 func eachChild(node any, at *dataPath, visit func(child any, at *dataPath) error) error {

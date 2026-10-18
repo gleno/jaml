@@ -62,3 +62,55 @@ func TestOnlyANamedZoneIsForwarded(t *testing.T) {
 	time.Local = time.UTC
 	expectEqual(t, forwardableZone(), "UTC")
 }
+
+const tokyoZoneFile = "/usr/share/zoneinfo/Asia/Tokyo"
+
+func hoursAtEpochInBothModes(t *testing.T, local *time.Location) (int, int) {
+	t.Helper()
+	previous := time.Local
+	time.Local = local
+	defer func() { time.Local = previous }()
+	text := "h: ${ new Date(0).getHours() }\n"
+	return evalAs[int](t, mustTemplate(t, text), nil, "h"), secureEvalAs[int](t, mustSecure(t, text), nil, "h")
+}
+
+func tokyoZoneData(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(tokyoZoneFile)
+	if err != nil {
+		t.Skipf("no zone data at %s: %v", tokyoZoneFile, err)
+	}
+	return data
+}
+
+func TestAZoneNamedByItsFileFollowsTheHost(t *testing.T) {
+	local, err := time.LoadLocationFromTZData(tokyoZoneFile, tokyoZoneData(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted, secure := hoursAtEpochInBothModes(t, local)
+	expectEqual(t, trusted, 9)
+	expectEqual(t, secure, trusted)
+}
+
+func TestAZoneFoundThroughZoneinfoFollowsTheHost(t *testing.T) {
+	if os.Getenv(stackCappedChild) != t.Name() {
+		zoneinfo := t.TempDir()
+		if err := os.MkdirAll(zoneinfo+"/Jaml", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(zoneinfo+"/Jaml/Somewhere", tokyoZoneData(t), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("ZONEINFO", zoneinfo)
+	}
+	survivesInAStackCappedChild(t, func(t *testing.T) {
+		local, err := time.LoadLocation("Jaml/Somewhere")
+		if err != nil {
+			t.Fatal(err)
+		}
+		trusted, secure := hoursAtEpochInBothModes(t, local)
+		expectEqual(t, trusted, 9)
+		expectEqual(t, secure, trusted)
+	})
+}

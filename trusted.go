@@ -1,7 +1,5 @@
 package jaml
 
-import "github.com/gleno/fault"
-
 type TrustedTemplate struct {
 	core *template
 }
@@ -12,7 +10,7 @@ func MakeTrustedTemplate(written string, options ...Option) (*TrustedTemplate, e
 		return nil, err
 	}
 	if configured.memoryLimit != 0 {
-		return nil, fault.From(InvalidTemplate, "a trusted template has no memory limit; use MakeSecureTemplate")
+		return nil, fail(InvalidTemplate, "a trusted template has no memory limit; use MakeSecureTemplate")
 	}
 	core, err := makeTemplate(written, configured)
 	if err != nil {
@@ -22,7 +20,8 @@ func MakeTrustedTemplate(written string, options ...Option) (*TrustedTemplate, e
 }
 
 func (t *TrustedTemplate) Eval(into any, vars map[string]any, path ...string) error {
-	return t.template().eval(inProcess{}, evalCall{into: into, vars: vars, path: path})
+	core := t.template()
+	return core.eval(core.render, evalCall{into: into, vars: vars, path: path})
 }
 
 func (t *TrustedTemplate) template() *template {

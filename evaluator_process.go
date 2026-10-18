@@ -10,20 +10,22 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gleno/fault"
 )
 
-const stderrHeadBytes = 4096
+const (
+	stderrHeadBytes    = 4096
+	runtimeOutOfMemory = "fatal error: runtime: out of memory"
+)
 
 var errHungUp = errors.New("the evaluator hung up")
 
 type evaluatorSpec struct {
-	sources     []source
+	blueprint   blueprint
 	memoryLimit memoryLimit
 }
 
@@ -31,7 +33,7 @@ type evaluatorWorld struct {
 	limit  memoryLimit
 	nonce  string
 	parent int
-	zone   string
+	zone   []string
 }
 
 type evaluatorProcess struct {
@@ -44,32 +46,59 @@ type evaluatorProcess struct {
 }
 
 func spawnEvaluator(ctx, lifetime context.Context, spec evaluatorSpec) (*evaluatorProcess, error) {
+	if ctx.Err() != nil {
+		return nil, cancelled(ctx)
+	}
 	world := currentWorld(spec.memoryLimit)
 	process, err := world.start(lifetime)
 	if err != nil {
 		return nil, err
 	}
-	if err := process.greet(ctx, world.nonce); err != nil {
-		return nil, err
-	}
-	answer, err := process.roundTrip(ctx, request{Op: opCompile, Sources: spec.sources})
-	if err != nil {
-		return nil, err
-	}
-	if answer.Error != "" {
-		return nil, process.failWith(errors.New(answer.Error))
+	if err := process.handshake(ctx, world.nonce, spec.blueprint); err != nil {
+		return nil, process.abandon(err)
 	}
 	return process, nil
 }
 
+func (p *evaluatorProcess) handshake(ctx context.Context, nonce string, plan blueprint) error {
+	if err := p.greet(ctx, nonce); err != nil {
+		return err
+	}
+	var refused *failure
+	if err := p.exchange(ctx, plan, &refused); err != nil {
+		return err
+	}
+	if refused != nil {
+		return refused.rebuild()
+	}
+	return nil
+}
+
 func currentWorld(limit memoryLimit) evaluatorWorld {
-	return evaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: forwardableZone()}
+	return evaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
+}
+
+func zoneEnv() []string {
+	var env []string
+	if zoneinfo := os.Getenv("ZONEINFO"); zoneinfo != "" {
+		env = append(env, "ZONEINFO="+zoneinfo)
+	}
+	if name := forwardableZone(); name != "" {
+		env = append(env, "TZ="+name)
+	}
+	return env
 }
 
 func forwardableZone() string {
 	name := time.Local.String()
-	if name == "Local" {
+	switch {
+	case name == "Local":
 		return ""
+	case filepath.IsAbs(name):
+		if info, err := os.Stat(name); err != nil || !info.Mode().IsRegular() {
+			return ""
+		}
+		return name
 	}
 	if _, err := time.LoadLocation(name); err != nil {
 		return ""
@@ -84,10 +113,7 @@ func (w evaluatorWorld) env() []string {
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),
 	}
-	if w.zone != "" {
-		env = append(env, "TZ="+w.zone)
-	}
-	return env
+	return append(env, w.zone...)
 }
 
 func (w evaluatorWorld) start(lifetime context.Context) (*evaluatorProcess, error) {
@@ -127,10 +153,13 @@ func (w evaluatorWorld) start(lifetime context.Context) (*evaluatorProcess, erro
 }
 
 func (w evaluatorWorld) describeExit(state *os.ProcessState, stderr *headBuffer) error {
-	if state.ExitCode() == exitMemoryLimit {
-		return fmt.Errorf("exceeded the memory limit of %d bytes", w.limit)
-	}
-	if reason := stderr.reason(); reason != "" {
+	reason := stderr.reason()
+	switch {
+	case state.ExitCode() == exitMemoryLimit:
+		return memoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", w.limit))
+	case reason == runtimeOutOfMemory:
+		return memoryExhausted(fmt.Sprintf("evaluator died (%s): %s", state, reason))
+	case reason != "":
 		return fmt.Errorf("evaluator died (%s): %s", state, reason)
 	}
 	return fmt.Errorf("evaluator died (%s)", state)
@@ -155,6 +184,12 @@ func (p *evaluatorProcess) failWith(cause error) error {
 	return p.cause
 }
 
+func (p *evaluatorProcess) abandon(cause error) error {
+	p.die(cause)
+	<-p.dead
+	return cause
+}
+
 func (p *evaluatorProcess) alive() bool {
 	select {
 	case <-p.dead:
@@ -171,28 +206,40 @@ func (p *evaluatorProcess) greet(ctx context.Context, nonce string) error {
 	case err != nil && ctx.Err() != nil:
 		return err
 	case err != nil:
-		return fault.From(Unsupported, fmt.Sprintf("this executable is not a jaml evaluator (C shared library or plugin host?): %s", err))
+		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", err)
 	case greeting.Magic != evaluatorMagic || greeting.Nonce != nonce:
-		return p.failWith(fault.From(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): it answered with a foreign greeting"))
+		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): it answered with a foreign greeting")
 	case greeting.Version != protocolVersion:
-		return p.failWith(fault.From(Unsupported, fmt.Sprintf("the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)))
+		return fail(Unsupported, "the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)
 	}
 	return nil
 }
 
-func (p *evaluatorProcess) roundTrip(ctx context.Context, next request) (response, error) {
-	encoded, err := json.Marshal(next)
-	if err != nil {
-		return response{}, fmt.Errorf("writing the evaluator's request: %w", err)
+func (p *evaluatorProcess) render(ctx context.Context, job rendering) ([]byte, error) {
+	var reply rendered
+	if err := p.exchange(ctx, job, &reply); err != nil {
+		return nil, err
 	}
-	var answer response
-	err = p.within(ctx, func() error {
+	if err := reply.malformed(); err != nil {
+		return nil, p.failWith(err)
+	}
+	if reply.Failure != nil {
+		return nil, reply.Failure.rebuild()
+	}
+	return reply.Data, nil
+}
+
+func (p *evaluatorProcess) exchange(ctx context.Context, outgoing any, incoming any) error {
+	encoded, err := json.Marshal(outgoing)
+	if err != nil {
+		return fmt.Errorf("writing the evaluator's request: %w", err)
+	}
+	return p.within(ctx, func() error {
 		if _, err := p.requests.Write(append(encoded, '\n')); err != nil {
 			return errHungUp
 		}
-		return p.read(&answer)
+		return p.read(incoming)
 	})
-	return answer, err
 }
 
 func (p *evaluatorProcess) within(ctx context.Context, exchange func() error) error {

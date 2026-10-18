@@ -25,7 +25,6 @@ var (
 )
 
 type expression struct {
-	id           int
 	source       string
 	interpolated bool
 	program      *goja.Program

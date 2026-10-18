@@ -39,7 +39,7 @@ func TestMismatchedTypesAreCoercionErrors(t *testing.T) {
 		Port int `json:"port"`
 	}
 	var out shape
-	expectError(t, mustTemplate(t, "port: ${'eighty'}\n").Eval(&out, nil), CoercionFailed, "$", "shape.port")
+	expectError(t, mustTemplate(t, "port: ${'eighty'}\n").Eval(&out, nil), CoercionFailed, "$.port: json: cannot unmarshal string into Go struct field shape.port")
 	var text string
 	expectError(t, mustTemplate(t, "v: ${1}\n").Eval(&text, nil, "v"), CoercionFailed, "$.v")
 }

@@ -7,12 +7,15 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
 	"runtime/metrics"
 	"strconv"
 	"time"
 )
+
+var errTemplateRefused = errors.New("the template was refused")
 
 const (
 	heapObjectsMetric  = "/memory/classes/heap/objects:bytes"
@@ -34,20 +37,30 @@ func serveEvaluations() int {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
 		return exitProtocolBroken
 	}
+	adoptTheHostsZone()
 	guard := guardTheEvaluator(world)
 	if guard.orphaned() {
 		return exitOrphaned
 	}
-	requests := json.NewDecoder(os.NewFile(requestsFD, "jaml-requests"))
+	requestsFile := os.NewFile(requestsFD, "jaml-requests")
+	requests := json.NewDecoder(requestsFile)
 	responses := json.NewEncoder(os.NewFile(responsesFD, "jaml-responses"))
 	if err := responses.Encode(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce}); err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: greeting: %v\n", err)
 		return exitProtocolBroken
 	}
-	var server evaluationServer
+	built, err := receiveTemplate(requests, responses)
+	if errors.Is(err, errTemplateRefused) {
+		_, _ = io.Copy(io.Discard, requestsFile)
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
+		return exitProtocolBroken
+	}
 	for {
-		var next request
-		if err := requests.Decode(&next); err != nil {
+		var job rendering
+		if err := requests.Decode(&job); err != nil {
 			if errors.Is(err, io.EOF) {
 				return 0
 			}
@@ -55,11 +68,34 @@ func serveEvaluations() int {
 			return exitProtocolBroken
 		}
 		var written error
-		guard.during(func() { written = responses.Encode(server.handle(next)) })
+		guard.during(func() { written = responses.Encode(answer(built.render(job))) })
 		if written != nil {
 			fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", written)
 			return exitProtocolBroken
 		}
+	}
+}
+
+func receiveTemplate(requests *json.Decoder, responses *json.Encoder) (*template, error) {
+	var plan blueprint
+	if err := requests.Decode(&plan); err != nil {
+		return nil, fmt.Errorf("reading the template: %w", err)
+	}
+	built, err := plan.build()
+	if err != nil {
+		refused := describeFailure(err)
+		return nil, errors.Join(errTemplateRefused, responses.Encode(&refused))
+	}
+	return built, responses.Encode((*failure)(nil))
+}
+
+func adoptTheHostsZone() {
+	name := os.Getenv("TZ")
+	if name == "" || filepath.IsAbs(name) {
+		return
+	}
+	if zone, err := time.LoadLocation(name); err == nil {
+		time.Local = zone
 	}
 }
 
@@ -134,61 +170,4 @@ func (g evaluatorGuard) watch(done <-chan struct{}) {
 
 func (g evaluatorGuard) orphaned() bool {
 	return os.Getppid() != g.parent
-}
-
-type evaluationServer struct {
-	compiled []expression
-	session  *session
-}
-
-func (s *evaluationServer) handle(next request) response {
-	switch next.Op {
-	case opCompile:
-		return s.compile(next.Sources)
-	case opOpen:
-		opened, err := openSession(next.Vars)
-		if err != nil {
-			return response{Error: err.Error()}
-		}
-		s.session = opened
-		return response{}
-	case opEval:
-		return s.evaluate(next.ID)
-	default:
-		return response{Error: fmt.Sprintf("unknown operation %q", next.Op)}
-	}
-}
-
-func (s *evaluationServer) compile(sources []source) response {
-	s.compiled = make([]expression, len(sources))
-	for id, written := range sources {
-		compiled, err := compileExpression(written.Text, written.Interpolated)
-		if err != nil {
-			return response{Error: fmt.Sprintf("expression %d: %s", id, err)}
-		}
-		compiled.id = id
-		s.compiled[id] = compiled
-	}
-	return response{}
-}
-
-func (s *evaluationServer) evaluate(id int) response {
-	if s.session == nil {
-		return response{Error: "no open session"}
-	}
-	if id < 0 || id >= len(s.compiled) {
-		return response{Error: fmt.Sprintf("no expression %d", id)}
-	}
-	result, err := s.session.evaluate(s.compiled[id])
-	if err != nil {
-		return response{Error: err.Error()}
-	}
-	if _, isUndefined := result.(undefined); isUndefined {
-		return response{Undefined: true}
-	}
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return response{Error: err.Error()}
-	}
-	return response{Value: encoded}
 }

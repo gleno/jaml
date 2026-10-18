@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/gleno/fault"
 )
 
 type text struct {
@@ -19,22 +17,16 @@ type segment struct {
 	code    *expression
 }
 
-type source struct {
-	Text         string `json:"text"`
-	Interpolated bool   `json:"interpolated,omitempty"`
-}
-
 type compiler struct {
-	texts   map[string]text
-	sources []source
+	texts map[string]text
 }
 
-func compileTexts(root any) (map[string]text, []source, error) {
+func compileTexts(root any) (map[string]text, error) {
 	c := &compiler{texts: map[string]text{}}
 	if err := c.visit(root, nil); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return c.texts, c.sources, nil
+	return c.texts, nil
 }
 
 var errNotAWholeExpression = errors.New("a value that starts with ${ must be one whole expression; interpolate into text with ${{ }}")
@@ -63,7 +55,7 @@ func (c *compiler) visit(node any, at *dataPath) error {
 	}
 	compiled, err := c.compileText(written)
 	if err != nil {
-		return fault.From(InvalidTemplate, fmt.Sprintf("%s: %s", at, err))
+		return fail(InvalidTemplate, "%s: %w", at, err)
 	}
 	if compiled.holdsCode() {
 		c.texts[written] = compiled
@@ -100,7 +92,7 @@ func (c *compiler) compileWhole(trimmed string) (text, error) {
 		return text{}, errNotAWholeExpression
 	}
 	code := after[:end]
-	compiled, err := c.compile(source{Text: code})
+	compiled, err := compileExpression(code, false)
 	if err != nil {
 		return text{}, fmt.Errorf("%s: %w", wholeValue.around(code), err)
 	}
@@ -121,7 +113,7 @@ func (c *compiler) compileInterpolations(written string) (text, error) {
 		if err != nil {
 			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, preview(after), err)
 		}
-		code, err := c.compile(source{Text: after[:end], Interpolated: true})
+		code, err := compileExpression(after[:end], true)
 		if err != nil {
 			return text{}, fmt.Errorf("%s: %w", interpolation.around(after[:end]), err)
 		}
@@ -136,14 +128,4 @@ func (t text) withLiteral(literal string) text {
 	}
 	t.segments = append(t.segments, segment{literal: literal})
 	return t
-}
-
-func (c *compiler) compile(written source) (expression, error) {
-	compiled, err := compileExpression(written.Text, written.Interpolated)
-	if err != nil {
-		return expression{}, err
-	}
-	compiled.id = len(c.sources)
-	c.sources = append(c.sources, written)
-	return compiled, nil
 }

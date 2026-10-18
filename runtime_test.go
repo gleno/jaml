@@ -28,5 +28,5 @@ func TestVarsThatAreNotJSONDataFailBeforeAnyExpression(t *testing.T) {
 func TestVarsCannotRedefineImmutableGlobals(t *testing.T) {
 	template := mustTemplate(t, "v: ${1}\n")
 	var out int
-	expectError(t, template.Eval(&out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `var "undefined" cannot be bound`)
+	expectError(t, template.Eval(&out, map[string]any{"undefined": 1}, "v"), EvaluationFailed, `binding vars: var "undefined" collides with a JavaScript global`)
 }
