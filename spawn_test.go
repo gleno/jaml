@@ -24,15 +24,21 @@ func buildHostBallast() []byte {
 
 func TestSecureAndTrustedShareTheLocalZone(t *testing.T) {
 	var hours = map[string]int{"Asia/Tokyo": 9, "America/Sao_Paulo": 21}
-	for zone, hour := range hours {
+	var locations = map[string]*time.Location{}
+	for zone := range hours {
 		location, err := time.LoadLocation(zone)
 		if err != nil {
 			t.Skipf("no zone data for %s: %v", zone, err)
 		}
-		var trusted, secure = hoursAtEpochInBothKinds(t, location)
-		expectEqual(t, trusted, hour)
-		expectEqual(t, secure, trusted)
+		locations[zone] = location
 	}
+	survivesInAStackCappedChild(t, func(t *testing.T) {
+		for zone, hour := range hours {
+			var trusted, secure = hoursAtEpochInBothKinds(t, locations[zone])
+			expectEqual(t, trusted, hour)
+			expectEqual(t, secure, trusted)
+		}
+	})
 }
 
 func TestTheEvaluatorHasItsOwnProcessGroup(t *testing.T) {
@@ -51,21 +57,19 @@ func TestTheMemoryLimitBoundsGrowthOverTheHostsHeap(t *testing.T) {
 }
 
 func TestOnlyANamedZoneIsForwarded(t *testing.T) {
-	var previous = time.Local
-	t.Cleanup(func() { time.Local = previous })
-	time.Local = time.FixedZone("Somewhere", 5*3600)
-	expectEqual(t, forwardableZone(), "")
-	time.Local = time.UTC
-	expectEqual(t, forwardableZone(), "UTC")
+	survivesInAStackCappedChild(t, func(t *testing.T) {
+		time.Local = time.FixedZone("Somewhere", 5*3600)
+		expectEqual(t, forwardableZone(), "")
+		time.Local = time.UTC
+		expectEqual(t, forwardableZone(), "UTC")
+	})
 }
 
 const tokyoZoneFile = "/usr/share/zoneinfo/Asia/Tokyo"
 
 func hoursAtEpochInBothKinds(t *testing.T, local *time.Location) (int, int) {
 	t.Helper()
-	var previous = time.Local
 	time.Local = local
-	defer func() { time.Local = previous }()
 	var text = "h: ${ new Date(0).getHours() }\n"
 	var trusted = evalAs[int](t, mustJaml(t, mustSandbox(t, trustedKind), text), nil, "h")
 	if err := isolationSupported(); err != nil {
@@ -98,9 +102,11 @@ func TestAZoneNamedByItsFileFollowsTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trusted, secure := hoursAtEpochInBothKinds(t, local)
-	expectEqual(t, trusted, 9)
-	expectEqual(t, secure, trusted)
+	survivesInAStackCappedChild(t, func(t *testing.T) {
+		trusted, secure := hoursAtEpochInBothKinds(t, local)
+		expectEqual(t, trusted, 9)
+		expectEqual(t, secure, trusted)
+	})
 }
 
 func TestAZoneFoundThroughZoneinfoFollowsTheHost(t *testing.T) {

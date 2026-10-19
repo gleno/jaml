@@ -3,8 +3,10 @@
 package jaml
 
 import (
+	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -13,30 +15,65 @@ import (
 )
 
 const (
-	heldReplyLimit = 256<<20 + 11
-	heldReplyFor   = 3 * time.Second
-	heldReplyBytes = 1 << 20
+	heldReplyLimit   = 256<<20 + 11
+	markedReplyLimit = 256<<20 + 13
+	heldReplyFor     = 3 * time.Second
+	heldReplyBytes   = 1 << 20
 )
 
 var _ = holdBigReplies()
 
 func holdBigReplies() bool {
-	if os.Getenv(evaluatorMarker) != "1" || os.Getenv(evaluatorMemoryLimit) != strconv.Itoa(heldReplyLimit) {
+	if os.Getenv(evaluatorMarker) != "1" {
 		return false
 	}
-	os.Exit(serveEvaluations(_HeldReplies{out: os.NewFile(responsesFD, "held-replies")}))
+	var marker string
+	switch os.Getenv(evaluatorMemoryLimit) {
+	case strconv.Itoa(heldReplyLimit):
+	case strconv.Itoa(markedReplyLimit):
+		marker = heldReplyMarker(os.Getpid())
+	default:
+		return false
+	}
+	os.Exit(serveEvaluations(_HeldReplies{out: os.NewFile(responsesFD, "held-replies"), marker: marker}))
 	return true
 }
 
 type _HeldReplies struct {
-	out io.Writer
+	out    io.Writer
+	marker string
 }
 
 func (h _HeldReplies) Write(written []byte) (int, error) {
 	if len(written) > heldReplyBytes {
+		if h.marker != "" {
+			if err := os.WriteFile(h.marker, nil, 0o600); err != nil {
+				return 0, err
+			}
+		}
 		time.Sleep(heldReplyFor)
 	}
 	return h.out.Write(written)
+}
+
+func heldReplyMarker(child int) string {
+	return filepath.Join("/tmp", "jaml-held-reply-"+strconv.Itoa(child))
+}
+
+func awaitHeldReply(t *testing.T, child int) {
+	t.Helper()
+	var marker = heldReplyMarker(child)
+	t.Cleanup(func() { os.Remove(marker) })
+	var deadline = time.Now().Add(60 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the big reply never reached its held write")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func bigAnswer() string {
@@ -95,19 +132,19 @@ func expectAllAnswered(t *testing.T, child *_Life) {
 	}
 }
 
-func lateCancel() time.Duration {
-	if raceSlowdown > 1 {
-		return 2 * time.Second
-	}
-	return 100 * time.Millisecond
-}
-
 func TestALateCancelOnABigReplyLeavesTheChildAlone(t *testing.T) {
-	var sb = mustIsolated(t)
-	var big = mustExpression(t, sb, `"\n".repeat(30000000)`)
+	var sb = mustIsolated(t, WithMemoryLimit(markedReplyLimit))
+	var big = mustExpression(t, sb, bigAnswer())
 	var child = currentChild(t, sb)
-	var out string
-	expectError(t, resolveInto(within(t, lateCancel()), &out, big), EvaluationFailed, "cancelled")
+	ctx, cancel := context.WithCancel(within(t, 60*time.Second))
+	var answered = make(chan error, 1)
+	go func() {
+		var out string
+		answered <- resolveInto(ctx, &out, big)
+	}()
+	awaitHeldReply(t, child.cmd.Process.Pid)
+	cancel()
+	expectError(t, <-answered, EvaluationFailed, "cancelled")
 	expectAllAnswered(t, child)
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 3 }\n"), nil, "v"), 3)
 	expectSurvived(t, child)

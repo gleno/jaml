@@ -195,6 +195,7 @@ func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 	var sb = mustIsolated(t, WithMaxConcurrency(8))
 	var peers = mustExpression(t, sb, slowCall)
 	var runaway = mustExpression(t, sb, "/^(a+)+(?=b)/.test('a'.repeat(32) + 'c')")
+	var log = recordRequests(t, sb)
 	var before = childPID(t, sb)
 	var group sync.WaitGroup
 	for job := range 7 {
@@ -205,23 +206,42 @@ func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 			}
 		})
 	}
-	time.Sleep(20 * time.Millisecond)
-	var started = time.Now()
+	awaitServed(t, log, peers, 7)
+	ctx, expire := context.WithCancelCause(within(t, 60*time.Second))
+	var expired = make(chan time.Time, 1)
+	go func() {
+		awaitServed(t, log, runaway, 1)
+		time.Sleep(100 * time.Millisecond)
+		expired <- time.Now()
+		expire(context.DeadlineExceeded)
+	}()
 	var out any
-	var err = resolveInto(within(t, 100*time.Millisecond), &out, runaway)
-	var stopped = time.Since(started)
+	var err = resolveInto(ctx, &out, runaway)
+	var stopped = time.Since(<-expired)
 	group.Wait()
 	expectError(t, err, EvaluationFailed, "$: cancelled: context deadline exceeded")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded in %v", err)
 	}
 	if stopped > 2*time.Second {
-		t.Fatalf("a runaway built-in held its caller for %s past a 100ms deadline", stopped)
+		t.Fatalf("a runaway built-in held its caller for %s past its 100ms deadline", stopped)
 	}
 	if childPID(t, sb) == before {
 		t.Fatal("the runaway built-in was never killed")
 	}
 	expectSharingAgain(t, sb, peers, 8)
+}
+
+func awaitServed(t *testing.T, log *_RequestLog, compiled *Expression, times int) {
+	t.Helper()
+	var deadline = time.Now().Add(60 * time.Second)
+	for len(log.served(unitOf(compiled))) < times {
+		if time.Now().After(deadline) {
+			t.Errorf("%d serves of %.40s never reached the evaluator", times, unitOf(compiled))
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
