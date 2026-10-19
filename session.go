@@ -69,6 +69,11 @@ func openSession(ctx context.Context, plan sessionPlan) (*session, error) {
 	vm.SetRandSource(plan.pinned.random())
 	opened := &session{ctx: ctx, realm: captureRealm(vm)}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
+	var freezer goja.Callable
+	if err := opened.enter(func(r realm) (err error) { freezer, err = r.intrinsicsFreezer(); return err }); err != nil {
+		opened.close()
+		return nil, fail(EvaluationFailed, "%w", err)
+	}
 	if err := opened.bind(plan.values); err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "binding values: %w", err)
@@ -76,6 +81,10 @@ func openSession(ctx context.Context, plan sessionPlan) (*session, error) {
 	if err := opened.run(plan.scripts, plan.values); err != nil {
 		opened.close()
 		return nil, err
+	}
+	if err := opened.freezeIntrinsics(freezer); err != nil {
+		opened.close()
+		return nil, fail(EvaluationFailed, "%w", err)
 	}
 	return opened, nil
 }

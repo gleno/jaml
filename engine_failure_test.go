@@ -172,8 +172,8 @@ func TestAPanickedSessionRunsNothingMore(t *testing.T) {
 
 func TestTheGuardedJSONParseLooksLikeTheBuiltIn(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		text := expressionTemplate("[JSON.parse.name, JSON.parse.length, Object.getOwnPropertyDescriptor(JSON.parse, 'name').writable, Object.getOwnPropertyDescriptor(JSON.parse, 'length').configurable, Object.keys(JSON.parse).length]")
-		expectEqual(t, evalAs[[]any](t, mustJaml(t, sb, text), nil, "v"), []any{"parse", float64(2), false, true, float64(0)})
+		text := expressionTemplate("[JSON.parse.name, JSON.parse.length, ...['name', 'length'].map(key => JSON.stringify(Object.getOwnPropertyDescriptor(JSON.parse, key)) === JSON.stringify({ ...Object.getOwnPropertyDescriptor(JSON.stringify, key), value: JSON.parse[key] })), Object.keys(JSON.parse).length, Object.isFrozen(JSON.parse) === Object.isFrozen(JSON.stringify)]")
+		expectEqual(t, evalAs[[]any](t, mustJaml(t, sb, text), nil, "v"), []any{"parse", float64(2), true, true, float64(0), true})
 	})
 }
 
