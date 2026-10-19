@@ -214,6 +214,7 @@ Both kinds share these limits:
 - `JSON.parse` refuses text nested deeper than 4096 with a `RangeError`, so a deep string var cannot be turned into deep data.
 - Data an expression builds for itself is not bounded. Some built-ins (`JSON.stringify`, `String` or `join` of an array, `flat`) walk it recursively on the Go stack, and a value nested about a million deep overflows that stack, which Go cannot recover from. It is the template's own risk, like an allocation bomb: a trusted sandbox takes your process down; an isolated sandbox's child dies, and that `Eval` fails with the cause once it is replayed alone.
 - A Go panic inside the engine, such as goja's `'x'.repeat(2 ** 52)`, fails the `Eval` with `EvaluationFailed` instead of reaching your code.
+- A Go panic while building, such as goja's parser on `'\u{10FFFF}'`, refuses the template or expression with `InvalidTemplate`, naming the value's path (`$` for an expression); neither the host nor an isolated child goes down.
 - A result may hold at most 1,048,576 values, each list and object counting as one. A bigger result is refused as a whole (`result holds more than 1048576 values`), before jaml allocates room for it, so a sparse list cannot claim more than it holds.
 - The runtime has no I/O, no `require`, no timers, and source-map comments are not followed.
 

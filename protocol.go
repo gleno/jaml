@@ -98,7 +98,12 @@ var failureKinds = []failureKind{
 	{"Unsupported", Unsupported},
 }
 
-func (b blueprint) build() (servable, error) {
+func (b blueprint) build() (built servable, err error) {
+	defer func() {
+		if failure := buildPanic(recover()); failure != nil {
+			err = fail(InvalidTemplate, "%s: %w", (*dataPath)(nil), failure)
+		}
+	}()
 	configured, err := configure([]Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)})
 	if err != nil {
 		return nil, err
@@ -107,6 +112,14 @@ func (b blueprint) build() (servable, error) {
 		return compileStandalone(b.Written, configured)
 	}
 	return makeTemplate(b.Written, configured)
+}
+
+func buildPanic(recovered any) error {
+	failure := engineFailure(recovered)
+	if failure == nil {
+		return nil
+	}
+	return errors.New(excerpt(failure.Error(), thrownExcerptLength))
 }
 
 func describeFailure(err error) failure {

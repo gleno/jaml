@@ -68,7 +68,12 @@ func (t text) holdsCode() bool {
 	return t.whole != nil || slices.ContainsFunc(t.segments, func(piece segment) bool { return piece.code != nil })
 }
 
-func (c *compiler) compileText(written string) (text, error) {
+func (c *compiler) compileText(written string) (compiled text, err error) {
+	defer func() {
+		if failure := buildPanic(recover()); failure != nil {
+			err = failure
+		}
+	}()
 	trimmed := strings.TrimSpace(written)
 	whole := strings.HasPrefix(trimmed, wholeValue.opens) && !strings.HasPrefix(trimmed, interpolation.opens)
 	if !whole && !strings.Contains(written, interpolation.opens) {
