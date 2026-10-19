@@ -6,7 +6,6 @@ import (
 	"errors"
 	"reflect"
 	goruntime "runtime"
-	"strconv"
 )
 
 var (
@@ -24,20 +23,14 @@ type unit interface {
 	serve(ctx context.Context, request work) outcome
 }
 
-type outcome interface{ where() string }
+type outcome interface{ isOutcome() }
 
-type answered struct {
-	at   string
-	data []byte
-}
+type answered struct{ data []byte }
 
-type refused struct {
-	at  string
-	err error
-}
+type refused struct{ err error }
 
-func (a answered) where() string { return a.at }
-func (r refused) where() string  { return r.at }
+func (answered) isOutcome() {}
+func (refused) isOutcome()  {}
 
 type Sandbox struct {
 	lifetime context.Context
@@ -88,6 +81,9 @@ func (s *Sandbox) MakeTemplate(ctx context.Context, text string, options ...Opti
 	if s == nil || s.engine == nil {
 		return nil, unmadeSandbox()
 	}
+	if err := admitTemplateText(text); err != nil {
+		return nil, err
+	}
 	configured, err := configure(options)
 	if err != nil {
 		return nil, err
@@ -103,6 +99,9 @@ func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option)
 	if s == nil || s.engine == nil {
 		return nil, unmadeSandbox()
 	}
+	if err := admitSource(source); err != nil {
+		return nil, err
+	}
 	configured, err := configure(options)
 	if err != nil {
 		return nil, err
@@ -115,16 +114,13 @@ func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option)
 }
 
 func (s *Sandbox) make(ctx context.Context, plan blueprint) (*handle, error) {
-	if s.lifetime.Err() != nil {
-		return nil, fail(Closed, "the sandbox's context has ended")
-	}
-	if ctx.Err() != nil {
-		return nil, fail(EvaluationFailed, "building: %w", cancelled(ctx))
+	if failure := s.framed(ctx, nil); failure != nil {
+		return nil, failure
 	}
 	lifetime, end := context.WithCancelCause(ctx)
 	unfollow := context.AfterFunc(s.lifetime, func() { end(errSandboxEnded) })
 	built, err := s.engine.build(lifetime, plan)
-	if failure := s.buildFailure(ctx, err); failure != nil {
+	if failure := s.framed(ctx, err); failure != nil {
 		unfollow()
 		end(failure)
 		return nil, failure
@@ -135,11 +131,11 @@ func (s *Sandbox) make(ctx context.Context, plan blueprint) (*handle, error) {
 	return held, nil
 }
 
-func (s *Sandbox) buildFailure(ctx context.Context, err error) error {
+func (s *Sandbox) framed(ctx context.Context, err error) error {
 	switch {
 	case s.lifetime.Err() != nil:
-		return fail(Closed, "the sandbox's context ended while building")
-	case err != nil && ctx.Err() != nil:
+		return fail(Closed, "the sandbox's context has ended")
+	case ctx.Err() != nil:
 		return fail(EvaluationFailed, "building: %w", cancelled(ctx))
 	case err != nil:
 		return located("", err)
@@ -154,6 +150,9 @@ func unmadeSandbox() error {
 func (t *Template) Eval(ctx context.Context, into any, vars map[string]any, path ...string) error {
 	if t == nil || t.held == nil {
 		return fail(InvalidTemplate, "Eval on a template not made by Sandbox.MakeTemplate")
+	}
+	if err := admitPath(path); err != nil {
+		return err
 	}
 	if err := t.held.admit(ctx); err != nil {
 		return err
@@ -228,32 +227,21 @@ func (h *handle) answer(ctx context.Context, into any, request work) error {
 	unbind := context.AfterFunc(h.lifetime, func() { stop(errLifetimeOver) })
 	defer unbind()
 	result := h.unit.serve(job, request)
+	at := selectedPath(request.Path).String()
 	switch {
 	case h.lifetime.Err() != nil:
 		return fail(Closed, "its context or its sandbox's context ended while it ran")
 	case ctx.Err() != nil:
-		return located(requestedAt(request.Path), cancelled(ctx))
+		return located(at, cancelled(ctx))
 	}
 	switch settled := result.(type) {
 	case answered:
 		if err := json.Unmarshal(settled.data, into); err != nil {
-			return fail(CoercionFailed, "%s: %w", blame(settled.at, settled.data, err), err)
+			return fail(CoercionFailed, "%s: %w", blame(at, settled.data, err), err)
 		}
 		return nil
 	case refused:
-		return located(settled.at, settled.err)
+		return located(at, settled.err)
 	}
-	return located(result.where(), errUnjudged)
-}
-
-func requestedAt(path []string) string {
-	var spelled *dataPath
-	for _, step := range path {
-		if index, err := strconv.Atoi(step); err == nil && index >= 0 && strconv.Itoa(index) == step {
-			spelled = spelled.atIndex(index)
-		} else {
-			spelled = spelled.atKey(step)
-		}
-	}
-	return spelled.String()
+	return located(at, errUnjudged)
 }

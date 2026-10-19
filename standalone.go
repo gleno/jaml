@@ -19,7 +19,7 @@ func compileStandalone(source string, configured settings) (*standalone, error) 
 
 func (s *standalone) prepare(request work) (prepared, error) {
 	plan := sessionPlan{vars: request.Vars, pinned: request.Pinned}
-	return prepared{at: (*dataPath)(nil).String(), run: func(ctx context.Context) ([]byte, error) {
+	return func(ctx context.Context) ([]byte, error) {
 		engine := &lazySession{ctx: ctx, plan: plan}
 		defer engine.close()
 		renderer := &renderer{settings: s.settings, engine: engine}
@@ -28,7 +28,7 @@ func (s *standalone) prepare(request work) (prepared, error) {
 			return nil, err
 		}
 		return encodeResult(result, nil)
-	}}, nil
+	}, nil
 }
 
 func (s *standalone) produce(renderer *renderer, call *callArgs) (any, error) {

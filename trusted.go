@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -14,11 +13,6 @@ type trustedEngine struct {
 type localUnit struct {
 	engine *trustedEngine
 	built  servable
-}
-
-type finishedBuild struct {
-	built servable
-	err   error
 }
 
 func newTrusted(configured sandboxSettings) *trustedEngine {
@@ -42,23 +36,22 @@ func (e *trustedEngine) build(ctx context.Context, plan blueprint) (unit, error)
 	if err := e.enter(ctx); err != nil {
 		return nil, err
 	}
-	bounded, stop := context.WithTimeoutCause(ctx, e.buildTimeout, fmt.Errorf("the build took longer than its timeout of %s: %w", e.buildTimeout, context.DeadlineExceeded))
-	defer stop()
-	finished := make(chan finishedBuild, 1)
+	race := raceBuild(ctx, e.buildTimeout)
+	var built servable
 	go func() {
 		defer e.leave()
-		built, err := plan.build(bounded)
-		finished <- finishedBuild{built: built, err: err}
-	}()
-	select {
-	case done := <-finished:
-		if done.err != nil {
-			return nil, done.err
+		made, err := plan.build(race.bound)
+		if err != nil {
+			race.finish(refused{err: err})
+			return
 		}
-		return &localUnit{engine: e, built: done.built}, nil
-	case <-bounded.Done():
-		return nil, cancelled(bounded)
+		built = made
+		race.finish(answered{})
+	}()
+	if failed, isRefused := race.await().(refused); isRefused {
+		return nil, failed.err
 	}
+	return &localUnit{engine: e, built: built}, nil
 }
 
 func (u *localUnit) serve(ctx context.Context, request work) outcome {
@@ -66,13 +59,13 @@ func (u *localUnit) serve(ctx context.Context, request work) outcome {
 		return refused{err: err}
 	}
 	defer u.engine.leave()
-	ready, err := u.built.prepare(request)
+	run, err := u.built.prepare(request)
 	if err != nil {
 		return refused{err: err}
 	}
-	data, err := ready.run(ctx)
+	data, err := run(ctx)
 	if err != nil {
-		return refused{at: ready.at, err: err}
+		return refused{err: err}
 	}
-	return answered{at: ready.at, data: data}
+	return answered{data: data}
 }

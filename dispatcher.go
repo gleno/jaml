@@ -13,12 +13,9 @@ const (
 	recovering
 )
 
-type lost struct {
-	at    string
-	cause error
-}
+type lost struct{ cause error }
 
-func (l lost) where() string { return l.at }
+func (lost) isOutcome() {}
 
 type availability interface{ isAvailability() }
 
@@ -117,10 +114,10 @@ func (e *errand) judge(held lease, result outcome) (outcome, bool) {
 	case !isLost:
 		return result, false
 	case e.ctx.Err() != nil:
-		return refused{at: died.at, err: cancelled(e.ctx)}, false
+		return refused{err: cancelled(e.ctx)}, false
 	}
 	if _, alone := held.(owned); alone {
-		return refused{at: died.at, err: died.cause}, false
+		return refused{err: died.cause}, false
 	}
 	return result, true
 }

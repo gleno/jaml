@@ -22,6 +22,21 @@ func (p *dataPath) atIndex(index int) *dataPath {
 	return &dataPath{parent: p, index: index, levels: p.depth() + 1}
 }
 
+func selectedPath(path []string) *dataPath {
+	var selected *dataPath
+	for _, step := range path {
+		selected = selected.atStep(step)
+	}
+	return selected
+}
+
+func (p *dataPath) atStep(step string) *dataPath {
+	if index, err := strconv.Atoi(step); err == nil && index >= 0 && strconv.Itoa(index) == step {
+		return p.atIndex(index)
+	}
+	return p.atKey(step)
+}
+
 func (p *dataPath) depth() int {
 	if p == nil {
 		return 0

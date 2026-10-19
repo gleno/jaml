@@ -245,8 +245,11 @@ func describeSyntaxError(source string, err error) error {
 }
 
 func placeSyntaxError(source string, at file.Position, message string) error {
+	return syntaxErrorAt(source, offsetOf(expressionOpens+source, at)-len(expressionOpens), message)
+}
+
+func syntaxErrorAt(source string, offset int, message string) error {
 	reason := excerpt(message, thrownExcerptLength)
-	offset := offsetOf(expressionOpens+source, at) - len(expressionOpens)
 	switch {
 	case offset < 0:
 		return fmt.Errorf("syntax error in the expression: %s", reason)
