@@ -63,6 +63,7 @@ const (
 	emptyAnswerLimit     = 16<<20 + 5
 	crashAtStartLimit    = 16<<20 + 6
 	panicAtStartLimit    = 16<<20 + 7
+	oversizedAnswerLimit = 16<<20 + 8
 )
 
 var _ = impersonateAnEvaluator()
@@ -72,7 +73,7 @@ func impersonateAnEvaluator() bool {
 		return false
 	}
 	switch os.Getenv(evaluatorMemoryLimit) {
-	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit):
+	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit), strconv.Itoa(oversizedAnswerLimit):
 	default:
 		return false
 	}
@@ -95,6 +96,9 @@ func impersonateAnEvaluator() bool {
 		answerBadly(requests, replies, greeting, "{\"job\": %d, \"data\": nope}\n")
 	case strconv.Itoa(emptyAnswerLimit):
 		answerBadly(requests, replies, greeting, "{\"job\": %d}\n")
+	case strconv.Itoa(oversizedAnswerLimit):
+		frame := `{"job": %d, "data": "` + strings.Repeat("x", (oversizedAnswerLimit/4)-len(`{"job": 2, "data": ""}`)+1) + "\"}\n"
+		answerBadly(requests, replies, greeting, frame)
 	}
 	_, _ = io.Copy(io.Discard, requests)
 	os.Exit(0)

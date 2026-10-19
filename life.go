@@ -169,7 +169,7 @@ func (w evaluatorWorld) start(spec childSpec) (*life, *replyStream, error) {
 		unbind()
 		born.bury(exit{state: cmd.ProcessState, stderr: stderr, killedFor: born.killReason(), limit: w.limit})
 	}()
-	return born, &replyStream{lines: bufio.NewReader(replies.read)}, nil
+	return born, &replyStream{lines: bufio.NewReader(replies.read), frames: framesFor(w.limit)}, nil
 }
 
 type pipe struct {
@@ -295,22 +295,39 @@ func peakNote(state *os.ProcessState) string {
 }
 
 type replyStream struct {
-	lines *bufio.Reader
+	lines  *bufio.Reader
+	frames frames
 }
 
 func (s *replyStream) read(into any) error {
-	frame, err := s.lines.ReadBytes('\n')
-	switch {
-	case err == nil:
-	case errors.Is(err, io.EOF), errors.Is(err, os.ErrClosed):
-		return errHungUp
-	default:
-		return fmt.Errorf("reading the evaluator's answer: %w", err)
+	frame, err := s.frame()
+	if err != nil {
+		return err
 	}
 	if err := json.Unmarshal(frame, into); err != nil {
 		return fmt.Errorf("reading the evaluator's answer: %w", err)
 	}
 	return nil
+}
+
+func (s *replyStream) frame() ([]byte, error) {
+	var frame []byte
+	for {
+		chunk, err := s.lines.ReadSlice('\n')
+		if len(frame)+len(chunk) > s.frames.limit+1 {
+			return nil, s.frames.oversized()
+		}
+		frame = append(frame, chunk...)
+		switch {
+		case err == nil:
+			return frame, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+		case errors.Is(err, io.EOF), errors.Is(err, os.ErrClosed):
+			return nil, errHungUp
+		default:
+			return nil, fmt.Errorf("reading the evaluator's answer: %w", err)
+		}
+	}
 }
 
 func located(at string, err error) error {

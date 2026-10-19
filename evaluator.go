@@ -42,7 +42,7 @@ func serveEvaluations() int {
 	if watch.orphaned() {
 		return exitOrphaned
 	}
-	replies := &replyWriter{out: os.NewFile(responsesFD, "jaml-responses")}
+	replies := &replyWriter{out: os.NewFile(responsesFD, "jaml-responses"), frames: framesFor(world.limit)}
 	replies.greet(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	serving := &evaluator{watch: watch, replies: replies, units: map[uint64]servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
 	go serving.obey(json.NewDecoder(os.NewFile(controlFD, "jaml-control")))
@@ -114,7 +114,7 @@ func (e *evaluator) accept(incoming request) error {
 		held := e.holding(incoming.Unit)
 		if held == nil {
 			e.finish(incoming.Job)
-			e.replies.send(reply{Job: incoming.Job, Missing: true})
+			e.replies.send("", reply{Job: incoming.Job, Missing: true})
 			return nil
 		}
 		go e.serve(ctx, incoming.Job, held, *incoming.Work)
@@ -177,10 +177,10 @@ func (e *evaluator) build(ctx context.Context, job uint64, plan blueprint) {
 	e.finish(job)
 	if err != nil {
 		refused := describeFailure(err)
-		e.replies.send(reply{Job: job, Failure: &refused})
+		e.replies.send("", reply{Job: job, Failure: &refused})
 		return
 	}
-	e.replies.send(reply{Job: job, Built: true})
+	e.replies.send("", reply{Job: job, Built: true})
 }
 
 func (e *evaluator) serve(ctx context.Context, job uint64, held servable, request work) {
@@ -188,18 +188,18 @@ func (e *evaluator) serve(ctx context.Context, job uint64, held servable, reques
 	ready, err := held.prepare(request)
 	if err != nil {
 		refused := describeFailure(err)
-		e.replies.send(reply{Job: job, Failure: &refused})
+		e.replies.send("", reply{Job: job, Failure: &refused})
 		return
 	}
-	e.replies.send(reply{Job: job, At: &ready.at})
+	e.replies.send(ready.at, reply{Job: job, At: &ready.at})
 	var data []byte
 	e.watch.during(func() { data, err = ready.run(ctx) })
 	if err != nil {
 		failed := describeFailure(err)
-		e.replies.send(reply{Job: job, Failure: &failed})
+		e.replies.send(ready.at, reply{Job: job, Failure: &failed})
 		return
 	}
-	e.replies.send(reply{Job: job, Data: data})
+	e.replies.send(ready.at, reply{Job: job, Data: data})
 }
 
 func (e *evaluator) finish(job uint64) {
@@ -211,8 +211,9 @@ func (e *evaluator) finish(job uint64) {
 }
 
 type replyWriter struct {
-	mu  sync.Mutex
-	out *os.File
+	mu     sync.Mutex
+	out    *os.File
+	frames frames
 }
 
 func (w *replyWriter) greet(greeting hello) {
@@ -224,8 +225,8 @@ func (w *replyWriter) greet(greeting hello) {
 	w.write(encoded)
 }
 
-func (w *replyWriter) send(outgoing reply) {
-	encoded, err := json.Marshal(outgoing)
+func (w *replyWriter) send(at string, outgoing reply) {
+	encoded, err := w.frames.seal(at, outgoing)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
 		os.Exit(exitProtocolBroken)

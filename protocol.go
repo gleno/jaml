@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 )
 
 const (
@@ -68,6 +69,27 @@ type reply struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 	Failure *failure        `json:"failure,omitempty"`
 	Missing bool            `json:"missing,omitempty"`
+}
+
+type frames struct {
+	limit int
+}
+
+func framesFor(limit memoryLimit) frames {
+	return frames{limit: int(min(int64(limit)/4, math.MaxInt))}
+}
+
+func (f frames) seal(at string, outgoing reply) ([]byte, error) {
+	encoded, err := json.Marshal(outgoing)
+	if err != nil || len(encoded) <= f.limit {
+		return encoded, err
+	}
+	refusal := describeFailure(located(at, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
+	return json.Marshal(reply{Job: outgoing.Job, Failure: &refusal})
+}
+
+func (f frames) oversized() error {
+	return fmt.Errorf("the evaluator sent a reply larger than %d bytes", f.limit)
 }
 
 type failure struct {
