@@ -165,9 +165,10 @@ func (w evaluatorWorld) start(spec childSpec) (*life, *replyStream, error) {
 	unbind := context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	go func() {
 		_ = cmd.Wait()
+		killedFor := born.killReason()
 		closeAll(requests.write, replies.read, control.write)
 		unbind()
-		born.bury(exit{state: cmd.ProcessState, stderr: stderr, killedFor: born.killReason(), limit: w.limit})
+		born.bury(exit{state: cmd.ProcessState, stderr: stderr, killedFor: killedFor, limit: w.limit})
 	}()
 	return born, &replyStream{lines: bufio.NewReader(replies.read), frames: framesFor(w.limit)}, nil
 }
@@ -200,6 +201,10 @@ func (l *life) bury(ending exit) {
 
 func (l *life) kill(reason error) {
 	l.killedFor.CompareAndSwap(nil, &reason)
+	l.end()
+}
+
+func (l *life) end() {
 	_ = l.cmd.Process.Kill()
 }
 

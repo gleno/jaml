@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -195,5 +196,28 @@ func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 	}
 	if waited := time.Since(started); waited > 900*time.Millisecond {
 		t.Fatalf("six queued jobs behind one failing start took %s, not one 300ms start", waited)
+	}
+}
+
+func TestAChildKilledMidRequestIsNamedByTheReaper(t *testing.T) {
+	sb := mustIsolated(t)
+	process := currentChild(t, sb)
+	pid := process.cmd.Process.Pid
+	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	sent := make(chan error, 1)
+	go func() {
+		_, err := process.send(t.Context(), request{Op: opBuild, Plan: &blueprint{Written: strings.Repeat("x", 4<<20)}})
+		sent <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	if err := <-sent; !errors.Is(err, errLost) {
+		t.Fatalf("a request to a killed child: %v", err)
+	}
+	expectDeath(t, process)
+	if !strings.Contains(process.verdict.Error(), "killed from outside jaml") {
+		t.Fatalf("the verdict: %v", process.verdict)
 	}
 }

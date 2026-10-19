@@ -249,7 +249,7 @@ func (l *life) send(ctx context.Context, outgoing request) (call, error) {
 	l.wire.sent = outgoing.Job
 	replies := l.board.expect(outgoing.Job, outgoing.Op)
 	if _, err := l.wire.requests.Write(append(encoded, '\n')); err != nil {
-		l.kill(errHungUp)
+		l.end()
 		return call{}, errLost
 	}
 	return call{job: outgoing.Job, replies: replies}, nil
