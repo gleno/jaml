@@ -43,13 +43,13 @@ func (r *renderer) render(node any, place _Place) (any, error) {
 	}
 	switch typed := node.(type) {
 	case *_Mapping:
-		rendered := make(map[string]any, len(typed.keys))
+		var rendered = &_Mapping{keys: typed.keys, values: make(map[string]any, len(typed.keys))}
 		for _, key := range typed.keys {
 			value, err := r.render(typed.values[key], place.key(key))
 			if err != nil {
 				return nil, err
 			}
-			rendered[key] = value
+			rendered.values[key] = value
 		}
 		return rendered, nil
 	case []any:

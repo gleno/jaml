@@ -119,3 +119,19 @@ func TestAnExactKeyWinsOverAFoldedExpressionField(t *testing.T) {
 		expectEqual(t, mustResolve[int](t, t.Context(), got.Later), 1)
 	})
 }
+
+func TestTheLastKeyInTheDocumentWins(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		type plain struct {
+			Run any
+		}
+		type held struct {
+			Run *Expression
+		}
+		for text, want := range map[string]float64{"run: ${1}\nRun: ${2}\n": 2, "Run: ${2}\nrun: ${1}\n": 1} {
+			document := mustJaml(t, sb, text)
+			expectEqual(t, mustResolve[plain](t, t.Context(), document).Run, any(want))
+			expectEqual(t, mustResolve[float64](t, t.Context(), mustResolve[held](t, t.Context(), document).Run), want)
+		}
+	})
+}

@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -79,11 +80,49 @@ func (d *_Document) prepare(request work) (prepared, error) {
 }
 
 func encodeResult(tree any, at *dataPath) ([]byte, error) {
-	encoded, err := wireJSON(tree)
-	if err != nil {
+	var encoded bytes.Buffer
+	if err := writeTree(&encoded, tree); err != nil {
 		return nil, fail(CoercionFailed, "%s: %w", at, err)
 	}
-	return encoded, nil
+	return encoded.Bytes(), nil
+}
+
+func writeTree(out *bytes.Buffer, node any) error {
+	switch typed := node.(type) {
+	case *_Mapping:
+		out.WriteByte('{')
+		for index, key := range typed.keys {
+			if index > 0 {
+				out.WriteByte(',')
+			}
+			if err := writeTree(out, key); err != nil {
+				return err
+			}
+			out.WriteByte(':')
+			if err := writeTree(out, typed.values[key]); err != nil {
+				return err
+			}
+		}
+		out.WriteByte('}')
+	case []any:
+		out.WriteByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				out.WriteByte(',')
+			}
+			if err := writeTree(out, item); err != nil {
+				return err
+			}
+		}
+		out.WriteByte(']')
+	default:
+		encoded, err := wireJSON(node)
+		if err != nil {
+			return err
+		}
+		out.Write(encoded)
+	}
+	return nil
 }
 
 func (d *_Document) selectPath(path []string) (subtree, error) {
