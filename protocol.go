@@ -191,11 +191,7 @@ func (t *thrownOnWire) rebuild() *Thrown {
 	if t == nil {
 		return nil
 	}
-	var value any
-	if err := json.Unmarshal(t.Value, &value); err != nil {
-		value = nil
-	}
-	return &Thrown{Message: t.Message, Value: value}
+	return newThrown(t.Message, t.Value)
 }
 
 type carriedCause struct {

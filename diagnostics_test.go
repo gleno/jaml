@@ -168,3 +168,49 @@ func TestAThrowingGetterNamesItsResultPath(t *testing.T) {
 		})
 	}
 }
+
+func thrownValue(t *testing.T, sb *Sandbox, source string) any {
+	t.Helper()
+	var out any
+	err := mustTemplate(t, sb, expressionTemplate("(() => { "+source+" })()")).Eval(t.Context(), &out, nil, "v")
+	var caught *Thrown
+	if !errors.As(err, &caught) {
+		t.Fatalf("expected a thrown snapshot in %v", err)
+	}
+	return caught.Value
+}
+
+func TestAThrownValueHoldsAsManyValuesAsAResult(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		kept, isList := thrownValue(t, sb, "throw Array(1048575).fill(1)").([]any)
+		if !isList || len(kept) != 1048575 {
+			t.Fatalf("a thrown list of 1048575 items was not kept whole: %T of %d", kept, len(kept))
+		}
+		expectEqual(t, thrownValue(t, sb, "throw Array(1048576).fill(1)"), nil)
+	})
+}
+
+func TestAThrownValueCountsEveryListedKeyOnce(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		kept, isList := thrownValue(t, sb, "throw Array(1048572).fill(0).concat([{ a: undefined, b: 1 }])").([]any)
+		if !isList || len(kept) != 1048573 {
+			t.Fatalf("a thrown list at the cap was not kept whole: %T of %d", kept, len(kept))
+		}
+		expectEqual(t, kept[len(kept)-1], map[string]any{"b": float64(1)})
+		expectEqual(t, thrownValue(t, sb, "throw Array(1048572).fill(0).concat([{ a: undefined, b: 1, c: () => 1 }])"), nil)
+	})
+}
+
+func TestAThrownValueReadsWhatJSONWouldWrite(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		got := thrownValue(t, sb, `const e = new RangeError('r'); e.status = 404; e.cycle = e; throw { list: [() => 1, undefined, Symbol('s'), NaN, 10n, '\ud800', 2], text: '\ud800', ['\udc00']: 1, f() {}, u: undefined, e, n: -0, big: 2 ** 60, p: new Proxy({}, {}) }`)
+		expectEqual(t, got, map[string]any{
+			"list": []any{nil, nil, nil, nil, nil, nil, float64(2)},
+			"text": nil,
+			"e":    map[string]any{"status": float64(404), "cycle": nil},
+			"n":    float64(0),
+			"big":  float64(1 << 60),
+			"p":    nil,
+		})
+	})
+}

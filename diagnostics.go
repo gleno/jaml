@@ -61,17 +61,15 @@ func uncatchable(err error) error {
 }
 
 func (r realm) describeException(exception *goja.Exception) *Thrown {
-	message, err := r.describe(exception.Value())
-	if err != nil {
-		message = unreadableThrow
-	}
-	return &Thrown{Message: message, Value: r.snapshot(exception.Value())}
+	return newThrown(r.describe(exception.Value()), r.snapshot(exception.Value()))
 }
 
-func (r realm) describe(value goja.Value) (string, error) {
+func (r realm) describe(value goja.Value) string {
 	var text string
-	err := r.contain(func() { text = r.describeThrown(value) })
-	return excerpt(text, thrownExcerptLength), err
+	if err := r.contain(func() { text = r.describeThrown(value) }); err != nil {
+		return unreadableThrow
+	}
+	return excerpt(text, thrownExcerptLength)
 }
 
 func typeOf(value goja.Value) string {
