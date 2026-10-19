@@ -47,7 +47,7 @@ func (e *trustedEngine) build(ctx context.Context, plan blueprint) (unit, error)
 	finished := make(chan finishedBuild, 1)
 	go func() {
 		defer e.leave()
-		built, err := plan.build()
+		built, err := plan.build(bounded)
 		finished <- finishedBuild{built: built, err: err}
 	}()
 	select {
@@ -63,15 +63,16 @@ func (e *trustedEngine) build(ctx context.Context, plan blueprint) (unit, error)
 
 func (u *localUnit) serve(ctx context.Context, request work) outcome {
 	if err := u.engine.enter(ctx); err != nil {
-		return outcome{err: err}
+		return refused{err: err}
 	}
 	defer u.engine.leave()
 	ready, err := u.built.prepare(request)
 	if err != nil {
-		return outcome{err: err}
+		return refused{err: err}
 	}
 	data, err := ready.run(ctx)
-	return outcome{at: ready.at, data: data, err: err}
+	if err != nil {
+		return refused{at: ready.at, err: err}
+	}
+	return answered{at: ready.at, data: data}
 }
-
-func (u *localUnit) forget() {}

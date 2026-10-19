@@ -3,6 +3,7 @@
 package jaml
 
 import (
+	"os"
 	goruntime "runtime"
 	"syscall"
 )
@@ -13,4 +14,8 @@ func isolationSupported() error {
 
 func evaluatorProcAttr() *syscall.SysProcAttr {
 	return nil
+}
+
+func killedOutright(*os.ProcessState) bool {
+	return false
 }

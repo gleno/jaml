@@ -2,56 +2,56 @@ package jaml
 
 import (
 	"context"
-	"sync/atomic"
+	"errors"
 )
+
+const servingAttempts = 2
 
 type isolatedEngine struct {
 	dispatcher *dispatcher
-	units      atomic.Uint64
-}
-
-type unitRef struct {
-	id   uint64
-	plan blueprint
 }
 
 type remoteUnit struct {
-	engine *isolatedEngine
-	ref    unitRef
+	dispatcher *dispatcher
+	plan       blueprint
+	lifetime   context.Context
 }
 
 func startIsolated(lifetime context.Context, configured sandboxSettings) (*isolatedEngine, error) {
 	spec := childSpec{lifetime: lifetime, limit: configured.memoryLimitOrDefault(), buildTimeout: configured.buildTimeout}
-	first, err := spawnEvaluator(lifetime, spec)
+	first, err := startLife(spec)
 	if err != nil {
 		return nil, err
 	}
-	spawn := func(ctx context.Context) (*evaluatorProcess, error) { return spawnEvaluator(ctx, spec) }
-	return &isolatedEngine{dispatcher: newDispatcher(configured.maxConcurrency, spawn, first)}, nil
+	start := func() (*life, error) { return startLife(spec) }
+	return &isolatedEngine{dispatcher: newDispatcher(configured.maxConcurrency, start, first)}, nil
 }
 
-func (e *isolatedEngine) build(ctx context.Context, plan blueprint) (unit, error) {
-	ref := unitRef{id: e.units.Add(1), plan: plan}
-	result := e.dispatcher.carry(ctx, func(ctx context.Context, child *evaluatorProcess) outcome {
-		return child.ensureBuilt(ctx, ref)
-	})
-	if result.err != nil {
-		return nil, result.err
+func (e *isolatedEngine) build(lifetime context.Context, plan blueprint) (unit, error) {
+	made := &remoteUnit{dispatcher: e.dispatcher, plan: plan, lifetime: lifetime}
+	if failed, isRefused := e.dispatcher.carry(lifetime, made.reside).(refused); isRefused {
+		return nil, failed.err
 	}
-	return &remoteUnit{engine: e, ref: ref}, nil
+	return made, nil
+}
+
+func (u *remoteUnit) reside(e *errand, l *life) outcome {
+	return l.reside(u, e.report).result
 }
 
 func (u *remoteUnit) serve(ctx context.Context, asked work) outcome {
-	return u.engine.dispatcher.carry(ctx, func(ctx context.Context, child *evaluatorProcess) outcome {
-		if built := child.ensureBuilt(ctx, u.ref); built.failed() {
-			return built
+	return u.dispatcher.carry(ctx, func(e *errand, l *life) outcome {
+		for range servingAttempts {
+			r := l.reside(u, e.report)
+			if _, built := r.result.(answered); !built {
+				return r.result
+			}
+			served := l.serve(e.ctx, r.build, asked)
+			if failed, isRefused := served.(refused); !isRefused || !errors.Is(failed.err, errMissing) {
+				return served
+			}
+			l.drop(r)
 		}
-		return child.serve(ctx, request{Op: opServe, Unit: u.ref.id, Work: &asked})
+		return refused{err: errMissing}
 	})
-}
-
-func (u *remoteUnit) forget() {
-	if child := u.engine.dispatcher.current(); child != nil {
-		child.forget(u.ref.id)
-	}
 }

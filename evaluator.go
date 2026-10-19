@@ -42,10 +42,24 @@ func serveEvaluations() int {
 	if watch.orphaned() {
 		return exitOrphaned
 	}
-	requests := json.NewDecoder(os.NewFile(requestsFD, "jaml-requests"))
-	replies := &replyWriter{encoder: json.NewEncoder(os.NewFile(responsesFD, "jaml-responses"))}
-	replies.send(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
-	serving := &evaluator{watch: watch, replies: replies, units: map[uint64]servable{}, jobs: map[uint64]context.CancelFunc{}}
+	replies := &replyWriter{out: os.NewFile(responsesFD, "jaml-responses")}
+	replies.greet(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
+	serving := &evaluator{watch: watch, replies: replies, units: map[uint64]servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
+	go serving.obey(json.NewDecoder(os.NewFile(controlFD, "jaml-control")))
+	return serving.follow(json.NewDecoder(os.NewFile(requestsFD, "jaml-requests")))
+}
+
+type evaluator struct {
+	watch   *heapWatch
+	replies *replyWriter
+	mu      sync.Mutex
+	arrived uint64
+	units   map[uint64]servable
+	running map[uint64]context.CancelFunc
+	ended   map[uint64]struct{}
+}
+
+func (e *evaluator) follow(requests *json.Decoder) int {
 	for {
 		var incoming request
 		if err := requests.Decode(&incoming); err != nil {
@@ -55,73 +69,122 @@ func serveEvaluations() int {
 			fmt.Fprintf(os.Stderr, "jaml evaluator: reading request: %v\n", err)
 			return exitProtocolBroken
 		}
-		if err := serving.accept(incoming); err != nil {
+		if err := e.accept(incoming); err != nil {
 			fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
 			return exitProtocolBroken
 		}
 	}
 }
 
-type evaluator struct {
-	watch   *heapWatch
-	replies *replyWriter
-	mu      sync.Mutex
-	units   map[uint64]servable
-	jobs    map[uint64]context.CancelFunc
+func (e *evaluator) obey(control *json.Decoder) {
+	for {
+		var incoming request
+		if err := control.Decode(&incoming); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "jaml evaluator: reading control: %v\n", err)
+			os.Exit(exitProtocolBroken)
+		}
+		switch incoming.Op {
+		case opCancel:
+			e.end(incoming.Job)
+		case opForget:
+			e.forget(incoming.Unit)
+		default:
+			fmt.Fprintf(os.Stderr, "jaml evaluator: a malformed %q control message\n", incoming.Op)
+			os.Exit(exitProtocolBroken)
+		}
+	}
 }
 
 func (e *evaluator) accept(incoming request) error {
 	switch {
 	case incoming.Op == opBuild && incoming.Plan != nil:
-		go e.build(incoming.Job, incoming.Unit, *incoming.Plan)
-	case incoming.Op == opServe && incoming.Work != nil:
-		ctx, cancel := context.WithCancel(context.Background())
-		e.mu.Lock()
-		e.jobs[incoming.Job] = cancel
-		e.mu.Unlock()
-		go e.serve(ctx, incoming.Job, incoming.Unit, *incoming.Work)
-	case incoming.Op == opCancel:
-		e.mu.Lock()
-		cancel := e.jobs[incoming.Job]
-		e.mu.Unlock()
-		if cancel != nil {
-			cancel()
+		ctx, err := e.begin(incoming.Job)
+		if err != nil {
+			return err
 		}
-	case incoming.Op == opForget:
-		e.mu.Lock()
-		delete(e.units, incoming.Unit)
-		e.mu.Unlock()
+		go e.build(ctx, incoming.Job, *incoming.Plan)
+	case incoming.Op == opServe && incoming.Work != nil:
+		ctx, err := e.begin(incoming.Job)
+		if err != nil {
+			return err
+		}
+		held := e.holding(incoming.Unit)
+		if held == nil {
+			e.finish(incoming.Job)
+			e.replies.send(reply{Job: incoming.Job, Missing: true})
+			return nil
+		}
+		go e.serve(ctx, incoming.Job, held, *incoming.Work)
 	default:
 		return fmt.Errorf("a malformed %q request", incoming.Op)
 	}
 	return nil
 }
 
-func (e *evaluator) build(job, unit uint64, plan blueprint) {
+func (e *evaluator) begin(job uint64) (context.Context, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if job <= e.arrived {
+		return nil, fmt.Errorf("job %d arrived after job %d", job, e.arrived)
+	}
+	e.arrived = job
+	ctx, cancel := context.WithCancel(context.Background())
+	e.running[job] = cancel
+	if _, gone := e.ended[job]; gone {
+		delete(e.ended, job)
+		cancel()
+	}
+	return ctx, nil
+}
+
+func (e *evaluator) holding(unit uint64) servable {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.units[unit]
+}
+
+func (e *evaluator) end(job uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if cancel := e.running[job]; cancel != nil {
+		cancel()
+		return
+	}
+	if job > e.arrived {
+		e.ended[job] = struct{}{}
+	}
+}
+
+func (e *evaluator) forget(unit uint64) {
+	e.mu.Lock()
+	delete(e.units, unit)
+	e.mu.Unlock()
+	e.end(unit)
+}
+
+func (e *evaluator) build(ctx context.Context, job uint64, plan blueprint) {
 	var built servable
 	var err error
-	e.watch.during(func() { built, err = plan.build() })
+	e.watch.during(func() { built, err = plan.build(ctx) })
+	e.mu.Lock()
+	if err == nil && ctx.Err() == nil {
+		e.units[job] = built
+	}
+	e.mu.Unlock()
+	e.finish(job)
 	if err != nil {
 		refused := describeFailure(err)
 		e.replies.send(reply{Job: job, Failure: &refused})
 		return
 	}
-	e.mu.Lock()
-	e.units[unit] = built
-	e.mu.Unlock()
 	e.replies.send(reply{Job: job, Built: true})
 }
 
-func (e *evaluator) serve(ctx context.Context, job, unit uint64, request work) {
+func (e *evaluator) serve(ctx context.Context, job uint64, held servable, request work) {
 	defer e.finish(job)
-	e.mu.Lock()
-	held := e.units[unit]
-	e.mu.Unlock()
-	if held == nil {
-		missing := describeFailure(fmt.Errorf("the evaluator holds no unit %d", unit))
-		e.replies.send(reply{Job: job, Failure: &missing})
-		return
-	}
 	ready, err := held.prepare(request)
 	if err != nil {
 		refused := describeFailure(err)
@@ -141,21 +204,39 @@ func (e *evaluator) serve(ctx context.Context, job, unit uint64, request work) {
 
 func (e *evaluator) finish(job uint64) {
 	e.mu.Lock()
-	cancel := e.jobs[job]
-	delete(e.jobs, job)
+	cancel := e.running[job]
+	delete(e.running, job)
 	e.mu.Unlock()
 	cancel()
 }
 
 type replyWriter struct {
-	mu      sync.Mutex
-	encoder *json.Encoder
+	mu  sync.Mutex
+	out *os.File
 }
 
-func (w *replyWriter) send(outgoing any) {
+func (w *replyWriter) greet(greeting hello) {
+	encoded, err := json.Marshal(greeting)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: writing the greeting: %v\n", err)
+		os.Exit(exitProtocolBroken)
+	}
+	w.write(encoded)
+}
+
+func (w *replyWriter) send(outgoing reply) {
+	encoded, err := json.Marshal(outgoing)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
+		os.Exit(exitProtocolBroken)
+	}
+	w.write(encoded)
+}
+
+func (w *replyWriter) write(frame []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := w.encoder.Encode(outgoing); err != nil {
+	if _, err := w.out.Write(append(frame, '\n')); err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
 		os.Exit(exitProtocolBroken)
 	}
@@ -192,11 +273,12 @@ func worldFromEnv() (evaluatorWorld, error) {
 }
 
 type heapWatch struct {
-	ceiling uint64
-	parent  int
-	wake    chan struct{}
-	mu      sync.Mutex
-	busy    int
+	ceiling   uint64
+	parent    int
+	wake      chan struct{}
+	pressured sync.Once
+	mu        sync.Mutex
+	busy      int
 }
 
 func watchTheHeap(world evaluatorWorld) *heapWatch {
@@ -255,7 +337,11 @@ func (w *heapWatch) working() bool {
 }
 
 func (w *heapWatch) inspect() {
-	if heapHeld() > w.ceiling {
+	held := heapHeld()
+	if held > w.ceiling/4*3 {
+		w.pressured.Do(func() { fmt.Fprintln(os.Stderr, pressureMarker) })
+	}
+	if held > w.ceiling {
 		w.confirmOverflow()
 	}
 	if w.orphaned() {

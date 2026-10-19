@@ -23,12 +23,12 @@ type template struct {
 	settings settings
 }
 
-func makeTemplate(written string, configured settings) (*template, error) {
-	root, err := parseYAML(written)
+func makeTemplate(ctx context.Context, written string, configured settings) (*template, error) {
+	root, err := parseYAML(ctx, written)
 	if err != nil {
 		return nil, err
 	}
-	texts, err := compileTexts(root)
+	texts, err := compileTexts(ctx, root)
 	if err != nil {
 		return nil, err
 	}

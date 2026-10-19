@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -32,7 +33,7 @@ var (
 	legacyOctal  = regexp.MustCompile(`^[-+]?0[0-9]+$`)
 )
 
-func parseYAML(source string) (any, error) {
+func parseYAML(ctx context.Context, source string) (any, error) {
 	document, err := readOneDocument(source)
 	if err != nil {
 		return nil, err
@@ -40,7 +41,7 @@ func parseYAML(source string) (any, error) {
 	if document.Kind == 0 || len(document.Content) == 0 {
 		return nil, nil
 	}
-	reader := &yamlReader{expanding: map[*yaml.Node]bool{}}
+	reader := &yamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
 	return reader.data(document.Content[0], dataAt{})
 }
 
@@ -87,6 +88,7 @@ func (a dataAt) atIndex(index int) dataAt {
 }
 
 type yamlReader struct {
+	ctx       context.Context
 	expanding map[*yaml.Node]bool
 	budget    aliasBudget
 }
@@ -123,6 +125,9 @@ func allowedAliasRatio(decoded int) float64 {
 }
 
 func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
+	if r.ctx.Err() != nil {
+		return nil, cancelled(r.ctx)
+	}
 	if node.Kind == yaml.AliasNode {
 		return r.alias(node, at)
 	}

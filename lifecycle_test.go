@@ -62,6 +62,7 @@ const (
 	malformedAnswerLimit = 16<<20 + 4
 	emptyAnswerLimit     = 16<<20 + 5
 	crashAtStartLimit    = 16<<20 + 6
+	panicAtStartLimit    = 16<<20 + 7
 )
 
 var _ = impersonateAnEvaluator()
@@ -71,7 +72,7 @@ func impersonateAnEvaluator() bool {
 		return false
 	}
 	switch os.Getenv(evaluatorMemoryLimit) {
-	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit):
+	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit):
 	default:
 		return false
 	}
@@ -82,6 +83,8 @@ func impersonateAnEvaluator() bool {
 	case strconv.Itoa(silentLimit):
 	case strconv.Itoa(crashAtStartLimit):
 		os.Exit(3)
+	case strconv.Itoa(panicAtStartLimit):
+		panic("an impostor's init")
 	case strconv.Itoa(foreignGreetingLimit):
 		_, _ = replies.WriteString("hello from some other program\n")
 		os.Exit(0)
@@ -122,7 +125,7 @@ func TestAForeignExecutableIsUnsupported(t *testing.T) {
 
 func TestAReplacedExecutableIsUnsupported(t *testing.T) {
 	_, err := MakeSandbox(within(t, 10*time.Second), WithMemoryLimit(futureProtocolLimit))
-	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v4")
+	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v5")
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {
@@ -166,14 +169,13 @@ func TestAnAnswerWithNeitherDataNorFailureKillsTheEvaluator(t *testing.T) {
 	expectDeath(t, process)
 }
 
-func respawnAs(t *testing.T, sb *Sandbox, limit memoryLimit) {
+func respawnAs(t *testing.T, sb *Sandbox, spec childSpec) {
 	t.Helper()
+	spec.lifetime = sb.lifetime
 	d := dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.spawn = func(ctx context.Context) (*evaluatorProcess, error) {
-		return spawnEvaluator(ctx, childSpec{lifetime: sb.lifetime, limit: limit, buildTimeout: defaultBuildTimeout})
-	}
+	d.start = func() (*life, error) { return startLife(spec) }
 }
 
 func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
@@ -184,7 +186,7 @@ func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := mustTemplate(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, silentLimit)
+	respawnAs(t, sb, childSpec{limit: silentLimit, buildTimeout: defaultBuildTimeout})
 	killChild(t, sb)
 	evaluating := make(chan error, 1)
 	go func() {
@@ -243,11 +245,15 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 			sb := mustIsolated(t)
 			template := mustTemplate(t, sb, "a: 1\n")
 			expectEqual(t, isolatedEvalAs[int](t, template, nil, "a"), 1)
-			respawnAs(t, sb, memoryLimit(limit))
+			respawnAs(t, sb, childSpec{limit: memoryLimit(limit), buildTimeout: defaultBuildTimeout})
 			killChild(t, sb)
 			var out any
 			respawned := template.Eval(within(t, 10*time.Second), &out, nil, "a")
-			expectError(t, respawned, Unsupported)
+			if name == "crash before greeting" {
+				expectError(t, respawned, EvaluationFailed, "evaluator died (exit status 3)")
+			} else {
+				expectError(t, respawned, Unsupported)
+			}
 			expectEqual(t, respawned.Error(), constructed.Error())
 			for _, kind := range everyKind {
 				if errors.Is(respawned, kind) != errors.Is(constructed, kind) {
@@ -454,34 +460,38 @@ func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {
 	})
 }
 
-func dropATemplate(t *testing.T, sb *Sandbox) uint64 {
+func dropATemplate(t *testing.T, sb *Sandbox) *remoteUnit {
 	template := mustTemplate(t, sb, "v: ${ 1 }\n")
-	return template.held.unit.(*remoteUnit).ref.id
+	return template.held.unit.(*remoteUnit)
+}
+
+func residencyOf(child *life, u *remoteUnit) *residency {
+	child.wire.mu.Lock()
+	defer child.wire.mu.Unlock()
+	return child.wire.residents[u]
 }
 
 func TestADroppedTemplateIsForgottenByTheEvaluator(t *testing.T) {
 	sb := mustIsolated(t)
-	id := dropATemplate(t, sb)
+	dropped := dropATemplate(t, sb)
 	child := currentChild(t, sb)
+	build := residencyOf(child, dropped).build
 	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if !child.catalog.holds(id) {
-			break
-		}
+	for residencyOf(child, dropped) != nil {
 		if time.Now().After(deadline) {
-			t.Fatalf("unit %d outlived its unreachable template", id)
+			t.Fatalf("unit %d outlived its unreachable template", build)
 		}
 		goruntime.GC()
 		time.Sleep(20 * time.Millisecond)
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		served := child.serve(within(t, 10*time.Second), request{Op: opServe, Unit: id, Work: &work{}})
-		if served.err != nil && strings.Contains(served.err.Error(), fmt.Sprintf("the evaluator holds no unit %d", id)) {
+		served := child.serve(within(t, 10*time.Second), build, work{})
+		if failed, isRefused := served.(refused); isRefused && errors.Is(failed.err, errMissing) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the evaluator still serves unit %d: %v", id, served.err)
+			t.Fatalf("the evaluator still serves unit %d: %v", build, served)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

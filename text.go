@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -18,11 +19,12 @@ type segment struct {
 }
 
 type compiler struct {
+	ctx   context.Context
 	texts map[string]text
 }
 
-func compileTexts(root any) (map[string]text, error) {
-	c := &compiler{texts: map[string]text{}}
+func compileTexts(ctx context.Context, root any) (map[string]text, error) {
+	c := &compiler{ctx: ctx, texts: map[string]text{}}
 	if err := c.visit(root, nil); err != nil {
 		return nil, err
 	}
@@ -53,6 +55,9 @@ func (c *compiler) visit(node any, at *dataPath) error {
 	}
 	if _, seen := c.texts[written]; seen {
 		return nil
+	}
+	if c.ctx.Err() != nil {
+		return cancelled(c.ctx)
 	}
 	compiled, err := c.compileText(written)
 	if err != nil {

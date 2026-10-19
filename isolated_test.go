@@ -27,24 +27,39 @@ func dispatcherOf(t *testing.T, sb *Sandbox) *dispatcher {
 	return isolated.dispatcher
 }
 
-func currentChild(t *testing.T, sb *Sandbox) *evaluatorProcess {
+func currentChild(t *testing.T, sb *Sandbox) *life {
 	t.Helper()
-	child := dispatcherOf(t, sb).current()
-	if child == nil {
-		t.Fatal("the sandbox holds no evaluator")
+	d := dispatcherOf(t, sb)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		d.mu.Lock()
+		current, isReady := d.child.(ready)
+		d.mu.Unlock()
+		if isReady && current.life.alive() {
+			return current.life
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the sandbox holds no evaluator")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	return child
 }
 
 func childPID(t *testing.T, sb *Sandbox) int {
 	t.Helper()
-	return currentChild(t, sb).cmd.Process.Pid
+	d := dispatcherOf(t, sb)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if current, isReady := d.child.(ready); isReady {
+		return current.life.cmd.Process.Pid
+	}
+	return 0
 }
 
-func expectDeath(t *testing.T, process *evaluatorProcess) {
+func expectDeath(t *testing.T, process *life) {
 	t.Helper()
 	select {
-	case <-process.dead:
+	case <-process.ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the evaluator outlived its sandbox")
 	}

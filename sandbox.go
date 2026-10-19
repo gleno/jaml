@@ -6,12 +6,14 @@ import (
 	"errors"
 	"reflect"
 	goruntime "runtime"
+	"strconv"
 )
 
 var (
 	errSandboxEnded = errors.New("the sandbox's context ended")
 	errUnreachable  = errors.New("dropped without its context ending")
 	errLifetimeOver = errors.New("its context ended")
+	errUnjudged     = errors.New("the evaluator died under this job and nothing judged it")
 )
 
 type engine interface {
@@ -20,8 +22,22 @@ type engine interface {
 
 type unit interface {
 	serve(ctx context.Context, request work) outcome
-	forget()
 }
+
+type outcome interface{ where() string }
+
+type answered struct {
+	at   string
+	data []byte
+}
+
+type refused struct {
+	at  string
+	err error
+}
+
+func (a answered) where() string { return a.at }
+func (r refused) where() string  { return r.at }
 
 type Sandbox struct {
 	lifetime context.Context
@@ -117,10 +133,7 @@ func (s *Sandbox) make(ctx context.Context, plan blueprint) (*handle, error) {
 		end(failure)
 		return nil, failure
 	}
-	context.AfterFunc(lifetime, func() {
-		unfollow()
-		built.forget()
-	})
+	context.AfterFunc(lifetime, func() { unfollow() })
 	return &handle{lifetime: lifetime, end: end, unit: built}, nil
 }
 
@@ -227,12 +240,28 @@ func (h *handle) answer(ctx context.Context, into any, request work) error {
 	case h.lifetime.Err() != nil:
 		return fail(Closed, "its context or its sandbox's context ended while it ran")
 	case ctx.Err() != nil:
-		return located(result.at, cancelled(ctx))
-	case result.err != nil:
-		return located(result.at, result.err)
+		return located(requestedAt(request.Path), cancelled(ctx))
 	}
-	if err := json.Unmarshal(result.data, into); err != nil {
-		return fail(CoercionFailed, "%s: %w", blame(result.at, result.data, err), err)
+	switch settled := result.(type) {
+	case answered:
+		if err := json.Unmarshal(settled.data, into); err != nil {
+			return fail(CoercionFailed, "%s: %w", blame(settled.at, settled.data, err), err)
+		}
+		return nil
+	case refused:
+		return located(settled.at, settled.err)
 	}
-	return nil
+	return located(result.where(), errUnjudged)
+}
+
+func requestedAt(path []string) string {
+	var spelled *dataPath
+	for _, step := range path {
+		if index, err := strconv.Atoi(step); err == nil && index >= 0 && strconv.Itoa(index) == step {
+			spelled = spelled.atIndex(index)
+		} else {
+			spelled = spelled.atKey(step)
+		}
+	}
+	return spelled.String()
 }
