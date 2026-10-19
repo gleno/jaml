@@ -21,13 +21,13 @@ func (t *template) selectPath(path []string) (subtree, error) {
 			if !ok {
 				return subtree{}, missingPath(at, fmt.Sprintf("has no key %q", step))
 			}
-			current, at = found, at.atKey(step)
+			current, at = found, at.atStep(step)
 		case []any:
 			index, err := strconv.Atoi(step)
 			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
 				return subtree{}, missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
-			current, at = typed[index], at.atIndex(index)
+			current, at = typed[index], at.atStep(step)
 		default:
 			return subtree{}, missingPath(at, fmt.Sprintf("is %s, which has no key %q", t.describe(current), step))
 		}

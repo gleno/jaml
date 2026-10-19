@@ -65,7 +65,7 @@ err = template.Eval(requestCtx, &cfg, map[string]any{"name": "abc"}, "config")
 // cfg == Config{Value1: 123, Value2: 2, Value3: "some string abc"}
 ```
 
-`Eval(ctx, into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error.
+`Eval(ctx, into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error, and so is a step that is not valid UTF-8, named after the steps before it (`$.k has no key "\xff"`) whatever the template holds there. Error locations spell the selected path the way you asked for it: a step in plain decimal is an index (`$[0]`), even when it selects a mapping key `"0"`.
 
 `vars` must be JSON data. Every `Eval` checks and binds all of them before evaluating anything, whatever the path selects. A var that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …, and every name the global object inherits: `constructor`, `hasOwnProperty`, `__proto__`, …) is an `EvaluationFailed` error naming the var, never a template path. Text is checked as JavaScript will see it, whatever marshalled it: a `json.RawMessage` or a custom `MarshalJSON` that writes an unpaired surrogate escape (`"\ud800"`) or raw bytes that are not UTF-8 is refused too. `encoding/json` writes invalid UTF-8 in a Go string as the escape `\ufffd`, so that escape is refused wherever it appears; a real U+FFFD written as the character itself binds.
 
@@ -140,6 +140,7 @@ steps: |
 
 - **Quote expressions that contain `: `, `#`, or start a flow collection.** `limits: ${ {cpu: 2} }` is a YAML error, because `: ` inside a plain scalar starts a mapping. Write `limits: "${ {cpu: 2} }"`. Inside flow collections (`[…]`, `{…}`) every expression needs quotes. The same goes for `?:` ternaries.
 - **Only `true` and `false` are bools**, in any of their YAML spellings (`True`, `FALSE`). `y`, `yes`, `on`, `n` stay text.
+- **Text is UTF-8.** Template text that is not valid UTF-8 is an `InvalidTemplate` error (`yaml: invalid leading UTF-8 octet`), and so is expression source (`syntax error at line 1, column 3 of the expression: Invalid UTF-8 character`). Both kinds refuse it before building anything.
 - **Keys must be strings.** `1: x` or `true: x` is an `InvalidTemplate` error naming the path; quote the key.
 - **Duplicate keys are refused**, with the line of the first one. Keys are compared after they resolve, so `a` and `!!binary YQ==` are the same key.
 - **`.inf` and `.nan` are refused**, since JSON cannot carry them, and so are numbers too large for a 64-bit float (`1e400`). Quote them to keep them as text.
@@ -183,7 +184,7 @@ func WithMaxConcurrency(jobs int) SandboxOption        // at least 1; default GO
 func WithBuildTimeout(timeout time.Duration) SandboxOption // positive; default 5s
 ```
 
-Both kinds run at most `WithMaxConcurrency` jobs at once, in arrival order; a job is building a template, compiling an expression, an `Eval` or a `Call`. `WithBuildTimeout` bounds building and compiling themselves, not the time a job waits for its slot; the context bounds both. A build whose context or timeout ends stops between YAML nodes and expressions, and the call returns at once with the cause. A bad option is an `InvalidTemplate` error.
+Both kinds run at most `WithMaxConcurrency` jobs at once, in arrival order; a job is building a template, compiling an expression, an `Eval` or a `Call`. `WithBuildTimeout` bounds building and compiling themselves, not the time a job waits for its slot; the context bounds both. A build whose context or timeout ends stops between YAML nodes and expressions, and the call returns at once with the cause. A build that finishes as its timeout ends keeps whichever came first, in both kinds. A build that finishes after its context or its sandbox's context ended still fails with that cause; a template or expression is never handed back already closed. A bad option is an `InvalidTemplate` error.
 
 ### Trusted
 

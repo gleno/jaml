@@ -40,7 +40,6 @@ type switchboard struct {
 
 type expectation struct {
 	op      opcode
-	located bool
 	replies chan reply
 }
 
@@ -77,7 +76,7 @@ func (l *life) lodge(u *remoteUnit) (*residency, bool) {
 	case u.lifetime.Err() != nil:
 		return settledWith(refused{err: errLifetimeOver}), false
 	case !l.alive():
-		return settledWith(l.lost("")), false
+		return settledWith(l.lost()), false
 	}
 	r := &residency{unit: u, settled: make(chan struct{})}
 	l.wire.residents[u] = r
@@ -86,31 +85,34 @@ func (l *life) lodge(u *remoteUnit) (*residency, bool) {
 }
 
 func (l *life) build(r *residency, early func(outcome)) {
-	bounded, stop := context.WithTimeoutCause(context.Background(), l.buildTimeout, fmt.Errorf("the build took longer than its timeout of %s: %w", l.buildTimeout, context.DeadlineExceeded))
-	defer stop()
+	race := raceBuild(context.Background(), l.buildTimeout)
 	plan := r.unit.plan
-	asked, err := l.send(bounded, request{Op: opBuild, Plan: &plan})
+	asked, err := l.send(race.bound, request{Op: opBuild, Plan: &plan})
 	if err != nil {
-		l.settle(r, l.unsent(err))
+		race.finish(l.unsent(err))
+		l.settle(r, race.await())
 		return
 	}
 	l.claim(r, asked.job)
-	timeout := bounded.Done()
+	overdue := race.done()
 	var delivered <-chan struct{}
 	var grace <-chan time.Time
 	for {
 		select {
 		case incoming := <-asked.replies:
-			l.settle(r, builtFrom(incoming))
+			if !race.finish(builtFrom(incoming)) && overdue != nil && incoming.Failure == nil {
+				l.tell(request{Op: opForget, Unit: asked.job})
+			}
+			l.settle(r, race.await())
 			return
 		case <-l.ended:
-			l.settle(r, l.lost(""))
+			race.finish(l.lost())
+			l.settle(r, race.await())
 			return
-		case <-timeout:
-			timeout = nil
-			overdue := refused{err: cancelled(bounded)}
-			l.settle(r, overdue)
-			early(overdue)
+		case <-overdue:
+			overdue = nil
+			l.settle(r, race.await())
+			early(race.await())
 			delivered = l.tell(request{Op: opForget, Unit: asked.job})
 		case <-delivered:
 			delivered = nil
@@ -119,7 +121,7 @@ func (l *life) build(r *residency, early func(outcome)) {
 			grace = timer.C
 		case <-grace:
 			grace = nil
-			l.kill(context.Cause(bounded))
+			l.kill(context.Cause(race.bound))
 		}
 	}
 }
@@ -187,20 +189,15 @@ func (l *life) serve(ctx context.Context, unit uint64, asked work) outcome {
 	if err != nil {
 		return l.unsent(err)
 	}
-	var at string
 	stopped := ctx.Done()
 	var delivered <-chan struct{}
 	var grace <-chan time.Time
 	for {
 		select {
 		case incoming := <-sent.replies:
-			if !incoming.final() {
-				at = *incoming.At
-				continue
-			}
-			return servedFrom(at, incoming)
+			return servedFrom(incoming)
 		case <-l.ended:
-			return l.lost(at)
+			return l.lost()
 		case <-stopped:
 			stopped = nil
 			delivered = l.tell(request{Op: opCancel, Job: sent.job})
@@ -216,19 +213,19 @@ func (l *life) serve(ctx context.Context, unit uint64, asked work) outcome {
 	}
 }
 
-func servedFrom(at string, incoming reply) outcome {
+func servedFrom(incoming reply) outcome {
 	switch {
 	case incoming.Failure != nil:
-		return refused{at: at, err: incoming.Failure.rebuild()}
+		return refused{err: incoming.Failure.rebuild()}
 	case incoming.Missing:
-		return refused{at: at, err: errMissing}
+		return refused{err: errMissing}
 	}
-	return answered{at: at, data: incoming.Data}
+	return answered{data: incoming.Data}
 }
 
 func (l *life) unsent(err error) outcome {
 	if errors.Is(err, errLost) {
-		return l.lost("")
+		return l.lost()
 	}
 	return refused{err: err}
 }
@@ -295,7 +292,7 @@ func (l *life) listen(replies *replyStream) {
 }
 
 func (b *switchboard) expect(job uint64, op opcode) <-chan reply {
-	replies := make(chan reply, 2)
+	replies := make(chan reply, 1)
 	b.mu.Lock()
 	b.pending[job] = &expectation{op: op, replies: replies}
 	b.mu.Unlock()
@@ -309,14 +306,10 @@ func (b *switchboard) deliver(incoming reply) error {
 	if waiting == nil {
 		return fmt.Errorf("the evaluator answered job %d, which is not waiting for an answer", incoming.Job)
 	}
-	if err := incoming.fits(waiting.op, waiting.located); err != nil {
+	if err := incoming.fits(waiting.op); err != nil {
 		return fmt.Errorf("job %d: %w", incoming.Job, err)
 	}
-	if incoming.final() {
-		delete(b.pending, incoming.Job)
-	} else {
-		waiting.located = true
-	}
+	delete(b.pending, incoming.Job)
 	waiting.replies <- incoming
 	return nil
 }

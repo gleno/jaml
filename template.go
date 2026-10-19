@@ -12,10 +12,7 @@ type servable interface {
 	prepare(request work) (prepared, error)
 }
 
-type prepared struct {
-	at  string
-	run func(ctx context.Context) ([]byte, error)
-}
+type prepared func(ctx context.Context) ([]byte, error)
 
 type template struct {
 	root     any
@@ -37,18 +34,18 @@ func makeTemplate(ctx context.Context, written string, configured settings) (*te
 
 func (t *template) prepare(request work) (prepared, error) {
 	if request.Call != nil {
-		return prepared{}, fail(EvaluationFailed, "%w", errNotCallable)
+		return nil, fail(EvaluationFailed, "%w", errNotCallable)
 	}
 	chosen, err := t.selectPath(request.Path)
 	if err != nil {
-		return prepared{}, err
+		return nil, err
 	}
 	plan := sessionPlan{vars: request.Vars, pinned: request.Pinned}
-	return prepared{at: chosen.at.String(), run: func(ctx context.Context) ([]byte, error) {
+	return func(ctx context.Context) ([]byte, error) {
 		engine := &lazySession{ctx: ctx, plan: plan}
 		defer engine.close()
 		return t.renderSubtree(chosen, engine)
-	}}, nil
+	}, nil
 }
 
 func (t *template) renderSubtree(chosen subtree, engine *lazySession) ([]byte, error) {
