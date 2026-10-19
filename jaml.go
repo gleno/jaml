@@ -39,6 +39,7 @@ type Option func(*settings) error
 type settings struct {
 	null      Coercion
 	undefined Coercion
+	function  bool
 }
 
 type SandboxOption func(*sandboxSettings) error
@@ -68,6 +69,13 @@ func WithNullCoercion(coercion Coercion) Option {
 func WithUndefinedCoercion(coercion Coercion) Option {
 	return func(s *settings) error {
 		s.undefined = coercion
+		return nil
+	}
+}
+
+func AsFunction() Option {
+	return func(s *settings) error {
+		s.function = true
 		return nil
 	}
 }

@@ -88,6 +88,12 @@ err = sum.Eval(ctx, &total, map[string]any{"a": 1, "b": 2})
 
 `Compile` takes one JavaScript expression, under the same rules as a whole-value expression in a template, without the `${ }`. `Eval` evaluates it with `vars` as globals and decodes the result. `Call` requires the expression to evaluate to a function, calls it with `args`, each passed as a JSON copy (checked like vars, named `argument 1`, `argument 2`, …), and decodes what it returns. Results follow the same coercion options as templates, with the same defaults: null is `Loose` and undefined is `Strict`, so a validator that returns `undefined` for "no error" wants `jaml.WithUndefinedCoercion(jaml.Loose)`. A function value never leaves the sandbox: an expression or call that produces one is an `EvaluationFailed` error. Errors locate an expression at `$`, its result: `$: x => x.y.z: TypeError: …`.
 
+```go
+check, err := sandbox.Compile(specCtx, source, jaml.AsFunction())
+```
+
+`jaml.AsFunction()` makes `Compile` accept only a function literal: an arrow function or a function expression, named or not, optionally in parentheses. Anything else is an `InvalidTemplate` error, decided on the parsed syntax alone, so nothing is evaluated and the check costs no more than compiling: an identifier bound to a function (`parseInt`), a call (`(() => f)()`), an object, a class, or a sequence (`x => x, 1`) is "not a function literal". Async functions and generators are refused too, because what they return is a promise or an iterator, never data. Both sandbox kinds give the same answer. An expression compiled this way can only be `Call`ed: its `Eval` always fails with `EvaluationFailed`, because the result is a function. `MakeTemplate` refuses the option with `InvalidTemplate`.
+
 ### Clock and seed
 
 ```go
@@ -237,6 +243,7 @@ func WithRandomSeed(ctx context.Context, seed uint64) context.Context
 
 func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
 func WithUndefinedCoercion(coercion Coercion) Option // Loose or Strict (default)
+func AsFunction() Option                             // Compile only: refuse anything but a function literal
 func WithMemoryLimit(bytes int64) SandboxOption
 func WithMaxConcurrency(jobs int) SandboxOption
 func WithBuildTimeout(timeout time.Duration) SandboxOption

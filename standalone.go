@@ -10,11 +10,24 @@ type standalone struct {
 }
 
 func compileStandalone(source string, configured settings) (*standalone, error) {
-	compiled, err := compileExpression(source, bare)
+	compiled, err := compileBare(source, configured)
 	if err != nil {
 		return nil, fail(InvalidTemplate, "%s: %w", bare.around(source), err)
 	}
 	return &standalone{compiled: compiled, settings: configured}, nil
+}
+
+func compileBare(source string, configured settings) (expression, error) {
+	parsed, err := parseCode(source)
+	if err != nil {
+		return expression{}, err
+	}
+	if configured.function {
+		if err := parsed.refuseUnlessFunction(); err != nil {
+			return expression{}, err
+		}
+	}
+	return parsed.compile(bare)
 }
 
 func (s *standalone) prepare(request work) (prepared, error) {

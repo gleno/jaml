@@ -27,6 +27,9 @@ var (
 	errEmptyExpression  = errors.New("empty expression")
 	errNotOneExpression = errors.New("syntax error: write a single JavaScript expression")
 	errCostlyEnds       = fmt.Errorf("finding where its expressions end would parse more than %d times its length", endSearchParsesPerByte)
+	errNotFunction      = errors.New("not a function literal: write an arrow function or a function expression")
+	errAsyncFunction    = errors.New("an async function returns a promise, not data")
+	errGenerator        = errors.New("a generator function returns an iterator, not data")
 )
 
 type expression struct {
@@ -39,19 +42,63 @@ func (e expression) written() string {
 	return e.opened.around(e.source)
 }
 
+type parsedCode struct {
+	source  string
+	program *ast.Program
+}
+
 func compileExpression(source string, opened delimiter) (expression, error) {
+	parsed, err := parseCode(source)
+	if err != nil {
+		return expression{}, err
+	}
+	return parsed.compile(opened)
+}
+
+func parseCode(source string) (parsedCode, error) {
 	if err := refuseLongCode(source); err != nil {
-		return expression{}, err
+		return parsedCode{}, err
 	}
-	parsed, err := parseExpression(source)
+	program, err := parseExpression(source)
 	if err != nil {
-		return expression{}, err
+		return parsedCode{}, err
 	}
-	program, err := goja.CompileAST(parsed, true)
+	return parsedCode{source: source, program: program}, nil
+}
+
+func (p parsedCode) compile(opened delimiter) (expression, error) {
+	program, err := goja.CompileAST(p.program, true)
 	if err != nil {
-		return expression{}, describeSyntaxError(source, err)
+		return expression{}, describeSyntaxError(p.source, err)
 	}
-	return expression{source: source, opened: opened, program: program}, nil
+	return expression{source: p.source, opened: opened, program: program}, nil
+}
+
+func (p parsedCode) refuseUnlessFunction() error {
+	statement, isStatement := p.program.Body[1].(*ast.ExpressionStatement)
+	if !isStatement {
+		return errNotFunction
+	}
+	sequence, isSequence := statement.Expression.(*ast.SequenceExpression)
+	if !isSequence || len(sequence.Sequence) != 2 {
+		return errNotFunction
+	}
+	switch literal := sequence.Sequence[1].(type) {
+	case *ast.ArrowFunctionLiteral:
+		if literal.Async {
+			return errAsyncFunction
+		}
+		return nil
+	case *ast.FunctionLiteral:
+		switch {
+		case literal.Async:
+			return errAsyncFunction
+		case literal.Generator:
+			return errGenerator
+		}
+		return nil
+	}
+	return errNotFunction
 }
 
 func refuseLongCode(code string) error {
