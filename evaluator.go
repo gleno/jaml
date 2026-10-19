@@ -29,10 +29,10 @@ func init() {
 	if os.Getenv(evaluatorMarker) != "1" {
 		return
 	}
-	os.Exit(serveEvaluations())
+	os.Exit(serveEvaluations(os.NewFile(responsesFD, "jaml-responses")))
 }
 
-func serveEvaluations() int {
+func serveEvaluations(answers io.Writer) int {
 	world, err := worldFromEnv()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
@@ -43,21 +43,22 @@ func serveEvaluations() int {
 	if watch.orphaned() {
 		return exitOrphaned
 	}
-	var replies = &_ReplyWriter{out: os.NewFile(responsesFD, "jaml-responses"), frames: framesFor(world.limit)}
+	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
-	var serving = &_Evaluator{watch: watch, replies: replies, units: map[uint64]_Servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
+	var serving = &_Evaluator{watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	go serving.obey(json.NewDecoder(os.NewFile(controlFD, "jaml-control")))
 	return serving.follow(json.NewDecoder(os.NewFile(requestsFD, "jaml-requests")))
+}
+
+func stuckAfterCancel(job uint64) {
+	fmt.Fprintf(os.Stderr, "jaml evaluator: job %d was still running %s after it was told to stop\n", job, cancelGrace)
+	os.Exit(exitStuckAfterCancel)
 }
 
 type _Evaluator struct {
 	watch   *_HeapWatch
 	replies *_ReplyWriter
-	mu      sync.Mutex
-	arrived uint64
-	units   map[uint64]_Servable
-	running map[uint64]context.CancelFunc
-	ended   map[uint64]struct{}
+	jobs    *_JobTable
 }
 
 func (e *_Evaluator) follow(requests *json.Decoder) int {
@@ -89,9 +90,9 @@ func (e *_Evaluator) obey(control *json.Decoder) {
 		}
 		switch incoming.Op {
 		case opCancel:
-			e.end(incoming.Job)
+			e.jobs.cancel(incoming.Job)
 		case opForget:
-			e.forget(incoming.Unit)
+			e.jobs.forget(incoming.Unit)
 		default:
 			fmt.Fprintf(os.Stderr, "jaml evaluator: a malformed %q control message\n", incoming.Op)
 			os.Exit(exitProtocolBroken)
@@ -102,19 +103,19 @@ func (e *_Evaluator) obey(control *json.Decoder) {
 func (e *_Evaluator) accept(incoming _Request) error {
 	switch {
 	case incoming.Op == opBuild && incoming.Plan != nil:
-		ctx, err := e.begin(incoming.Job)
+		ctx, err := e.jobs.begin(incoming.Job)
 		if err != nil {
 			return err
 		}
 		go e.build(ctx, incoming.Job, *incoming.Plan)
 	case incoming.Op == opServe && incoming.Work != nil:
-		ctx, err := e.begin(incoming.Job)
+		ctx, err := e.jobs.begin(incoming.Job)
 		if err != nil {
 			return err
 		}
-		var held = e.holding(incoming.Unit)
+		var held = e.jobs.holding(incoming.Unit)
 		if held == nil {
-			e.finish(incoming.Job)
+			e.jobs.settle(incoming.Job)
 			e.replies.write(e.replies.frames.missing(incoming.Job))
 			return nil
 		}
@@ -125,94 +126,48 @@ func (e *_Evaluator) accept(incoming _Request) error {
 	return nil
 }
 
-func (e *_Evaluator) begin(job uint64) (context.Context, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if job <= e.arrived {
-		return nil, fmt.Errorf("job %d arrived after job %d", job, e.arrived)
-	}
-	e.arrived = job
-	ctx, cancel := context.WithCancel(context.Background())
-	e.running[job] = cancel
-	if _, gone := e.ended[job]; gone {
-		delete(e.ended, job)
-		cancel()
-	}
-	return ctx, nil
-}
-
-func (e *_Evaluator) holding(unit uint64) _Servable {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.units[unit]
-}
-
-func (e *_Evaluator) end(job uint64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if cancel := e.running[job]; cancel != nil {
-		cancel()
-		return
-	}
-	if job > e.arrived {
-		e.ended[job] = struct{}{}
-	}
-}
-
-func (e *_Evaluator) forget(unit uint64) {
-	e.mu.Lock()
-	delete(e.units, unit)
-	e.mu.Unlock()
-	e.end(unit)
-}
-
 func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
 	var built _Servable
 	var err error
 	e.watch.during(func() { built, err = plan.build(ctx) })
-	e.mu.Lock()
-	if err == nil && ctx.Err() == nil {
-		e.units[job] = built
-	}
-	e.mu.Unlock()
-	e.finish(job)
-	if err != nil {
+	switch {
+	case err != nil:
+		e.jobs.settle(job)
 		e.replies.write(e.replies.frames.failure(job, "", err))
-		return
+	case e.jobs.keep(job, built):
+		e.replies.write(e.replies.frames.built(job))
+	default:
+		e.replies.write(e.replies.frames.failure(job, "", cancelled(ctx)))
 	}
-	e.replies.write(e.replies.frames.built(job))
 }
 
 func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {
-	defer e.finish(job)
+	var path = selectedPath(request.Path).String()
 	run, err := held.prepare(request)
 	if err != nil {
+		e.jobs.settle(job)
 		e.replies.write(e.replies.frames.failure(job, "", err))
 		return
 	}
 	var sealed []byte
 	e.watch.during(func() {
 		result, err := run(ctx)
-		if err != nil {
-			sealed = e.replies.frames.failure(job, selectedPath(request.Path).String(), err)
-			return
+		var told = e.jobs.settle(job)
+		switch {
+		case err != nil:
+			sealed = e.replies.frames.failure(job, path, err)
+		case told:
+			sealed = e.replies.frames.failure(job, path, located(path, cancelled(ctx)))
+		default:
+			sealed = e.replies.frames.answer(job, result)
 		}
-		sealed = e.replies.frames.answer(job, result)
 	})
 	e.replies.write(sealed)
 }
 
-func (e *_Evaluator) finish(job uint64) {
-	e.mu.Lock()
-	var cancel = e.running[job]
-	delete(e.running, job)
-	e.mu.Unlock()
-	cancel()
-}
-
 type _ReplyWriter struct {
 	mu     sync.Mutex
-	out    *os.File
+	out    io.Writer
 	frames _Frames
 }
 

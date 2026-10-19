@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const requestChunk = 64 << 10
+
 var (
 	errLost    = errors.New("the evaluator died before the request was written")
 	errMissing = errors.New("the evaluator holds no such unit")
@@ -17,6 +19,7 @@ var (
 type _Wire struct {
 	writer    chan struct{}
 	requests  *os.File
+	stall     *_Quiet
 	sent      uint64
 	control   sync.Mutex
 	controls  *os.File
@@ -48,7 +51,7 @@ type _Call struct {
 }
 
 func newWire(requests, controls *os.File) *_Wire {
-	return &_Wire{writer: make(chan struct{}, 1), requests: requests, controls: controls, residents: map[*_RemoteUnit]*_Residency{}}
+	return &_Wire{writer: make(chan struct{}, 1), requests: requests, stall: &_Quiet{meaning: errNotReading}, controls: controls, residents: map[*_RemoteUnit]*_Residency{}}
 }
 
 func settledWith(result _Outcome) *_Residency {
@@ -94,8 +97,6 @@ func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 	}
 	l.claim(r, asked.job)
 	var overdue = race.done()
-	var delivered <-chan struct{}
-	var grace <-chan time.Time
 	for {
 		select {
 		case incoming := <-asked.replies:
@@ -112,15 +113,7 @@ func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 			overdue = nil
 			l.settle(r, race.await())
 			early(race.await())
-			delivered = l.tell(_Request{Op: opForget, Unit: asked.job})
-		case <-delivered:
-			delivered = nil
-			var timer = time.NewTimer(cancelGrace)
-			defer timer.Stop()
-			grace = timer.C
-		case <-grace:
-			grace = nil
-			l.kill(context.Cause(race.bound))
+			defer l.backstop(l.tell(_Request{Op: opCancel, Job: asked.job}), l.quiet)()
 		}
 	}
 }
@@ -189,8 +182,6 @@ func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
 		return l.unsent(err)
 	}
 	var stopped = ctx.Done()
-	var delivered <-chan struct{}
-	var grace <-chan time.Time
 	for {
 		select {
 		case incoming := <-sent.replies:
@@ -199,15 +190,7 @@ func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
 			return l.final(sent, servedFrom)
 		case <-stopped:
 			stopped = nil
-			delivered = l.tell(_Request{Op: opCancel, Job: sent.job})
-		case <-delivered:
-			delivered = nil
-			var timer = time.NewTimer(cancelGrace)
-			defer timer.Stop()
-			grace = timer.C
-		case <-grace:
-			grace = nil
-			l.kill(cancelled(ctx))
+			defer l.backstop(l.tell(_Request{Op: opCancel, Job: sent.job}), l.quiet)()
 		}
 	}
 }
@@ -248,11 +231,26 @@ func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
 	}
 	l.wire.sent = outgoing.Job
 	var replies = l.board.expect(outgoing.Job, outgoing.Op)
-	if _, err := l.wire.requests.Write(append(encoded, '\n')); err != nil {
+	defer l.backstop(ctx.Done(), l.wire.stall)()
+	if err := l.wire.write(append(encoded, '\n')); err != nil {
 		l.end()
 		return _Call{}, errLost
 	}
 	return _Call{job: outgoing.Job, replies: replies}, nil
+}
+
+func (w *_Wire) write(request []byte) error {
+	for len(request) > 0 {
+		var chunk = request[:min(len(request), requestChunk)]
+		w.stall.waiting()
+		written, err := w.requests.Write(chunk)
+		w.stall.heard()
+		if err != nil {
+			return err
+		}
+		request = request[written:]
+	}
+	return nil
 }
 
 func (l *_Life) final(c _Call, judged func(_Reply) _Outcome) _Outcome {
@@ -280,6 +278,38 @@ func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 		}
 	}()
 	return delivered
+}
+
+func (l *_Life) backstop(told <-chan struct{}, quiet *_Quiet) func() {
+	var answered = make(chan struct{})
+	go func() {
+		select {
+		case <-told:
+		case <-answered:
+			return
+		case <-l.ended:
+			return
+		}
+		var since = time.Now()
+		var timer = time.NewTimer(backstopSilence)
+		defer timer.Stop()
+		for {
+			select {
+			case <-answered:
+				return
+			case <-l.ended:
+				return
+			case <-timer.C:
+			}
+			var silence = min(time.Since(since), quiet.lasted())
+			if silence >= backstopSilence {
+				l.kill(quiet.meaning)
+				return
+			}
+			timer.Reset(backstopSilence - silence)
+		}
+	}()
+	return sync.OnceFunc(func() { close(answered) })
 }
 
 func (l *_Life) listen(replies *_ReplyStream, greeted chan<- _Greeting) {

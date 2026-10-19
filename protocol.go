@@ -15,8 +15,9 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 9
+	protocolVersion      = 10
 	exitMemoryLimit      = 86
+	exitStuckAfterCancel = 89
 	requestsFD           = 3
 	responsesFD          = 4
 	controlFD            = 5

@@ -25,12 +25,15 @@ const (
 	runtimeOutOfMemory     = "fatal error: runtime: out of memory"
 	pressureMarker         = "jaml evaluator: the live heap passed three quarters of its ceiling"
 	cancelGrace            = 250 * time.Millisecond
+	backstopSilence        = 20 * cancelGrace
 	evaluatorStartDeadline = 30 * time.Second
 )
 
 var (
-	errHungUp  = errors.New("the evaluator hung up")
-	errRetired = errors.New("retired after replaying one job alone")
+	errHungUp     = errors.New("the evaluator hung up")
+	errRetired    = errors.New("retired after replaying one job alone")
+	errSilent     = fmt.Errorf("the evaluator stopped answering for %s after it was told to stop a job", backstopSilence)
+	errNotReading = fmt.Errorf("the evaluator was not reading requests for %s after a caller's context ended", backstopSilence)
 )
 
 type _EvaluatorWorld struct {
@@ -58,6 +61,7 @@ type _Life struct {
 	buildTimeout time.Duration
 	wire         *_Wire
 	board        *_Switchboard
+	quiet        *_Quiet
 }
 
 type _Ending interface {
@@ -191,10 +195,11 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, <-chan _Greeting, error
 		buildTimeout: spec.buildTimeout,
 		wire:         newWire(requests.writer, control.writer),
 		board:        &_Switchboard{pending: map[uint64]*_Expectation{}},
+		quiet:        &_Quiet{meaning: errSilent},
 	}
 	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	var greeted = make(chan _Greeting, 1)
-	go born.listen(&_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit)}, greeted)
+	go born.listen(&_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit), quiet: born.quiet}, greeted)
 	go func() {
 		var ending = endingOf(cmd, cmd.Wait())
 		born.reap()
@@ -334,6 +339,8 @@ func (c _Collected) verdict(r _Remains) error {
 	switch {
 	case c.state.ExitCode() == exitMemoryLimit:
 		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", r.limit))
+	case c.state.ExitCode() == exitStuckAfterCancel:
+		return fmt.Errorf("evaluator exited (%s): a job stuck after cancel was still inside a built-in %s after it was told to stop", c.state, cancelGrace)
 	case reason == runtimeOutOfMemory:
 		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s): %s", c.state, reason))
 	case killedOutright(c.state) && r.killCause != nil:
@@ -374,6 +381,28 @@ func peakNote(state *os.ProcessState) string {
 type _ReplyStream struct {
 	lines  *bufio.Reader
 	frames _Frames
+	quiet  *_Quiet
+}
+
+type _Quiet struct {
+	since   atomic.Int64
+	meaning error
+}
+
+func (q *_Quiet) waiting() {
+	q.since.Store(time.Now().UnixNano())
+}
+
+func (q *_Quiet) heard() {
+	q.since.Store(0)
+}
+
+func (q *_Quiet) lasted() time.Duration {
+	var since = q.since.Load()
+	if since == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, since))
 }
 
 func (s *_ReplyStream) read(target any) error {
@@ -390,7 +419,9 @@ func (s *_ReplyStream) read(target any) error {
 func (s *_ReplyStream) frame() ([]byte, error) {
 	var frame []byte
 	for {
+		s.quiet.waiting()
 		chunk, err := s.lines.ReadSlice('\n')
+		s.quiet.heard()
 		if len(frame)+len(chunk) > s.frames.limit+1 {
 			return nil, s.frames.oversized()
 		}

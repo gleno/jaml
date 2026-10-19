@@ -180,6 +180,7 @@ func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 		"an uncollected exit after our kill":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
 		"an uncollected exit keeps its panic": {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: panicked, limit: 64 << 20}, false, "could not be collected (no child processes): panic: boom"},
 		"an uncollected exit under pressure":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
+		"an exit 89 is stuck after cancel":    {_Collected{state: exited(t, "exit 89").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "a job stuck after cancel was still inside a built-in 250ms after it was told to stop"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
