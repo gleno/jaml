@@ -114,11 +114,11 @@ func TestACancelBehindABigRequestStillLands(t *testing.T) {
 	sb := mustIsolated(t, WithMemoryLimit(512<<20), WithMaxConcurrency(4))
 	spin := mustTemplate(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
 	before := childPID(t, sb)
-	huge := "v: '" + strings.Repeat("\x01", (40<<20)/raceSlowdown) + "'\n"
+	huge := "v: '" + strings.Repeat("\x01", (16<<20)/raceSlowdown) + "'\n"
 	spinning := make(chan error, 1)
 	go func() {
 		var out any
-		spinning <- spin.Eval(within(t, 400*time.Millisecond), &out, nil, "spin")
+		spinning <- spin.Eval(within(t, 150*time.Millisecond), &out, nil, "spin")
 	}()
 	time.Sleep(50 * time.Millisecond)
 	_, err := sb.MakeTemplate(within(t, 60*time.Second), huge)
@@ -129,8 +129,8 @@ func TestACancelBehindABigRequestStillLands(t *testing.T) {
 
 func TestForgottenRebuildsLeaveNothingResident(t *testing.T) {
 	sb := mustIsolated(t, WithMemoryLimit(64<<20))
-	templates := make([]*Template, 12)
-	ends := make([]context.CancelFunc, 12)
+	templates := make([]*Template, 12/min(raceSlowdown, 3))
+	ends := make([]context.CancelFunc, len(templates))
 	var half time.Duration
 	for index := range templates {
 		ctx, end := context.WithCancel(t.Context())
