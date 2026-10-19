@@ -31,8 +31,8 @@ func TestSecureAndTrustedShareTheLocalZone(t *testing.T) {
 		previous := time.Local
 		time.Local = location
 		text := "h: ${ new Date(0).getHours() }\n"
-		trusted := evalAs[int](t, mustTemplate(t, text), nil, "h")
-		secure := secureEvalAs[int](t, mustSecure(t, text), nil, "h")
+		trusted := evalAs[int](t, mustTemplate(t, mustSandbox(t, trustedKind), text), nil, "h")
+		secure := isolatedEvalAs[int](t, mustTemplate(t, mustIsolated(t), text), nil, "h")
 		time.Local = previous
 		expectEqual(t, trusted, hour)
 		expectEqual(t, secure, trusted)
@@ -40,7 +40,7 @@ func TestSecureAndTrustedShareTheLocalZone(t *testing.T) {
 }
 
 func TestTheEvaluatorHasItsOwnProcessGroup(t *testing.T) {
-	pid := evaluatorPID(mustSecure(t, "v: ${ 1 }\n"))
+	pid := childPID(t, mustIsolated(t))
 	group, err := syscall.Getpgid(pid)
 	if err != nil {
 		t.Fatal(err)
@@ -49,8 +49,8 @@ func TestTheEvaluatorHasItsOwnProcessGroup(t *testing.T) {
 }
 
 func TestTheMemoryLimitBoundsGrowthOverTheHostsHeap(t *testing.T) {
-	template := mustSecure(t, "v: \"${ 'x'.repeat(24 << 20).length }\"\n", WithMemoryLimit(ballastLimit))
-	expectEqual(t, secureEvalAs[int](t, template, nil, "v"), 24<<20)
+	template := mustTemplate(t, mustIsolated(t, WithMemoryLimit(ballastLimit)), "v: \"${ 'x'.repeat(24 << 20).length }\"\n")
+	expectEqual(t, isolatedEvalAs[int](t, template, nil, "v"), 24<<20)
 	expectEqual(t, len(hostBallast), 0)
 }
 
@@ -65,13 +65,13 @@ func TestOnlyANamedZoneIsForwarded(t *testing.T) {
 
 const tokyoZoneFile = "/usr/share/zoneinfo/Asia/Tokyo"
 
-func hoursAtEpochInBothModes(t *testing.T, local *time.Location) (int, int) {
+func hoursAtEpochInBothKinds(t *testing.T, local *time.Location) (int, int) {
 	t.Helper()
 	previous := time.Local
 	time.Local = local
 	defer func() { time.Local = previous }()
 	text := "h: ${ new Date(0).getHours() }\n"
-	return evalAs[int](t, mustTemplate(t, text), nil, "h"), secureEvalAs[int](t, mustSecure(t, text), nil, "h")
+	return evalAs[int](t, mustTemplate(t, mustSandbox(t, trustedKind), text), nil, "h"), isolatedEvalAs[int](t, mustTemplate(t, mustIsolated(t), text), nil, "h")
 }
 
 func tokyoZoneData(t *testing.T) []byte {
@@ -88,7 +88,7 @@ func TestAZoneNamedByItsFileFollowsTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trusted, secure := hoursAtEpochInBothModes(t, local)
+	trusted, secure := hoursAtEpochInBothKinds(t, local)
 	expectEqual(t, trusted, 9)
 	expectEqual(t, secure, trusted)
 }
@@ -109,7 +109,7 @@ func TestAZoneFoundThroughZoneinfoFollowsTheHost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		trusted, secure := hoursAtEpochInBothModes(t, local)
+		trusted, secure := hoursAtEpochInBothKinds(t, local)
 		expectEqual(t, trusted, 9)
 		expectEqual(t, secure, trusted)
 	})

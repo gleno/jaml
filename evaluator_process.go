@@ -14,20 +14,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
 	stderrHeadBytes    = 4096
 	runtimeOutOfMemory = "fatal error: runtime: out of memory"
+	cancelGrace        = 250 * time.Millisecond
 )
 
 var errHungUp = errors.New("the evaluator hung up")
-
-type evaluatorSpec struct {
-	blueprint   blueprint
-	memoryLimit memoryLimit
-}
 
 type evaluatorWorld struct {
 	limit  memoryLimit
@@ -36,46 +33,69 @@ type evaluatorWorld struct {
 	zone   []string
 }
 
-type evaluatorProcess struct {
-	cmd      *exec.Cmd
-	requests *os.File
-	replies  *json.Decoder
-	dead     chan struct{}
-	once     sync.Once
-	cause    error
+type childSpec struct {
+	lifetime     context.Context
+	limit        memoryLimit
+	buildTimeout time.Duration
 }
 
-func spawnEvaluator(ctx, lifetime context.Context, spec evaluatorSpec) (*evaluatorProcess, error) {
+type evaluatorProcess struct {
+	cmd     *exec.Cmd
+	dead    chan struct{}
+	once    sync.Once
+	cause   error
+	line    *conversation
+	catalog *catalog
+}
+
+type conversation struct {
+	writing  sync.Mutex
+	requests *os.File
+	jobs     atomic.Uint64
+	mu       sync.Mutex
+	pending  map[uint64]chan reply
+}
+
+type catalog struct {
+	buildTimeout time.Duration
+	mu           sync.Mutex
+	built        map[uint64]*building
+}
+
+type building struct {
+	done   chan struct{}
+	result outcome
+}
+
+type answer struct {
+	at    string
+	final reply
+	died  bool
+}
+
+func spawnEvaluator(ctx context.Context, spec childSpec) (*evaluatorProcess, error) {
 	if ctx.Err() != nil {
-		return nil, cancelled(ctx)
+		return nil, startFailure(cancelled(ctx))
 	}
-	world := currentWorld(spec.memoryLimit)
-	process, err := world.start(lifetime)
+	bounded, stop := context.WithTimeoutCause(ctx, spec.buildTimeout, fmt.Errorf("the evaluator took longer than %s to start: %w", spec.buildTimeout, context.DeadlineExceeded))
+	defer stop()
+	world := currentWorld(spec.limit)
+	process, replies, err := world.start(spec)
 	if err != nil {
-		return nil, err
+		return nil, startFailure(err)
 	}
-	if err := process.handshake(ctx, world.nonce, spec.blueprint); err != nil {
-		return nil, process.abandon(err)
+	if err := process.greet(bounded, replies, world.nonce); err != nil {
+		return nil, startFailure(process.abandon(err))
 	}
+	go process.listen(replies)
 	return process, nil
 }
 
-func (p *evaluatorProcess) handshake(ctx context.Context, nonce string, plan blueprint) error {
-	if err := p.greet(ctx, nonce); err != nil {
+func startFailure(err error) error {
+	if _, isTemplateError := err.(templateError); isTemplateError {
 		return err
 	}
-	encoded, err := encodeRequest(plan)
-	if err != nil {
-		return err
-	}
-	var refused *failure
-	if err := p.within(ctx, func() error { return p.ask(encoded, &refused) }); err != nil {
-		return err
-	}
-	if refused != nil {
-		return refused.rebuild()
-	}
-	return nil
+	return fail(EvaluationFailed, "starting the evaluator: %w", err)
 }
 
 func currentWorld(limit memoryLimit) evaluatorWorld {
@@ -120,19 +140,19 @@ func (w evaluatorWorld) env() []string {
 	return append(env, w.zone...)
 }
 
-func (w evaluatorWorld) start(lifetime context.Context) (*evaluatorProcess, error) {
+func (w evaluatorWorld) start(spec childSpec) (*evaluatorProcess, *json.Decoder, error) {
 	image, err := selfImage()
 	if err != nil {
-		return nil, fmt.Errorf("finding this executable: %w", err)
+		return nil, nil, fmt.Errorf("finding this executable: %w", err)
 	}
 	requestsRead, requestsWrite, err := os.Pipe()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	repliesRead, repliesWrite, err := os.Pipe()
 	if err != nil {
 		closeAll(requestsRead, requestsWrite)
-		return nil, err
+		return nil, nil, err
 	}
 	stderr := &headBuffer{limit: stderrHeadBytes}
 	cmd := exec.Command(image)
@@ -144,16 +164,21 @@ func (w evaluatorWorld) start(lifetime context.Context) (*evaluatorProcess, erro
 	closeAll(requestsRead, repliesWrite)
 	if err != nil {
 		closeAll(requestsWrite, repliesRead)
-		return nil, err
+		return nil, nil, err
 	}
-	process := &evaluatorProcess{cmd: cmd, requests: requestsWrite, replies: json.NewDecoder(repliesRead), dead: make(chan struct{})}
-	unbind := context.AfterFunc(lifetime, func() { process.die(fmt.Errorf("template closed: %w", context.Cause(lifetime))) })
+	process := &evaluatorProcess{
+		cmd:     cmd,
+		dead:    make(chan struct{}),
+		line:    &conversation{requests: requestsWrite, pending: map[uint64]chan reply{}},
+		catalog: &catalog{buildTimeout: spec.buildTimeout, built: map[uint64]*building{}},
+	}
+	unbind := context.AfterFunc(spec.lifetime, func() { process.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	go process.reap(func() error {
 		closeAll(requestsWrite, repliesRead)
 		unbind()
 		return w.describeExit(cmd.ProcessState, stderr)
 	})
-	return process, nil
+	return process, json.NewDecoder(repliesRead), nil
 }
 
 func (w evaluatorWorld) describeExit(state *os.ProcessState, stderr *headBuffer) error {
@@ -171,27 +196,26 @@ func (w evaluatorWorld) describeExit(state *os.ProcessState, stderr *headBuffer)
 
 func (p *evaluatorProcess) reap(bury func() error) {
 	_ = p.cmd.Wait()
-	p.die(bury())
+	p.kill(bury())
 	close(p.dead)
 }
 
-func (p *evaluatorProcess) die(cause error) {
+func (p *evaluatorProcess) kill(cause error) {
 	if cause != nil {
 		p.once.Do(func() { p.cause = cause })
 	}
 	_ = p.cmd.Process.Kill()
 }
 
-func (p *evaluatorProcess) failWith(cause error) error {
-	p.die(cause)
-	<-p.dead
-	return p.cause
-}
-
 func (p *evaluatorProcess) abandon(cause error) error {
-	p.die(cause)
+	p.kill(cause)
 	<-p.dead
 	return cause
+}
+
+func (p *evaluatorProcess) deathCause() error {
+	<-p.dead
+	return p.cause
 }
 
 func (p *evaluatorProcess) alive() bool {
@@ -203,12 +227,17 @@ func (p *evaluatorProcess) alive() bool {
 	}
 }
 
-func (p *evaluatorProcess) greet(ctx context.Context, nonce string) error {
+func (p *evaluatorProcess) greet(ctx context.Context, replies *json.Decoder, nonce string) error {
 	var greeting hello
-	err := p.within(ctx, func() error { return p.read(&greeting) })
+	read := make(chan error, 1)
+	go func() { read <- decodeReply(replies, &greeting) }()
+	var err error
+	select {
+	case err = <-read:
+	case <-ctx.Done():
+		return cancelled(ctx)
+	}
 	switch {
-	case err != nil && ctx.Err() != nil:
-		return err
 	case err != nil:
 		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", err)
 	case greeting.Magic != evaluatorMagic || greeting.Nonce != nonce:
@@ -219,37 +248,213 @@ func (p *evaluatorProcess) greet(ctx context.Context, nonce string) error {
 	return nil
 }
 
-func (p *evaluatorProcess) render(ctx context.Context, job rendering) (string, []byte, error) {
-	encoded, err := encodeRequest(job)
+func (p *evaluatorProcess) listen(replies *json.Decoder) {
+	for {
+		var incoming reply
+		if err := decodeReply(replies, &incoming); err != nil {
+			if !errors.Is(err, errHungUp) {
+				p.kill(err)
+			}
+			return
+		}
+		if err := incoming.malformed(); err != nil {
+			p.kill(err)
+			return
+		}
+		if err := p.line.deliver(incoming); err != nil {
+			p.kill(err)
+			return
+		}
+	}
+}
+
+func (p *evaluatorProcess) exchange(ctx context.Context, outgoing request) (answer, error) {
+	job := p.line.jobs.Add(1)
+	encoded, err := encodeRequest(outgoing.withJob(job))
 	if err != nil {
-		return "", nil, located("", err)
+		return answer{}, err
 	}
-	var choice selection
-	var reply rendered
-	err = p.within(ctx, func() error {
-		if err := p.ask(encoded, &choice); err != nil {
-			return err
+	replies := p.line.register(job)
+	defer p.line.close(job)
+	if err := p.line.write(encoded); err != nil {
+		p.kill(nil)
+		<-p.dead
+		return answer{died: true}, nil
+	}
+	return p.await(ctx, job, replies), nil
+}
+
+func (p *evaluatorProcess) await(ctx context.Context, job uint64, replies <-chan reply) answer {
+	var at string
+	var grace <-chan time.Time
+	stopped := ctx.Done()
+	for {
+		select {
+		case incoming := <-replies:
+			if incoming.At == nil {
+				return answer{at: at, final: incoming}
+			}
+			at = *incoming.At
+		case <-p.dead:
+			return answer{at: at, died: true}
+		case <-stopped:
+			stopped = nil
+			go p.line.tell(request{Op: opCancel, Job: job})
+			timer := time.NewTimer(cancelGrace)
+			defer timer.Stop()
+			grace = timer.C
+		case <-grace:
+			grace = nil
+			p.kill(cancelled(ctx))
 		}
-		if err := choice.malformed(); err != nil || choice.Failure != nil {
-			return err
+	}
+}
+
+func (c *conversation) register(job uint64) <-chan reply {
+	replies := make(chan reply, 2)
+	c.mu.Lock()
+	c.pending[job] = replies
+	c.mu.Unlock()
+	return replies
+}
+
+func (c *conversation) close(job uint64) {
+	c.mu.Lock()
+	delete(c.pending, job)
+	c.mu.Unlock()
+}
+
+func (c *conversation) deliver(incoming reply) error {
+	c.mu.Lock()
+	waiting := c.pending[incoming.Job]
+	c.mu.Unlock()
+	if waiting == nil {
+		return nil
+	}
+	select {
+	case waiting <- incoming:
+		return nil
+	default:
+		return fmt.Errorf("the evaluator answered job %d more than twice", incoming.Job)
+	}
+}
+
+func (c *conversation) tell(outgoing request) {
+	if encoded, err := encodeRequest(outgoing); err == nil {
+		_ = c.write(encoded)
+	}
+}
+
+func (c *conversation) write(encoded []byte) error {
+	c.writing.Lock()
+	defer c.writing.Unlock()
+	if _, err := c.requests.Write(encoded); err != nil {
+		return errHungUp
+	}
+	return nil
+}
+
+func (p *evaluatorProcess) ensureBuilt(ctx context.Context, unit unitRef) outcome {
+	for {
+		pending, claimed := p.catalog.claim(unit.id)
+		if claimed {
+			pending.result = p.build(ctx, unit)
+			if pending.result.failed() {
+				p.catalog.drop(unit.id)
+			}
+			close(pending.done)
+			return pending.result
 		}
-		return p.read(&reply)
-	})
+		select {
+		case <-pending.done:
+			if !pending.result.failed() {
+				return outcome{}
+			}
+		case <-p.dead:
+			return outcome{died: true}
+		case <-ctx.Done():
+			return outcome{err: cancelled(ctx)}
+		}
+	}
+}
+
+func (p *evaluatorProcess) build(ctx context.Context, unit unitRef) outcome {
+	bounded, stop := context.WithTimeoutCause(ctx, p.catalog.buildTimeout, fmt.Errorf("the build took longer than its timeout of %s: %w", p.catalog.buildTimeout, context.DeadlineExceeded))
+	defer stop()
+	plan := unit.plan
+	answered, err := p.exchange(bounded, request{Op: opBuild, Unit: unit.id, Plan: &plan})
 	switch {
-	case err != nil && choice.malformed() != nil:
-		return "", nil, located("", err)
 	case err != nil:
-		return "", nil, located(choice.At, err)
-	case choice.Failure != nil:
-		return "", nil, choice.Failure.rebuild()
+		return outcome{err: err}
+	case answered.died:
+		return outcome{died: true, err: p.culprit(bounded)}
+	case answered.final.Built && ctx.Err() != nil:
+		p.forget(unit.id)
+		return outcome{err: cancelled(ctx)}
+	case answered.final.Built:
+		return outcome{}
+	case answered.final.Failure != nil:
+		return outcome{err: answered.final.Failure.rebuild()}
+	case bounded.Err() != nil:
+		return outcome{err: cancelled(bounded)}
 	}
-	if err := reply.malformed(); err != nil {
-		return "", nil, located(choice.At, p.failWith(err))
+	p.kill(errors.New("the evaluator answered a build with data"))
+	return outcome{died: true}
+}
+
+func (p *evaluatorProcess) serve(ctx context.Context, outgoing request) outcome {
+	answered, err := p.exchange(ctx, outgoing)
+	switch {
+	case err != nil:
+		return outcome{err: err}
+	case answered.died:
+		return outcome{at: answered.at, died: true, err: p.culprit(ctx)}
+	case answered.final.Failure != nil:
+		return outcome{at: answered.at, err: answered.final.Failure.rebuild()}
+	case len(answered.final.Data) != 0:
+		return outcome{at: answered.at, data: answered.final.Data}
 	}
-	if reply.Failure != nil {
-		return "", nil, reply.Failure.rebuild()
+	p.kill(errors.New("the evaluator answered an evaluation with a build"))
+	return outcome{at: answered.at, died: true}
+}
+
+func (p *evaluatorProcess) culprit(ctx context.Context) error {
+	if ctx.Err() == nil {
+		return nil
 	}
-	return choice.At, reply.Data, nil
+	return p.deathCause()
+}
+
+func (p *evaluatorProcess) forget(id uint64) {
+	if p.catalog.drop(id) {
+		go p.line.tell(request{Op: opForget, Unit: id})
+	}
+}
+
+func (c *catalog) claim(id uint64) (*building, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if pending, found := c.built[id]; found {
+		return pending, false
+	}
+	pending := &building{done: make(chan struct{})}
+	c.built[id] = pending
+	return pending, true
+}
+
+func (c *catalog) drop(id uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, found := c.built[id]
+	delete(c.built, id)
+	return found
+}
+
+func (c *catalog) holds(id uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, found := c.built[id]
+	return found
 }
 
 func encodeRequest(outgoing any) ([]byte, error) {
@@ -260,11 +465,16 @@ func encodeRequest(outgoing any) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
-func (p *evaluatorProcess) ask(encoded []byte, incoming any) error {
-	if _, err := p.requests.Write(encoded); err != nil {
+func decodeReply(replies *json.Decoder, into any) error {
+	err := replies.Decode(into)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, os.ErrClosed):
 		return errHungUp
+	default:
+		return fmt.Errorf("reading the evaluator's answer: %w", err)
 	}
-	return p.read(incoming)
 }
 
 func located(at string, err error) error {
@@ -275,37 +485,6 @@ func located(at string, err error) error {
 		return fail(EvaluationFailed, "%w", err)
 	}
 	return fail(EvaluationFailed, "%s: %w", at, err)
-}
-
-func (p *evaluatorProcess) within(ctx context.Context, exchange func() error) error {
-	if ctx.Err() != nil {
-		return cancelled(ctx)
-	}
-	stop := context.AfterFunc(ctx, func() { p.die(cancelled(ctx)) })
-	err := exchange()
-	stopped := stop()
-	switch {
-	case !stopped:
-		return p.failWith(cancelled(ctx))
-	case err == nil:
-		return nil
-	case errors.Is(err, errHungUp):
-		return p.failWith(nil)
-	default:
-		return p.failWith(err)
-	}
-}
-
-func (p *evaluatorProcess) read(into any) error {
-	err := p.replies.Decode(into)
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, os.ErrClosed):
-		return errHungUp
-	default:
-		return fmt.Errorf("reading the evaluator's answer: %w", err)
-	}
 }
 
 func cancelled(ctx context.Context) error {

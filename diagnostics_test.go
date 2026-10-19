@@ -21,10 +21,10 @@ func expectWellFormedAndBounded(t *testing.T, err error) {
 
 func TestAPreviewCutsBetweenCharacters(t *testing.T) {
 	long := strings.Repeat("й", 70)
-	both := evalInBothModes(t, "v: \"${ '"+long+"' + q }\"\n", nil)
+	both := evalInBothKinds(t, "v: \"${ '"+long+"' + q }\"\n", nil)
 	both.expectRefused(t, EvaluationFailed, "$.v: ${'"+strings.Repeat("й", 59)+"…}: ReferenceError: q is not defined")
 	expectWellFormedAndBounded(t, both.trusted)
-	made := makeInBothModes(t, "v: \"${ '"+long+"' + ) }\"\n")
+	made := makeInBothKinds(t, "v: \"${ '"+long+"' + ) }\"\n")
 	made.expectRefused(t, InvalidTemplate, "…")
 	expectWellFormedAndBounded(t, made.trusted)
 }
@@ -40,7 +40,7 @@ func TestSyntaxErrorsCountCharactersAndQuoteWhereTheyPoint(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			makeInBothModes(t, c.text).expectRefused(t, InvalidTemplate, c.expected)
+			makeInBothKinds(t, c.text).expectRefused(t, InvalidTemplate, c.expected)
 		})
 	}
 }
@@ -70,7 +70,7 @@ func TestThrownValuesAreNamedByTheirType(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			both := evalInBothModes(t, expressionTemplate("(() => { "+c.source+" })()"), nil)
+			both := evalInBothKinds(t, expressionTemplate("(() => { "+c.source+" })()"), nil)
 			both.expectRefused(t, EvaluationFailed, c.expected)
 			expectWellFormedAndBounded(t, both.trusted)
 			if len(both.trusted.Error()) > 600 {
@@ -106,44 +106,50 @@ func engineValuesIn(err error) []string {
 }
 
 func TestAThrowKeepsASnapshotAsItsCause(t *testing.T) {
-	var out any
-	err := mustTemplate(t, expressionTemplate("(() => { throw new RangeError('far') })()")).Eval(&out, nil, "v")
-	var snapshot thrown
-	if !errors.As(err, &snapshot) {
-		t.Fatalf("expected a thrown snapshot in %v", err)
-	}
-	expectEqual(t, snapshot, thrown{text: "RangeError: far", jsType: "object"})
-	err = mustTemplate(t, expressionTemplate("(() => { throw { get message() { throw 'inner' } } })()")).Eval(&out, nil, "v")
-	if !errors.As(err, &snapshot) {
-		t.Fatalf("expected a thrown snapshot in %v", err)
-	}
-	expectEqual(t, snapshot, thrown{text: unreadableThrow, jsType: "object", inner: thrown{text: "threw inner", jsType: "string"}})
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var out any
+		err := mustTemplate(t, sb, expressionTemplate("(() => { throw new RangeError('far') })()")).Eval(t.Context(), &out, nil, "v")
+		var caught *Thrown
+		if !errors.As(err, &caught) {
+			t.Fatalf("expected a thrown snapshot in %v", err)
+		}
+		expectEqual(t, caught.Message, "RangeError: far")
+		expectEqual(t, caught.Value, map[string]any{})
+		err = mustTemplate(t, sb, expressionTemplate("(() => { throw { get message() { throw 'inner' } } })()")).Eval(t.Context(), &out, nil, "v")
+		if !errors.As(err, &caught) {
+			t.Fatalf("expected a thrown snapshot in %v", err)
+		}
+		expectEqual(t, caught.Message, unreadableThrow)
+		expectEqual(t, caught.Value, nil)
+	})
 }
 
 func TestNoEngineValueEscapesAnEval(t *testing.T) {
-	cases := map[string]struct {
-		source string
-		vars   map[string]any
-	}{
-		"thrown error":       {source: "(() => { throw new Error('e') })()"},
-		"thrown primitive":   {source: "(() => { throw 10n })()"},
-		"unreadable message": {source: "(() => { throw { get message() { throw new Error('inner') } } })()"},
-		"overflowing getter": {source: "(() => { throw { get message() { return (function f() { return f() })() } } })()"},
-		"throwing getter":    {source: "({ get a() { throw new Error('g') } })"},
-		"deep recursion":     {source: "(function f() { return f() })()"},
-		"refused JSON":       {source: "JSON.parse('['.repeat(5000))"},
-		"engine panic":       {source: "'-'.repeat(width)", vars: map[string]any{"width": 1 << 52}},
-	}
-	for name, c := range cases {
-		t.Run(name, func(t *testing.T) {
-			var out any
-			err := mustTemplate(t, expressionTemplate(c.source)).Eval(&out, c.vars, "v")
-			expectError(t, err, EvaluationFailed)
-			if found := engineValuesIn(err); len(found) > 0 {
-				t.Fatalf("%v reaches %v", err, found)
-			}
-		})
-	}
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		cases := map[string]struct {
+			source string
+			vars   map[string]any
+		}{
+			"thrown error":       {source: "(() => { throw new Error('e') })()"},
+			"thrown primitive":   {source: "(() => { throw 10n })()"},
+			"unreadable message": {source: "(() => { throw { get message() { throw new Error('inner') } } })()"},
+			"overflowing getter": {source: "(() => { throw { get message() { return (function f() { return f() })() } } })()"},
+			"throwing getter":    {source: "({ get a() { throw new Error('g') } })"},
+			"deep recursion":     {source: "(function f() { return f() })()"},
+			"refused JSON":       {source: "JSON.parse('['.repeat(5000))"},
+			"engine panic":       {source: "'-'.repeat(width)", vars: map[string]any{"width": 1 << 52}},
+		}
+		for name, c := range cases {
+			t.Run(name, func(t *testing.T) {
+				var out any
+				err := mustTemplate(t, sb, expressionTemplate(c.source)).Eval(t.Context(), &out, c.vars, "v")
+				expectError(t, err, EvaluationFailed)
+				if found := engineValuesIn(err); len(found) > 0 {
+					t.Fatalf("%v reaches %v", err, found)
+				}
+			})
+		}
+	})
 }
 
 func TestAThrowingGetterNamesItsResultPath(t *testing.T) {
@@ -158,7 +164,7 @@ func TestAThrowingGetterNamesItsResultPath(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			evalInBothModes(t, "v: \"${ "+c.source+" }\"\n", nil).expectRefused(t, EvaluationFailed, "$.v: ", c.expected)
+			evalInBothKinds(t, "v: \"${ "+c.source+" }\"\n", nil).expectRefused(t, EvaluationFailed, "$.v: ", c.expected)
 		})
 	}
 }

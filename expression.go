@@ -30,19 +30,16 @@ var (
 )
 
 type expression struct {
-	source       string
-	interpolated bool
-	program      *goja.Program
+	source  string
+	opened  delimiter
+	program *goja.Program
 }
 
 func (e expression) written() string {
-	if e.interpolated {
-		return interpolation.around(e.source)
-	}
-	return wholeValue.around(e.source)
+	return e.opened.around(e.source)
 }
 
-func compileExpression(source string, interpolated bool) (expression, error) {
+func compileExpression(source string, opened delimiter) (expression, error) {
 	if err := refuseLongCode(source); err != nil {
 		return expression{}, err
 	}
@@ -54,7 +51,7 @@ func compileExpression(source string, interpolated bool) (expression, error) {
 	if err != nil {
 		return expression{}, describeSyntaxError(source, err)
 	}
-	return expression{source: source, interpolated: interpolated, program: program}, nil
+	return expression{source: source, opened: opened, program: program}, nil
 }
 
 func refuseLongCode(code string) error {

@@ -4,7 +4,7 @@ package jaml
 
 import "syscall"
 
-func secureTemplatesSupported() error {
+func isolationSupported() error {
 	return nil
 }
 

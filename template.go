@@ -1,22 +1,26 @@
 package jaml
 
 import (
+	"context"
 	"encoding/json"
-	"reflect"
+	"errors"
 )
+
+var errNotCallable = errors.New("a template cannot be called; compile an expression")
+
+type servable interface {
+	prepare(request work) (prepared, error)
+}
+
+type prepared struct {
+	at  string
+	run func(ctx context.Context) ([]byte, error)
+}
 
 type template struct {
 	root     any
 	texts    map[string]text
 	settings settings
-}
-
-type renderSite func(job rendering) (string, []byte, error)
-
-type evalCall struct {
-	into any
-	vars map[string]any
-	path []string
 }
 
 func makeTemplate(written string, configured settings) (*template, error) {
@@ -31,47 +35,35 @@ func makeTemplate(written string, configured settings) (*template, error) {
 	return &template{root: root, texts: texts, settings: configured}, nil
 }
 
-func evalThrough(renders renderSite, call evalCall) error {
-	target := reflect.ValueOf(call.into)
-	if target.Kind() != reflect.Pointer || target.IsNil() {
-		return fail(InvalidTarget, "Eval needs a non-nil pointer, got %s", describeTarget(call.into))
+func (t *template) prepare(request work) (prepared, error) {
+	if request.Call != nil {
+		return prepared{}, fail(EvaluationFailed, "%w", errNotCallable)
 	}
-	vars, err := encodeVars(call.vars)
+	chosen, err := t.selectPath(request.Path)
 	if err != nil {
-		return fail(EvaluationFailed, "binding vars: %w", err)
+		return prepared{}, err
 	}
-	at, rendered, err := renders(rendering{Path: call.path, Vars: vars})
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(rendered, call.into); err != nil {
-		return fail(CoercionFailed, "%s: %w", blame(at, rendered, err), err)
-	}
-	return nil
+	plan := sessionPlan{vars: request.Vars, pinned: request.Pinned}
+	return prepared{at: chosen.at.String(), run: func(ctx context.Context) ([]byte, error) {
+		engine := &lazySession{ctx: ctx, plan: plan}
+		defer engine.close()
+		return t.renderSubtree(chosen, engine)
+	}}, nil
 }
 
-func (t *template) render(job rendering) (string, []byte, error) {
-	chosen, err := t.selectPath(job.Path)
-	if err != nil {
-		return "", nil, err
-	}
-	rendered, err := t.renderSubtree(chosen, job.Vars)
-	return chosen.at.String(), rendered, err
-}
-
-func (t *template) renderSubtree(chosen subtree, vars encodedVars) ([]byte, error) {
-	renderer := &renderer{template: t, engine: &lazySession{vars: vars}}
+func (t *template) renderSubtree(chosen subtree, engine *lazySession) ([]byte, error) {
+	renderer := &renderer{texts: t.texts, settings: t.settings, engine: engine}
 	tree, err := renderer.render(chosen.node, chosen.at)
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(tree)
-	if err != nil {
-		return nil, fail(CoercionFailed, "%s: %w", chosen.at, err)
-	}
-	return encoded, nil
+	return encodeResult(tree, chosen.at)
 }
 
-func unmadeTemplate() error {
-	return fail(InvalidTemplate, "Eval on a template not made by MakeTrustedTemplate or MakeSecureTemplate")
+func encodeResult(tree any, at *dataPath) ([]byte, error) {
+	encoded, err := json.Marshal(tree)
+	if err != nil {
+		return nil, fail(CoercionFailed, "%s: %w", at, err)
+	}
+	return encoded, nil
 }

@@ -6,9 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -17,55 +17,42 @@ import (
 	"time"
 )
 
+func killChild(t *testing.T, sb *Sandbox) {
+	t.Helper()
+	child := currentChild(t, sb)
+	_ = child.cmd.Process.Kill()
+	expectDeath(t, child)
+}
+
 func TestAQueuedEvalKeepsItsDeadline(t *testing.T) {
-	template := mustSecure(t, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\n")
-	spinning := make(chan error, 1)
-	go func() {
-		var out any
-		spinning <- template.Eval(within(t, 3*time.Second), &out, nil, "spin")
-	}()
-	time.Sleep(100 * time.Millisecond)
-	started := time.Now()
-	var out int
-	expectError(t, evalBounded(t, template, within(t, 100*time.Millisecond), "ok"), EvaluationFailed, "cancelled", "deadline exceeded")
-	if waited := time.Since(started); waited > time.Second {
-		t.Fatalf("a queued Eval waited %s past its 100ms deadline", waited)
-	}
-	_ = out
-	<-spinning
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\n")
+		spinning := make(chan error, 1)
+		go func() {
+			var out any
+			spinning <- template.Eval(within(t, 3*time.Second), &out, nil, "spin")
+		}()
+		time.Sleep(100 * time.Millisecond)
+		started := time.Now()
+		expectError(t, evalBounded(t, template, within(t, 100*time.Millisecond), "ok"), EvaluationFailed, "cancelled", "deadline exceeded")
+		if waited := time.Since(started); waited > time.Second {
+			t.Fatalf("a queued Eval waited %s past its 100ms deadline", waited)
+		}
+		expectError(t, <-spinning, EvaluationFailed, "$.spin: cancelled: context deadline exceeded")
+	}, WithMaxConcurrency(1))
 }
 
 func TestADoneContextLeavesTheEvaluatorAlone(t *testing.T) {
-	template := mustSecure(t, "v: ${ 1 }\n")
-	before := evaluatorPID(template)
-	ctx, cancel := context.WithCancel(context.Background())
+	sb := mustIsolated(t)
+	template := mustTemplate(t, sb, "v: ${ 1 }\n")
+	before := childPID(t, sb)
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var out int
 	expectError(t, template.Eval(ctx, &out, nil, "v"), EvaluationFailed, "cancelled")
-	expectEqual(t, evaluatorPID(template), before)
-	expectEqual(t, secureEvalAs[int](t, template, nil, "v"), 1)
-	expectEqual(t, evaluatorPID(template), before)
-}
-
-func dropATemplate(t *testing.T) int {
-	template, err := MakeSecureTemplate(context.Background(), "v: ${ 1 }\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return evaluatorPID(template)
-}
-
-func TestADroppedTemplateReleasesItsEvaluator(t *testing.T) {
-	pid := dropATemplate(t)
-	deadline := time.Now().Add(10 * time.Second)
-	for syscall.Kill(pid, 0) == nil {
-		if time.Now().After(deadline) {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-			t.Fatalf("evaluator %d outlived its unreachable template", pid)
-		}
-		goruntime.GC()
-		time.Sleep(20 * time.Millisecond)
-	}
+	expectEqual(t, childPID(t, sb), before)
+	expectEqual(t, isolatedEvalAs[int](t, template, nil, "v"), 1)
+	expectEqual(t, childPID(t, sb), before)
 }
 
 const (
@@ -102,47 +89,67 @@ func impersonateAnEvaluator() bool {
 		greeting.Version = 999
 		_ = json.NewEncoder(replies).Encode(greeting)
 	case strconv.Itoa(malformedAnswerLimit):
-		answerOnce(requests, replies, greeting, "{\"data\": nope}\n")
+		answerBadly(requests, replies, greeting, "{\"job\": %d, \"data\": nope}\n")
 	case strconv.Itoa(emptyAnswerLimit):
-		answerOnce(requests, replies, greeting, "{}\n")
+		answerBadly(requests, replies, greeting, "{\"job\": %d}\n")
 	}
 	_, _ = io.Copy(io.Discard, requests)
 	os.Exit(0)
 	return true
 }
 
-func answerOnce(requests, replies *os.File, greeting hello, reply string) {
+func answerBadly(requests, replies *os.File, greeting hello, badAnswer string) {
 	_ = json.NewEncoder(replies).Encode(greeting)
 	incoming := json.NewDecoder(requests)
-	var next json.RawMessage
-	_ = incoming.Decode(&next)
-	_, _ = replies.WriteString("null\n")
-	_ = incoming.Decode(&next)
-	_, _ = replies.WriteString("{\"at\": \"$.v\"}\n" + reply)
+	for {
+		var asked request
+		if incoming.Decode(&asked) != nil {
+			return
+		}
+		switch asked.Op {
+		case opBuild:
+			fmt.Fprintf(replies, "{\"job\": %d, \"built\": true}\n", asked.Job)
+		case opServe:
+			fmt.Fprintf(replies, "{\"job\": %d, \"at\": \"$.v\"}\n"+badAnswer, asked.Job, asked.Job)
+		}
+	}
 }
 
 func TestAForeignExecutableIsUnsupported(t *testing.T) {
-	_, err := MakeSecureTemplate(within(t, 10*time.Second), "v: ${ 1 }\n", WithMemoryLimit(foreignGreetingLimit))
+	_, err := MakeSandbox(within(t, 10*time.Second), WithMemoryLimit(foreignGreetingLimit))
 	expectError(t, err, Unsupported, "is not a jaml evaluator")
 }
 
 func TestAReplacedExecutableIsUnsupported(t *testing.T) {
-	_, err := MakeSecureTemplate(within(t, 10*time.Second), "v: ${ 1 }\n", WithMemoryLimit(futureProtocolLimit))
-	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v3")
+	_, err := MakeSandbox(within(t, 10*time.Second), WithMemoryLimit(futureProtocolLimit))
+	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v4")
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 	started := time.Now()
-	_, err := MakeSecureTemplate(within(t, 300*time.Millisecond), "v: ${ 1 }\n", WithMemoryLimit(silentLimit))
+	_, err := MakeSandbox(within(t, 300*time.Millisecond), WithMemoryLimit(silentLimit))
 	expectError(t, err, EvaluationFailed, "starting the evaluator", "cancelled", "deadline exceeded")
 	if waited := time.Since(started); waited > 3*time.Second {
 		t.Fatalf("a silent evaluator held construction for %s", waited)
 	}
 }
 
+func TestASilentExecutableEndsWithTheBuildTimeout(t *testing.T) {
+	started := time.Now()
+	_, err := MakeSandbox(t.Context(), WithMemoryLimit(silentLimit), WithBuildTimeout(200*time.Millisecond))
+	expectError(t, err, EvaluationFailed, "starting the evaluator", "took longer than 200ms to start")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded in %v", err)
+	}
+	if waited := time.Since(started); waited > 3*time.Second {
+		t.Fatalf("a silent evaluator held construction for %s", waited)
+	}
+}
+
 func TestAMalformedAnswerKillsTheEvaluatorWithItsCause(t *testing.T) {
-	template := mustSecure(t, "v: ${ 1 }\n", WithMemoryLimit(malformedAnswerLimit))
-	process := currentEvaluator(template)
+	sb := mustIsolated(t, WithMemoryLimit(malformedAnswerLimit))
+	template := mustTemplate(t, sb, "v: ${ 1 }\n")
+	process := currentChild(t, sb)
 	started := time.Now()
 	expectError(t, evalBounded(t, template, within(t, 30*time.Second), "v"), EvaluationFailed, "$.v", "reading the evaluator's answer", "invalid character")
 	if waited := time.Since(started); waited > 3*time.Second {
@@ -152,45 +159,61 @@ func TestAMalformedAnswerKillsTheEvaluatorWithItsCause(t *testing.T) {
 }
 
 func TestAnAnswerWithNeitherDataNorFailureKillsTheEvaluator(t *testing.T) {
-	template := mustSecure(t, "v: ${ 1 }\n", WithMemoryLimit(emptyAnswerLimit))
-	process := currentEvaluator(template)
+	sb := mustIsolated(t, WithMemoryLimit(emptyAnswerLimit))
+	template := mustTemplate(t, sb, "v: ${ 1 }\n")
+	process := currentChild(t, sb)
 	expectError(t, evalBounded(t, template, within(t, 30*time.Second), "v"), EvaluationFailed, "$.v", "neither data nor a failure")
 	expectDeath(t, process)
 }
 
-func TestCloseDuringARespawnReturns(t *testing.T) {
-	template := mustSecure(t, "v: ${ 1 }\n")
-	slot := <-template.slot
-	slot.spec.memoryLimit = silentLimit
-	_ = slot.process.failWith(errors.New("killed by the test"))
-	template.slot <- slot
+func respawnAs(t *testing.T, sb *Sandbox, limit memoryLimit) {
+	t.Helper()
+	d := dispatcherOf(t, sb)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.spawn = func(ctx context.Context) (*evaluatorProcess, error) {
+		return spawnEvaluator(ctx, childSpec{lifetime: sb.lifetime, limit: limit, buildTimeout: defaultBuildTimeout})
+	}
+}
+
+func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	sb, err := MakeSandbox(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := mustTemplate(t, sb, "v: ${ 1 }\n")
+	respawnAs(t, sb, silentLimit)
+	killChild(t, sb)
 	evaluating := make(chan error, 1)
 	go func() {
 		var out int
-		evaluating <- template.Eval(context.Background(), &out, nil, "v")
+		evaluating <- template.Eval(t.Context(), &out, nil, "v")
 	}()
 	time.Sleep(200 * time.Millisecond)
 	started := time.Now()
-	_ = template.Close()
-	if took := time.Since(started); took > 100*time.Millisecond {
-		t.Fatalf("Close took %s behind a respawn", took)
-	}
+	cancel()
 	select {
 	case err := <-evaluating:
 		expectError(t, err, Closed)
 	case <-time.After(5 * time.Second):
-		t.Fatal("the respawning Eval outlived Close")
+		t.Fatal("the respawning Eval outlived its sandbox")
+	}
+	if took := time.Since(started); took > 500*time.Millisecond {
+		t.Fatalf("an Eval behind a respawn took %s to see its sandbox end", took)
 	}
 }
 
 func evaluatorCPU(t *testing.T, idle time.Duration) time.Duration {
-	template, err := MakeSecureTemplate(context.Background(), "v: ${ 1 }\n")
+	ctx, cancel := context.WithCancel(t.Context())
+	sb, err := MakeSandbox(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	process := currentEvaluator(template)
+	process := currentChild(t, sb)
 	time.Sleep(idle)
-	_ = template.Close()
+	cancel()
 	expectDeath(t, process)
 	return process.cmd.ProcessState.UserTime() + process.cmd.ProcessState.SystemTime()
 }
@@ -216,15 +239,14 @@ func TestADeathNamesItsReasonNotItsStack(t *testing.T) {
 func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 	for name, limit := range map[string]int64{"foreign greeting": foreignGreetingLimit, "future protocol": futureProtocolLimit, "crash before greeting": crashAtStartLimit} {
 		t.Run(name, func(t *testing.T) {
-			_, constructed := MakeSecureTemplate(within(t, 10*time.Second), "a: 1\n", WithMemoryLimit(limit))
-			template := mustSecure(t, "a: \"${ spin ? (() => { while (true) {} })() : 1 }\"\n")
-			expectEqual(t, secureEvalAs[int](t, template, map[string]any{"spin": false}, "a"), 1)
-			slot := <-template.slot
-			slot.spec.memoryLimit = memoryLimit(limit)
-			template.slot <- slot
+			_, constructed := MakeSandbox(within(t, 10*time.Second), WithMemoryLimit(limit))
+			sb := mustIsolated(t)
+			template := mustTemplate(t, sb, "a: 1\n")
+			expectEqual(t, isolatedEvalAs[int](t, template, nil, "a"), 1)
+			respawnAs(t, sb, memoryLimit(limit))
+			killChild(t, sb)
 			var out any
-			expectError(t, template.Eval(within(t, 200*time.Millisecond), &out, map[string]any{"spin": true}, "a"), EvaluationFailed, "deadline exceeded")
-			respawned := template.Eval(within(t, 10*time.Second), &out, map[string]any{"spin": false}, "a")
+			respawned := template.Eval(within(t, 10*time.Second), &out, nil, "a")
 			expectError(t, respawned, Unsupported)
 			expectEqual(t, respawned.Error(), constructed.Error())
 			for _, kind := range everyKind {
@@ -232,34 +254,20 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 					t.Fatalf("a respawn and a construction disagree on %v:\nrespawn:      %v\nconstruction: %v", kind, respawned, constructed)
 				}
 			}
-			if strings.Contains(respawned.Error(), "binding vars") {
-				t.Fatalf("a respawn failure is blamed on the vars: %v", respawned)
-			}
 		})
 	}
 }
 
-func liveChildren(t *testing.T) int {
-	t.Helper()
-	listed, err := exec.Command("pgrep", "-P", strconv.Itoa(os.Getpid())).Output()
-	var exit *exec.ExitError
-	if err != nil && !errors.As(err, &exit) {
-		t.Fatal(err)
-	}
-	return len(strings.Fields(string(listed)))
-}
-
 func TestEvalsWithADoneContextStartNoEvaluator(t *testing.T) {
-	template := mustSecure(t, "a: \"${ spin ? (() => { while (true) {} })() : 1 }\"\n")
-	killed := currentEvaluator(template)
-	var out any
-	expectError(t, template.Eval(within(t, 100*time.Millisecond), &out, map[string]any{"spin": true}, "a"), EvaluationFailed, "deadline exceeded")
-	expectDeath(t, killed)
+	sb := mustIsolated(t)
+	template := mustTemplate(t, sb, "a: 1\n")
+	killChild(t, sb)
 	before := liveChildren(t)
-	done, stop := context.WithCancel(context.Background())
+	done, stop := context.WithCancel(t.Context())
 	stop()
+	var out any
 	for range 40 {
-		err := template.Eval(done, &out, map[string]any{"spin": false}, "a")
+		err := template.Eval(done, &out, nil, "a")
 		expectError(t, err, EvaluationFailed, "cancelled")
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled in %v", err)
@@ -267,21 +275,18 @@ func TestEvalsWithADoneContextStartNoEvaluator(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 	if after := liveChildren(t); after > before {
-		t.Fatalf("%d Evals with a done context left %d evaluators running", 40, after-before)
+		t.Fatalf("40 Evals with a done context left %d evaluators running", after-before)
 	}
-	expectEqual(t, secureEvalAs[int](t, template, map[string]any{"spin": false}, "a"), 1)
+	expectEqual(t, isolatedEvalAs[int](t, template, nil, "a"), 1)
 }
 
 func TestAHandshakeCutShortEndsItsEvaluator(t *testing.T) {
 	before := liveChildren(t)
 	for range 10 {
-		_, err := MakeSecureTemplate(within(t, 50*time.Millisecond), "v: ${ 1 }\n", WithMemoryLimit(silentLimit))
+		_, err := MakeSandbox(within(t, 50*time.Millisecond), WithMemoryLimit(silentLimit))
 		expectError(t, err, EvaluationFailed, "cancelled")
 	}
-	time.Sleep(100 * time.Millisecond)
-	if after := liveChildren(t); after > before {
-		t.Fatalf("cut-short handshakes left %d evaluators running", after-before)
-	}
+	expectChildrenBackTo(t, before)
 }
 
 func hostCPU(t *testing.T) time.Duration {
@@ -293,11 +298,15 @@ func hostCPU(t *testing.T) time.Duration {
 	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 }
 
+func hostileText() string {
+	return "v: '${" + strings.Repeat("a=>", 21000) + "1}'\n"
+}
+
 func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {
-	text := "v: '${" + strings.Repeat("a=>", 21000) + "1}'\n"
+	sb := mustIsolated(t)
 	goruntime.GC()
 	spentBefore, started := hostCPU(t), time.Now()
-	_, err := MakeSecureTemplate(within(t, 200*time.Millisecond), text)
+	_, err := sb.MakeTemplate(within(t, 200*time.Millisecond), hostileText())
 	waited, spent := time.Since(started), hostCPU(t)-spentBefore
 	expectError(t, err, EvaluationFailed, "cancelled", "deadline exceeded")
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -311,6 +320,20 @@ func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {
 	}
 }
 
+func TestAHostileBuildIsBoundedByTheBuildTimeout(t *testing.T) {
+	sb := mustIsolated(t, WithBuildTimeout(200*time.Millisecond))
+	started := time.Now()
+	_, err := sb.MakeTemplate(t.Context(), hostileText())
+	expectError(t, err, EvaluationFailed, "cancelled: the build took longer than its timeout of 200ms")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded in %v", err)
+	}
+	if waited := time.Since(started); waited > 1500*time.Millisecond {
+		t.Fatalf("a hostile build held construction for %s past its 200ms build timeout", waited)
+	}
+	expectEqual(t, isolatedEvalAs[int](t, mustTemplate(t, sb, "v: ${ 6 }\n"), nil, "v"), 6)
+}
+
 func listOfPlainServers(count int) string {
 	var written strings.Builder
 	written.WriteString("expr: ${ 1 + 1 }\nitems:\n")
@@ -320,22 +343,169 @@ func listOfPlainServers(count int) string {
 	return written.String()
 }
 
-func TestAnEvalGetsTheWholeLimitOverTheBuiltTemplate(t *testing.T) {
-	text := listOfPlainServers(27000) + "big: ${ 'x'.repeat(56 << 20).length }\n"
-	template := mustSecure(t, text, WithMemoryLimit(64<<20))
-	expectEqual(t, secureEvalAs[int](t, template, nil, "expr"), 2)
-	expectEqual(t, secureEvalAs[int](t, template, nil, "big"), 56<<20)
-}
-
 func TestABuildPastTheLimitFailsConstruction(t *testing.T) {
 	for name, text := range map[string]string{
 		"one huge value":     "v: " + strings.Repeat("x", 40<<20) + "\n",
 		"many plain servers": listOfPlainServers(100000),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := MakeSecureTemplate(within(t, 60*time.Second), text, WithMemoryLimit(16<<20))
+			_, err := mustIsolated(t, WithMemoryLimit(16<<20)).MakeTemplate(within(t, 60*time.Second), text)
 			expectError(t, err, MemoryLimit, "exceeded the memory limit of 16777216 bytes")
 			expectError(t, err, EvaluationFailed)
+		})
+	}
+}
+
+func TestBuiltTemplatesCountAgainstTheCeiling(t *testing.T) {
+	big := "big: \"${ (() => { const held = 'x'.repeat(48 << 20); let n = 0; for (let i = 0; i < 1e6; i++) n += i; return held.length })() }\"\n"
+	alone := mustIsolated(t, WithMemoryLimit(64<<20))
+	before := childPID(t, alone)
+	expectEqual(t, isolatedEvalAs[int](t, mustTemplate(t, alone, big), nil, "big"), 48<<20)
+	expectEqual(t, childPID(t, alone), before)
+	crowded := mustIsolated(t, WithMemoryLimit(64<<20))
+	resident := make([]*Template, 32)
+	for index := range resident {
+		resident[index] = mustTemplate(t, crowded, "v: "+strings.Repeat("y", 1<<20)+"\n")
+	}
+	before = childPID(t, crowded)
+	expectEqual(t, isolatedEvalAs[int](t, mustTemplate(t, crowded, big), nil, "big"), 48<<20)
+	if childPID(t, crowded) == before {
+		t.Fatal("32 MiB of built templates and a 48 MiB Eval fit under a 64 MiB ceiling")
+	}
+	expectEqual(t, len(isolatedEvalAs[string](t, resident[0], nil, "v")), 1<<20)
+}
+
+func TestTheSandboxContextEndsEverything(t *testing.T) {
+	before := liveChildren(t)
+	for _, kind := range sandboxKinds {
+		t.Run(kind.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			sb, err := kind.make(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			template := mustTemplate(t, sb, "v: ${ 1 }\nspin: ${ (() => { while (true) {} })() }\n")
+			compiled := mustCompile(t, sb, "x => x")
+			running := make(chan error, 1)
+			go func() {
+				var out any
+				running <- template.Eval(t.Context(), &out, nil, "spin")
+			}()
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+			expectError(t, <-running, Closed)
+			var out any
+			expectError(t, template.Eval(t.Context(), &out, nil, "v"), Closed)
+			expectError(t, compiled.Call(t.Context(), &out, 1), Closed)
+			expectError(t, compiled.Eval(t.Context(), &out, nil), Closed)
+			_, err = sb.MakeTemplate(t.Context(), "v: 1\n")
+			expectError(t, err, Closed)
+			_, err = sb.Compile(t.Context(), "1")
+			expectError(t, err, Closed)
+		})
+	}
+	expectChildrenBackTo(t, before)
+}
+
+func TestATemplateContextEndingClosesOnlyThatTemplate(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		ctx, cancel := context.WithCancel(t.Context())
+		ending, err := sb.MakeTemplate(ctx, "v: ${ 1 }\nspin: ${ (() => { while (true) {} })() }\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		endingExpression, err := sb.Compile(ctx, "1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		staying := mustTemplate(t, sb, "v: ${ 2 }\n")
+		running := make(chan error, 1)
+		go func() {
+			var out any
+			running <- ending.Eval(t.Context(), &out, nil, "spin")
+		}()
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+		expectError(t, <-running, Closed)
+		var out any
+		expectError(t, ending.Eval(t.Context(), &out, nil, "v"), Closed)
+		expectError(t, endingExpression.Eval(t.Context(), &out, nil), Closed)
+		expectEqual(t, evalAs[int](t, staying, nil, "v"), 2)
+	})
+}
+
+func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		for attempt := range 50 {
+			ctx, cancel := context.WithCancel(t.Context())
+			go func() {
+				time.Sleep(time.Duration(attempt%10) * time.Millisecond)
+				cancel()
+			}()
+			template, err := sb.MakeTemplate(ctx, "v: ${ 1 }\n")
+			if err != nil {
+				expectError(t, err, EvaluationFailed, "cancelled")
+				continue
+			}
+			<-ctx.Done()
+			var out int
+			expectError(t, template.Eval(within(t, time.Second), &out, nil, "v"), Closed)
+		}
+	})
+}
+
+func dropATemplate(t *testing.T, sb *Sandbox) uint64 {
+	template := mustTemplate(t, sb, "v: ${ 1 }\n")
+	return template.held.unit.(*remoteUnit).ref.id
+}
+
+func TestADroppedTemplateIsForgottenByTheEvaluator(t *testing.T) {
+	sb := mustIsolated(t)
+	id := dropATemplate(t, sb)
+	child := currentChild(t, sb)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if !child.catalog.holds(id) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("unit %d outlived its unreachable template", id)
+		}
+		goruntime.GC()
+		time.Sleep(20 * time.Millisecond)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		served := child.serve(within(t, 10*time.Second), request{Op: opServe, Unit: id, Work: &work{}})
+		if served.err != nil && strings.Contains(served.err.Error(), fmt.Sprintf("the evaluator holds no unit %d", id)) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the evaluator still serves unit %d: %v", id, served.err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestUnmadeValuesAreInvalid(t *testing.T) {
+	var out int
+	for name, sb := range map[string]*Sandbox{"zero": {}, "nil": nil} {
+		t.Run(name, func(t *testing.T) {
+			_, err := sb.MakeTemplate(t.Context(), "v: 1\n")
+			expectError(t, err, InvalidTemplate, "not made by")
+			_, err = sb.Compile(t.Context(), "1")
+			expectError(t, err, InvalidTemplate, "not made by")
+		})
+	}
+	for name, template := range map[string]*Template{"zero": {}, "nil": nil} {
+		t.Run(name, func(t *testing.T) {
+			expectError(t, template.Eval(t.Context(), &out, nil, "v"), InvalidTemplate, "not made by")
+		})
+	}
+	for name, compiled := range map[string]*Expression{"zero": {}, "nil": nil} {
+		t.Run(name, func(t *testing.T) {
+			expectError(t, compiled.Eval(t.Context(), &out, nil), InvalidTemplate, "not made by")
+			expectError(t, compiled.Call(t.Context(), &out), InvalidTemplate, "not made by")
 		})
 	}
 }

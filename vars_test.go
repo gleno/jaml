@@ -14,7 +14,7 @@ func expectNoTemplatePath(t *testing.T, err error) {
 	}
 }
 
-func TestVarsNamedLikeJavaScriptGlobalsAreRefusedInBothModes(t *testing.T) {
+func TestVarsNamedLikeJavaScriptGlobalsAreRefusedInBothKinds(t *testing.T) {
 	for _, name := range []string{"JSON", "Error", "Array", "Math", "globalThis", "undefined", "NaN", "Infinity", "eval", "Function", "Object", "parseInt"} {
 		t.Run(name, func(t *testing.T) {
 			for _, text := range []string{"a: ${ 1 }\nb: ${ 2 }\n", "plain: 1\n"} {
@@ -30,7 +30,7 @@ func TestVarsNamedLikeOrdinaryWordsStillBind(t *testing.T) {
 	agreement{text: "v: ${ [name, json, error, globalthis].join() }\n", vars: map[string]any{"name": "a", "json": "b", "error": "c", "globalthis": "d"}}.eval(t, intoAny).expectAccepted(t)
 }
 
-func TestVarsHoldingInvalidUTF8AreRefusedInBothModes(t *testing.T) {
+func TestVarsHoldingInvalidUTF8AreRefusedInBothKinds(t *testing.T) {
 	cases := map[string]map[string]any{
 		"value":      {"bad": "x\xffy"},
 		"nested key": {"bad": map[string]any{"k\xfe": 1}},
@@ -47,13 +47,15 @@ func TestVarsHoldingInvalidUTF8AreRefusedInBothModes(t *testing.T) {
 }
 
 func TestRealReplacementCharactersAndEscapedTextStillBind(t *testing.T) {
-	vars := map[string]any{"real": "a�b", "written": `�`, "key": map[string]any{`�`: "�"}}
-	got := agreement{text: "v: ${ [real, written, Object.keys(key)[0]] }\n", vars: vars, path: []string{"v"}}
-	got.eval(t, intoAny).expectAccepted(t)
-	expectEqual(t, evalAs[[]string](t, mustTemplate(t, "v: ${ [real, written, Object.keys(key)[0]] }\n"), vars, "v"), []string{"a�b", `�`, `�`})
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		vars := map[string]any{"real": "a�b", "written": `�`, "key": map[string]any{`�`: "�"}}
+		got := agreement{text: "v: ${ [real, written, Object.keys(key)[0]] }\n", vars: vars, path: []string{"v"}}
+		got.eval(t, intoAny).expectAccepted(t)
+		expectEqual(t, evalAs[[]string](t, mustTemplate(t, sb, "v: ${ [real, written, Object.keys(key)[0]] }\n"), vars, "v"), []string{"a�b", `�`, `�`})
+	})
 }
 
-func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothModes(t *testing.T) {
+func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothKinds(t *testing.T) {
 	deep := any(1)
 	for range maxDataDepth + 1 {
 		deep = []any{deep}
@@ -78,14 +80,18 @@ func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothModes(t *testing.T)
 }
 
 func TestEveryGlobalOfTheEngineIsRefusedAsAVarName(t *testing.T) {
-	template := mustTemplate(t, "plain: 1\n")
-	for _, name := range goja.New().GlobalObject().GetOwnPropertyNames() {
-		var out any
-		expectError(t, template.Eval(&out, map[string]any{name: 1}), EvaluationFailed, `var "`+name+`" collides with a JavaScript global`)
-	}
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "plain: 1\n")
+		for _, name := range goja.New().GlobalObject().GetOwnPropertyNames() {
+			var out any
+			expectError(t, template.Eval(t.Context(), &out, map[string]any{name: 1}), EvaluationFailed, `var "`+name+`" collides with a JavaScript global`)
+		}
+	})
 }
 
 func TestVarsBindOnceTheFirstExpressionNeedsThem(t *testing.T) {
-	template := mustTemplate(t, "plain: [1, 2]\nlater: ${ answer + 1 }\n")
-	expectEqual(t, evalAs[map[string]any](t, template, map[string]any{"answer": 41}), map[string]any{"plain": []any{float64(1), float64(2)}, "later": float64(42)})
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "plain: [1, 2]\nlater: ${ answer + 1 }\n")
+		expectEqual(t, evalAs[map[string]any](t, template, map[string]any{"answer": 41}), map[string]any{"plain": []any{float64(1), float64(2)}, "later": float64(42)})
+	})
 }

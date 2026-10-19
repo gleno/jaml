@@ -41,20 +41,6 @@ func clip(text string, limit int) string {
 	return text[:cut] + "…"
 }
 
-type thrown struct {
-	text   string
-	jsType string
-	inner  error
-}
-
-func (t thrown) Error() string {
-	return t.text
-}
-
-func (t thrown) Unwrap() error {
-	return t.inner
-}
-
 func (r realm) explain(err error) error {
 	var overflowed *goja.StackOverflowError
 	if errors.As(err, &overflowed) {
@@ -70,30 +56,18 @@ func (r realm) explain(err error) error {
 	return err
 }
 
-func (r realm) describeException(exception *goja.Exception) thrown {
-	described, err := r.describe(exception.Value())
-	if err == nil {
-		return described
+func (r realm) describeException(exception *goja.Exception) *Thrown {
+	message, err := r.describe(exception.Value())
+	if err != nil {
+		message = unreadableThrow
 	}
-	return thrown{text: unreadableThrow, jsType: described.jsType, inner: r.describeInner(err)}
+	return &Thrown{Message: message, Value: r.snapshot(exception.Value())}
 }
 
-func (r realm) describe(value goja.Value) (thrown, error) {
+func (r realm) describe(value goja.Value) (string, error) {
 	var text string
 	err := r.guarded(func() { text = r.describeThrown(value) })
-	return thrown{text: excerpt(text, thrownExcerptLength), jsType: typeOf(value)}, err
-}
-
-func (r realm) describeInner(err error) error {
-	var exception *goja.Exception
-	if !errors.As(err, &exception) {
-		return r.explain(err)
-	}
-	described, failed := r.describe(exception.Value())
-	if failed != nil {
-		return thrown{text: unreadableThrow, jsType: described.jsType}
-	}
-	return described
+	return excerpt(text, thrownExcerptLength), err
 }
 
 func typeOf(value goja.Value) string {

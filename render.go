@@ -1,13 +1,15 @@
 package jaml
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
 )
 
 type renderer struct {
-	template *template
+	texts    map[string]text
+	settings settings
 	engine   *lazySession
 }
 
@@ -34,7 +36,7 @@ func (r *renderer) render(node any, at *dataPath) (any, error) {
 		}
 		return rendered, nil
 	case string:
-		compiled, hasCode := r.template.texts[typed]
+		compiled, hasCode := r.texts[typed]
 		if !hasCode {
 			return typed, nil
 		}
@@ -79,9 +81,9 @@ func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, er
 	absent, coercion := "", Loose
 	switch result.(type) {
 	case nil:
-		absent, coercion = "null", r.template.settings.null
+		absent, coercion = "null", r.settings.null
 	case undefined:
-		absent, coercion = "undefined", r.template.settings.undefined
+		absent, coercion = "undefined", r.settings.undefined
 	default:
 		return result, nil
 	}
@@ -101,6 +103,18 @@ func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
 		return nil, fail(EvaluationFailed, "%s: %s: %w", at, compiled.written(), err)
 	}
 	return result, nil
+}
+
+func (r *renderer) call(compiled expression, args []json.RawMessage) (any, error) {
+	session, err := r.engine.open()
+	if err != nil {
+		return nil, err
+	}
+	result, err := session.call(compiled, args)
+	if err != nil {
+		return nil, fail(EvaluationFailed, "%s: %s: %w", (*dataPath)(nil), compiled.written(), err)
+	}
+	return r.admit(result, compiled, nil)
 }
 
 func stringify(value any) (string, error) {

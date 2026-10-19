@@ -12,7 +12,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 3
+	protocolVersion      = 4
 	exitMemoryLimit      = 86
 	requestsFD           = 3
 	responsesFD          = 4
@@ -24,30 +24,63 @@ type hello struct {
 	Nonce   string `json:"nonce"`
 }
 
+type opcode string
+
+const (
+	opBuild  opcode = "build"
+	opServe  opcode = "serve"
+	opCancel opcode = "cancel"
+	opForget opcode = "forget"
+)
+
+type request struct {
+	Op   opcode     `json:"op"`
+	Job  uint64     `json:"job,omitempty"`
+	Unit uint64     `json:"unit,omitempty"`
+	Plan *blueprint `json:"plan,omitempty"`
+	Work *work      `json:"work,omitempty"`
+}
+
+func (r request) withJob(job uint64) request {
+	r.Job = job
+	return r
+}
+
 type blueprint struct {
-	Written   string   `json:"written"`
-	Null      Coercion `json:"null"`
-	Undefined Coercion `json:"undefined"`
+	Written    string   `json:"written"`
+	Null       Coercion `json:"null"`
+	Undefined  Coercion `json:"undefined"`
+	Expression bool     `json:"expression,omitempty"`
 }
 
-type rendering struct {
-	Path []string    `json:"path"`
-	Vars encodedVars `json:"vars"`
+type work struct {
+	Path   []string    `json:"path,omitempty"`
+	Vars   encodedVars `json:"vars,omitempty"`
+	Call   *callArgs   `json:"call,omitempty"`
+	Pinned pinned      `json:"pinned"`
 }
 
-type selection struct {
-	At      string   `json:"at,omitempty"`
-	Failure *failure `json:"failure,omitempty"`
+type callArgs struct {
+	Args []json.RawMessage `json:"args"`
 }
 
-type rendered struct {
+type reply struct {
+	Job     uint64          `json:"job"`
+	At      *string         `json:"at,omitempty"`
+	Built   bool            `json:"built,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"`
 	Failure *failure        `json:"failure,omitempty"`
 }
 
 type failure struct {
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	Kind    string        `json:"kind"`
+	Message string        `json:"message"`
+	Thrown  *thrownOnWire `json:"thrown,omitempty"`
+}
+
+type thrownOnWire struct {
+	Message string          `json:"message"`
+	Value   json.RawMessage `json:"value"`
 }
 
 type failureKind struct {
@@ -65,20 +98,15 @@ var failureKinds = []failureKind{
 	{"Unsupported", Unsupported},
 }
 
-func (b blueprint) build() (*template, error) {
+func (b blueprint) build() (servable, error) {
 	configured, err := configure([]Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)})
 	if err != nil {
 		return nil, err
 	}
-	return makeTemplate(b.Written, configured)
-}
-
-func answer(data []byte, err error) rendered {
-	if err != nil {
-		described := describeFailure(err)
-		return rendered{Failure: &described}
+	if b.Expression {
+		return compileStandalone(b.Written, configured)
 	}
-	return rendered{Data: data}
+	return makeTemplate(b.Written, configured)
 }
 
 func describeFailure(err error) failure {
@@ -86,30 +114,45 @@ func describeFailure(err error) failure {
 	if !isTemplateError {
 		failed = templateError{kind: EvaluationFailed, cause: err}
 	}
+	described := failure{Kind: "EvaluationFailed", Message: failed.Error(), Thrown: thrownOnWireFrom(err)}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
-			return failure{Kind: kind.name, Message: failed.cause.Error()}
+			described.Kind, described.Message = kind.name, failed.cause.Error()
 		}
 	}
-	return failure{Kind: "EvaluationFailed", Message: failed.Error()}
+	return described
 }
 
-func (s selection) malformed() error {
-	return malformedReply(s.At != "", s.Failure)
+func thrownOnWireFrom(err error) *thrownOnWire {
+	var caught *Thrown
+	if !errors.As(err, &caught) {
+		return nil
+	}
+	value, marshalErr := json.Marshal(caught.Value)
+	if marshalErr != nil {
+		value = json.RawMessage("null")
+	}
+	return &thrownOnWire{Message: caught.Message, Value: value}
 }
 
-func (r rendered) malformed() error {
-	return malformedReply(len(r.Data) != 0, r.Failure)
+func (r reply) outcomes() int {
+	count := 0
+	for _, present := range [...]bool{r.At != nil, r.Built, len(r.Data) != 0, r.Failure != nil} {
+		if present {
+			count++
+		}
+	}
+	return count
 }
 
-func malformedReply(answered bool, failed *failure) error {
+func (r reply) malformed() error {
 	switch {
-	case failed != nil && answered:
-		return errors.New("the evaluator answered with both data and a failure")
-	case failed != nil && failed.kind() == nil:
-		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", failed.Kind)
-	case failed == nil && !answered:
+	case r.outcomes() > 1:
+		return errors.New("the evaluator answered with more than one outcome")
+	case r.outcomes() == 0:
 		return errors.New("the evaluator answered with neither data nor a failure")
+	case r.Failure != nil && r.Failure.kind() == nil:
+		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", r.Failure.Kind)
 	}
 	return nil
 }
@@ -128,5 +171,32 @@ func (f failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return templateError{kind: kind, cause: errors.New(f.Message)}
+	return templateError{kind: kind, cause: carriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+}
+
+func (t *thrownOnWire) rebuild() *Thrown {
+	if t == nil {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(t.Value, &value); err != nil {
+		value = nil
+	}
+	return &Thrown{Message: t.Message, Value: value}
+}
+
+type carriedCause struct {
+	message string
+	thrown  *Thrown
+}
+
+func (c carriedCause) Error() string {
+	return c.message
+}
+
+func (c carriedCause) Unwrap() error {
+	if c.thrown == nil {
+		return nil
+	}
+	return c.thrown
 }

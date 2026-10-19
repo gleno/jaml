@@ -1,6 +1,9 @@
 package jaml
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -10,34 +13,56 @@ import (
 
 const maxCallStackSize = 4096
 
-type lazySession struct {
+var errInterrupted = errors.New("interrupted")
+
+type sessionPlan struct {
 	vars   encodedVars
-	opened *session
+	pinned pinned
+}
+
+type lazySession struct {
+	ctx     context.Context
+	plan    sessionPlan
+	opened  *session
+	release func() bool
 }
 
 func (l *lazySession) open() (*session, error) {
 	if l.opened != nil {
 		return l.opened, nil
 	}
-	opened, err := openSession(l.vars)
+	if l.ctx.Err() != nil {
+		return nil, fail(EvaluationFailed, "%w", cancelled(l.ctx))
+	}
+	opened, err := openSession(l.plan)
 	if err != nil {
 		return nil, fail(EvaluationFailed, "binding vars: %w", err)
 	}
 	l.opened = opened
+	l.release = context.AfterFunc(l.ctx, func() { opened.vm.Interrupt(errInterrupted) })
 	return opened, nil
+}
+
+func (l *lazySession) close() {
+	if l.release != nil {
+		l.release()
+	}
 }
 
 type session struct {
 	vm     *goja.Runtime
 	realm  realm
+	parse  goja.Callable
 	broken error
 }
 
-func openSession(vars encodedVars) (*session, error) {
+func openSession(plan sessionPlan) (*session, error) {
 	vm := goja.New()
 	vm.SetMaxCallStackSize(maxCallStackSize)
+	vm.SetTimeSource(plan.pinned.now)
+	vm.SetRandSource(plan.pinned.random())
 	opened := &session{vm: vm, realm: captureRealm(vm)}
-	if err := opened.bind(vars); err != nil {
+	if err := opened.bind(plan.vars); err != nil {
 		return nil, err
 	}
 	return opened, nil
@@ -45,10 +70,10 @@ func openSession(vars encodedVars) (*session, error) {
 
 func (s *session) bind(vars encodedVars) (err error) {
 	defer s.breakOnEngineFailure(&err)
-	parse := s.guardJSONParse()
+	s.parse = s.guardJSONParse()
 	global := s.vm.GlobalObject()
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		parsed, err := parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
+		parsed, err := s.parse(goja.Undefined(), s.vm.ToValue(string(vars[name])))
 		if err != nil {
 			return fmt.Errorf("var %q: %w", clip(name, keyExcerptLength), s.realm.explain(err))
 		}
@@ -90,12 +115,48 @@ func (s *session) guardJSONParse() goja.Callable {
 	return callable
 }
 
-func (s *session) evaluate(compiled expression) (result any, err error) {
+func (s *session) evaluate(compiled expression) (any, error) {
+	return s.attempt(func() (goja.Value, error) { return s.vm.RunProgram(compiled.program) })
+}
+
+func (s *session) call(compiled expression, args []json.RawMessage) (any, error) {
+	return s.attempt(func() (goja.Value, error) { return s.invoke(compiled, args) })
+}
+
+func (s *session) attempt(produce func() (goja.Value, error)) (result any, err error) {
 	if s.broken != nil {
 		return nil, fmt.Errorf("an earlier expression broke the engine: %w", s.broken)
 	}
 	defer s.breakOnEngineFailure(&err)
-	return s.run(compiled)
+	returned, err := produce()
+	if err != nil {
+		return nil, s.realm.explain(err)
+	}
+	var readErr error
+	if err := s.realm.guarded(func() { result, readErr = readResult(s.realm, returned) }); err != nil {
+		return nil, s.realm.explain(err)
+	}
+	return result, readErr
+}
+
+func (s *session) invoke(compiled expression, args []json.RawMessage) (goja.Value, error) {
+	returned, err := s.vm.RunProgram(compiled.program)
+	if err != nil {
+		return nil, err
+	}
+	function, isFunction := goja.AssertFunction(returned)
+	if !isFunction {
+		return nil, fmt.Errorf("evaluates to a value of type %s, not a function", typeOf(returned))
+	}
+	values := make([]goja.Value, len(args))
+	for index, arg := range args {
+		parsed, err := s.parse(goja.Undefined(), s.vm.ToValue(string(arg)))
+		if err != nil {
+			return nil, fmt.Errorf("argument %d: %w", index+1, s.realm.explain(err))
+		}
+		values[index] = parsed
+	}
+	return function(goja.Undefined(), values...)
 }
 
 func (s *session) breakOnEngineFailure(err *error) {
@@ -116,17 +177,4 @@ func engineFailure(recovered any) error {
 	default:
 		return fmt.Errorf("the engine failed: %v", recovered)
 	}
-}
-
-func (s *session) run(compiled expression) (any, error) {
-	returned, err := s.vm.RunProgram(compiled.program)
-	if err != nil {
-		return nil, s.realm.explain(err)
-	}
-	var result any
-	var readErr error
-	if err := s.realm.guarded(func() { result, readErr = readResult(s.realm, returned) }); err != nil {
-		return nil, s.realm.explain(err)
-	}
-	return result, readErr
 }

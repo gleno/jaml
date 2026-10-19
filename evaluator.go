@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +13,9 @@ import (
 	"runtime/debug"
 	"runtime/metrics"
 	"strconv"
+	"sync"
 	"time"
 )
-
-var errTemplateRefused = errors.New("the template was refused")
 
 const (
 	heapObjectsMetric  = "/memory/classes/heap/objects:bytes"
@@ -38,69 +38,127 @@ func serveEvaluations() int {
 		return exitProtocolBroken
 	}
 	adoptTheHostsZone()
-	building := guardTheEvaluator(world)
-	if building.orphaned() {
+	watch := watchTheHeap(world)
+	if watch.orphaned() {
 		return exitOrphaned
 	}
-	requestsFile := os.NewFile(requestsFD, "jaml-requests")
-	requests := json.NewDecoder(requestsFile)
-	responses := json.NewEncoder(os.NewFile(responsesFD, "jaml-responses"))
-	if err := responses.Encode(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce}); err != nil {
-		fmt.Fprintf(os.Stderr, "jaml evaluator: greeting: %v\n", err)
-		return exitProtocolBroken
-	}
-	var built *template
-	building.during(func() { built, err = receiveTemplate(requests, responses) })
-	if errors.Is(err, errTemplateRefused) {
-		_, _ = io.Copy(io.Discard, requestsFile)
-		return 0
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
-		return exitProtocolBroken
-	}
-	serving := guardTheEvaluator(world)
+	requests := json.NewDecoder(os.NewFile(requestsFD, "jaml-requests"))
+	replies := &replyWriter{encoder: json.NewEncoder(os.NewFile(responsesFD, "jaml-responses"))}
+	replies.send(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
+	serving := &evaluator{watch: watch, replies: replies, units: map[uint64]servable{}, jobs: map[uint64]context.CancelFunc{}}
 	for {
-		var job rendering
-		if err := requests.Decode(&job); err != nil {
+		var incoming request
+		if err := requests.Decode(&incoming); err != nil {
 			if errors.Is(err, io.EOF) {
 				return 0
 			}
 			fmt.Fprintf(os.Stderr, "jaml evaluator: reading request: %v\n", err)
 			return exitProtocolBroken
 		}
-		var written error
-		serving.during(func() { written = built.serve(job, responses) })
-		if written != nil {
-			fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", written)
+		if err := serving.accept(incoming); err != nil {
+			fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
 			return exitProtocolBroken
 		}
 	}
 }
 
-func receiveTemplate(requests *json.Decoder, responses *json.Encoder) (*template, error) {
-	var plan blueprint
-	if err := requests.Decode(&plan); err != nil {
-		return nil, fmt.Errorf("reading the template: %w", err)
-	}
-	built, err := plan.build()
-	if err != nil {
-		refused := describeFailure(err)
-		return nil, errors.Join(errTemplateRefused, responses.Encode(&refused))
-	}
-	return built, responses.Encode((*failure)(nil))
+type evaluator struct {
+	watch   *heapWatch
+	replies *replyWriter
+	mu      sync.Mutex
+	units   map[uint64]servable
+	jobs    map[uint64]context.CancelFunc
 }
 
-func (t *template) serve(job rendering, replies *json.Encoder) error {
-	chosen, err := t.selectPath(job.Path)
+func (e *evaluator) accept(incoming request) error {
+	switch {
+	case incoming.Op == opBuild && incoming.Plan != nil:
+		go e.build(incoming.Job, incoming.Unit, *incoming.Plan)
+	case incoming.Op == opServe && incoming.Work != nil:
+		ctx, cancel := context.WithCancel(context.Background())
+		e.mu.Lock()
+		e.jobs[incoming.Job] = cancel
+		e.mu.Unlock()
+		go e.serve(ctx, incoming.Job, incoming.Unit, *incoming.Work)
+	case incoming.Op == opCancel:
+		e.mu.Lock()
+		cancel := e.jobs[incoming.Job]
+		e.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	case incoming.Op == opForget:
+		e.mu.Lock()
+		delete(e.units, incoming.Unit)
+		e.mu.Unlock()
+	default:
+		return fmt.Errorf("a malformed %q request", incoming.Op)
+	}
+	return nil
+}
+
+func (e *evaluator) build(job, unit uint64, plan blueprint) {
+	var built servable
+	var err error
+	e.watch.during(func() { built, err = plan.build() })
 	if err != nil {
-		missing := describeFailure(err)
-		return replies.Encode(selection{Failure: &missing})
+		refused := describeFailure(err)
+		e.replies.send(reply{Job: job, Failure: &refused})
+		return
 	}
-	if err := replies.Encode(selection{At: chosen.at.String()}); err != nil {
-		return err
+	e.mu.Lock()
+	e.units[unit] = built
+	e.mu.Unlock()
+	e.replies.send(reply{Job: job, Built: true})
+}
+
+func (e *evaluator) serve(ctx context.Context, job, unit uint64, request work) {
+	defer e.finish(job)
+	e.mu.Lock()
+	held := e.units[unit]
+	e.mu.Unlock()
+	if held == nil {
+		missing := describeFailure(fmt.Errorf("the evaluator holds no unit %d", unit))
+		e.replies.send(reply{Job: job, Failure: &missing})
+		return
 	}
-	return replies.Encode(answer(t.renderSubtree(chosen, job.Vars)))
+	ready, err := held.prepare(request)
+	if err != nil {
+		refused := describeFailure(err)
+		e.replies.send(reply{Job: job, Failure: &refused})
+		return
+	}
+	e.replies.send(reply{Job: job, At: &ready.at})
+	var data []byte
+	e.watch.during(func() { data, err = ready.run(ctx) })
+	if err != nil {
+		failed := describeFailure(err)
+		e.replies.send(reply{Job: job, Failure: &failed})
+		return
+	}
+	e.replies.send(reply{Job: job, Data: data})
+}
+
+func (e *evaluator) finish(job uint64) {
+	e.mu.Lock()
+	cancel := e.jobs[job]
+	delete(e.jobs, job)
+	e.mu.Unlock()
+	cancel()
+}
+
+type replyWriter struct {
+	mu      sync.Mutex
+	encoder *json.Encoder
+}
+
+func (w *replyWriter) send(outgoing any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.encoder.Encode(outgoing); err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
+		os.Exit(exitProtocolBroken)
+	}
 }
 
 func adoptTheHostsZone() {
@@ -133,16 +191,21 @@ func worldFromEnv() (evaluatorWorld, error) {
 	return evaluatorWorld{limit: limit, nonce: nonce, parent: parent}, nil
 }
 
-type evaluatorGuard struct {
+type heapWatch struct {
 	ceiling uint64
 	parent  int
+	wake    chan struct{}
+	mu      sync.Mutex
+	busy    int
 }
 
-func guardTheEvaluator(world evaluatorWorld) evaluatorGuard {
+func watchTheHeap(world evaluatorWorld) *heapWatch {
 	goruntime.GC()
 	ceiling := min(heapHeld()+uint64(world.limit), math.MaxInt64)
 	debug.SetMemoryLimit(int64(ceiling))
-	return evaluatorGuard{ceiling: ceiling, parent: world.parent}
+	watch := &heapWatch{ceiling: ceiling, parent: world.parent, wake: make(chan struct{}, 1)}
+	go watch.patrol()
+	return watch
 }
 
 func heapHeld() uint64 {
@@ -151,37 +214,55 @@ func heapHeld() uint64 {
 	return samples[0].Value.Uint64()
 }
 
-func (g evaluatorGuard) during(work func()) {
-	done := make(chan struct{})
-	watching := make(chan struct{})
-	go func() {
-		defer close(watching)
-		g.watch(done)
+func (w *heapWatch) during(work func()) {
+	w.mu.Lock()
+	w.busy++
+	if w.busy == 1 {
+		select {
+		case w.wake <- struct{}{}:
+		default:
+		}
+	}
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.busy--
+		w.mu.Unlock()
 	}()
 	work()
-	close(done)
-	<-watching
 }
 
-func (g evaluatorGuard) watch(done <-chan struct{}) {
-	ticker := time.NewTicker(memoryCheckEvery)
-	defer ticker.Stop()
-	for {
-		if held := heapHeld(); held > g.ceiling {
-			fmt.Fprintf(os.Stderr, "jaml evaluator: heap reached %d bytes, over its starting heap plus the limit, %d\n", held, g.ceiling)
-			os.Exit(exitMemoryLimit)
-		}
-		if g.orphaned() {
-			os.Exit(exitOrphaned)
-		}
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
+func (w *heapWatch) patrol() {
+	for range w.wake {
+		for w.inspect(); w.working(); w.inspect() {
+			time.Sleep(memoryCheckEvery)
 		}
 	}
 }
 
-func (g evaluatorGuard) orphaned() bool {
-	return os.Getppid() != g.parent
+func (w *heapWatch) confirmOverflow() {
+	goruntime.GC()
+	if held := heapHeld(); held > w.ceiling {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: live heap reached %d bytes, over its starting heap plus the limit, %d\n", held, w.ceiling)
+		os.Exit(exitMemoryLimit)
+	}
+}
+
+func (w *heapWatch) working() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.busy > 0
+}
+
+func (w *heapWatch) inspect() {
+	if heapHeld() > w.ceiling {
+		w.confirmOverflow()
+	}
+	if w.orphaned() {
+		os.Exit(exitOrphaned)
+	}
+}
+
+func (w *heapWatch) orphaned() bool {
+	return os.Getppid() != w.parent
 }

@@ -17,72 +17,88 @@ func expectNoFragment(t *testing.T, err error, fragments ...string) {
 }
 
 func TestRegexLiteralsEndWhereJavaScriptSaysTheyEnd(t *testing.T) {
-	template := mustTemplate(t, `
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, `
 closing: ${ /}/.test(x) }
 opening: ${ /{/.source }
 quote: ${ s.split(/'/).length }
 slashes: ${ /https?:\/\//.test(u) }
 interpolated: "${{ /}}/.test(s) }} and ${{ /{/.source }}"
 `)
-	got := evalAs[map[string]any](t, template, map[string]any{"x": "a}", "s": "it's }}", "u": "https://x"})
-	expectEqual(t, got, map[string]any{"closing": true, "opening": "{", "quote": float64(2), "slashes": true, "interpolated": "true and {"})
+		got := evalAs[map[string]any](t, template, map[string]any{"x": "a}", "s": "it's }}", "u": "https://x"})
+		expectEqual(t, got, map[string]any{"closing": true, "opening": "{", "quote": float64(2), "slashes": true, "interpolated": "true and {"})
+	})
 }
 
 func TestInterpolationEndsAtTheFirstClosingPairJavaScriptLeaves(t *testing.T) {
-	template := mustTemplate(t, "object: \"${{ {a: 1}}}\"\nnested: \"<${{ `${ `${1}}` }` }}>\"\nregex: \"${{ /}}/.source }}\"\n")
-	got := evalAs[map[string]string](t, template, nil)
-	expectEqual(t, got, map[string]string{"object": `{"a":1}`, "nested": "<1}>", "regex": "}}"})
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "object: \"${{ {a: 1}}}\"\nnested: \"<${{ `${ `${1}}` }` }}>\"\nregex: \"${{ /}}/.source }}\"\n")
+		got := evalAs[map[string]string](t, template, nil)
+		expectEqual(t, got, map[string]string{"object": `{"a":1}`, "nested": "<1}>", "regex": "}}"})
+	})
 }
 
 func TestFunctionScopeBindingsDoNotExist(t *testing.T) {
-	template := mustTemplate(t, "count: ${ arguments.length }\ntext: \"${{ arguments }}\"\n")
-	var out any
-	expectError(t, template.Eval(&out, nil, "count"), EvaluationFailed, "ReferenceError")
-	expectError(t, template.Eval(&out, nil, "text"), EvaluationFailed, "ReferenceError")
-	_, err := MakeTrustedTemplate("a: ${ new.target }\n")
-	expectError(t, err, InvalidTemplate, "new.target")
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "count: ${ arguments.length }\ntext: \"${{ arguments }}\"\n")
+		var out any
+		expectError(t, template.Eval(t.Context(), &out, nil, "count"), EvaluationFailed, "ReferenceError")
+		expectError(t, template.Eval(t.Context(), &out, nil, "text"), EvaluationFailed, "ReferenceError")
+		_, err := sb.MakeTemplate(t.Context(), "a: ${ new.target }\n")
+		expectError(t, err, InvalidTemplate, "new.target")
+	})
 }
 
 func TestTopLevelThisIsTheGlobalObject(t *testing.T) {
-	template := mustTemplate(t, "a: ${ this === globalThis }\n")
-	expectEqual(t, evalAs[bool](t, template, nil, "a"), true)
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "a: ${ this === globalThis }\n")
+		expectEqual(t, evalAs[bool](t, template, nil, "a"), true)
+	})
 }
 
 func TestLegacyOctalEscapesAreRefused(t *testing.T) {
-	for _, text := range []string{`a: ${ "\101" }`, `a: ${ '\08' }`, `a: '${ ({"\1": 1}) }'`, `a: 'x ${{ "\9" }}'`, `a: ${ 'ok' + "\7" }`} {
-		_, err := MakeTrustedTemplate(text + "\n")
-		expectError(t, err, InvalidTemplate, "Octal escape sequences are not allowed in strict mode")
-	}
-	template := mustTemplate(t, `a: ${ ["\\101", "\0", "\x41", "\u0041"] }`+"\n")
-	expectEqual(t, evalAs[[]string](t, template, nil, "a"), []string{`\101`, "\x00", "A", "A"})
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		for _, text := range []string{`a: ${ "\101" }`, `a: ${ '\08' }`, `a: '${ ({"\1": 1}) }'`, `a: 'x ${{ "\9" }}'`, `a: ${ 'ok' + "\7" }`} {
+			_, err := sb.MakeTemplate(t.Context(), text+"\n")
+			expectError(t, err, InvalidTemplate, "Octal escape sequences are not allowed in strict mode")
+		}
+		template := mustTemplate(t, sb, `a: ${ ["\\101", "\0", "\x41", "\u0041"] }`+"\n")
+		expectEqual(t, evalAs[[]string](t, template, nil, "a"), []string{`\101`, "\x00", "A", "A"})
+	})
 }
 
 func TestACommentOnlyExpressionIsEmpty(t *testing.T) {
-	for _, text := range []string{"a: ${ /* c */ }\n", "a: |\n  ${\n    // c\n  }\n", "a: \"x ${{ /* c */ }}\"\n"} {
-		_, err := MakeTrustedTemplate(text)
-		expectError(t, err, InvalidTemplate, "empty expression")
-	}
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		for _, text := range []string{"a: ${ /* c */ }\n", "a: |\n  ${\n    // c\n  }\n", "a: \"x ${{ /* c */ }}\"\n"} {
+			_, err := sb.MakeTemplate(t.Context(), text)
+			expectError(t, err, InvalidTemplate, "empty expression")
+		}
+	})
 }
 
 func TestMessagesNameOnlyTokensTheAuthorWrote(t *testing.T) {
-	_, err := MakeTrustedTemplate("a: ${ 1 + }\n")
-	expectError(t, err, InvalidTemplate, "Unexpected end of input")
-	expectNoFragment(t, err, "Unexpected token )", "use strict")
-	_, err = MakeTrustedTemplate("a: ${ 1), (2 }\n")
-	expectError(t, err, InvalidTemplate, "syntax error at line 1, column 3", "Unexpected token )")
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		_, err := sb.MakeTemplate(t.Context(), "a: ${ 1 + }\n")
+		expectError(t, err, InvalidTemplate, "Unexpected end of input")
+		expectNoFragment(t, err, "Unexpected token )", "use strict")
+		_, err = sb.MakeTemplate(t.Context(), "a: ${ 1), (2 }\n")
+		expectError(t, err, InvalidTemplate, "syntax error at line 1, column 3", "Unexpected token )")
+	})
 }
 
 func TestManyClosingCandidatesStayCheap(t *testing.T) {
-	inString := "a: \"${{ '" + strings.Repeat("}", 200_000) + "' }}\"\n"
-	repeated := "a: \"" + strings.Repeat("${{ '}}}' }} ", 5_000) + "\"\n"
-	unclosed := "a: \"${{ `" + strings.Repeat("}} ", 50_000) + "\"\n"
-	for name, text := range map[string]string{"in string": inString, "repeated": repeated, "unclosed": unclosed} {
-		started := time.Now()
-		_, _ = MakeTrustedTemplate(text)
-		if took := time.Since(started); took > 10*time.Second {
-			t.Fatalf("%s took %v", name, took)
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		inString := "a: \"${{ '" + strings.Repeat("}", 200_000) + "' }}\"\n"
+		repeated := "a: \"" + strings.Repeat("${{ '}}}' }} ", 5_000) + "\"\n"
+		unclosed := "a: \"${{ `" + strings.Repeat("}} ", 50_000) + "\"\n"
+		for name, text := range map[string]string{"in string": inString, "repeated": repeated, "unclosed": unclosed} {
+			started := time.Now()
+			_, _ = sb.MakeTemplate(t.Context(), text)
+			if took := time.Since(started); took > 10*time.Second {
+				t.Fatalf("%s took %v", name, took)
+			}
 		}
-	}
+	})
 }
 
 func TestWindowedEndSearchAgreesWithOneParseOfTheRest(t *testing.T) {
@@ -106,15 +122,17 @@ func codeValue(unit string, length int) string {
 }
 
 func TestAValueHoldingCodeIsAtMost64KiB(t *testing.T) {
-	for _, written := range []string{codeValue("1+", maxCodeBytes+2), "x ${{ 1 }}" + strings.Repeat(" ", maxCodeBytes)} {
-		_, err := MakeTrustedTemplate("v: \"" + written + "\"\n")
-		expectError(t, err, InvalidTemplate, "$.v", "longer than 65536 bytes")
-	}
-	if _, err := compileExpression(strings.Repeat(" ", maxCodeBytes+1)+"1", false); err == nil {
-		t.Fatal("expected the recompile to refuse a long expression")
-	}
-	template := mustTemplate(t, "plain: \""+strings.Repeat("(", maxCodeBytes+1)+"\"\n")
-	expectEqual(t, evalAs[string](t, template, nil, "plain"), strings.Repeat("(", maxCodeBytes+1))
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		for _, written := range []string{codeValue("1+", maxCodeBytes+2), "x ${{ 1 }}" + strings.Repeat(" ", maxCodeBytes)} {
+			_, err := sb.MakeTemplate(t.Context(), "v: \""+written+"\"\n")
+			expectError(t, err, InvalidTemplate, "$.v", "longer than 65536 bytes")
+		}
+		if _, err := compileExpression(strings.Repeat(" ", maxCodeBytes+1)+"1", wholeValue); err == nil {
+			t.Fatal("expected the recompile to refuse a long expression")
+		}
+		template := mustTemplate(t, sb, "plain: \""+strings.Repeat("(", maxCodeBytes+1)+"\"\n")
+		expectEqual(t, evalAs[string](t, template, nil, "plain"), strings.Repeat("(", maxCodeBytes+1))
+	})
 }
 
 func TestTheWorstRecursiveConstructsUnderTheCapLeaveTheParserStackBounded(t *testing.T) {
@@ -136,32 +154,38 @@ func TestTheWorstRecursiveConstructsUnderTheCapLeaveTheParserStackBounded(t *tes
 }
 
 func TestMillionDeepExpressionTextFailsCleanlyInsteadOfOverflowingTheParser(t *testing.T) {
-	survivesInAStackCappedChild(t, func(t *testing.T) {
-		deep := strings.Repeat("(", 1_500_000)
-		for _, text := range []string{"v: ${ " + deep + " }\n", "v: \"x ${{ " + deep + "\"\n", "v: \"x ${{ '}}}' }} " + deep + "\"\n"} {
-			_, err := MakeTrustedTemplate(text)
-			expectError(t, err, InvalidTemplate, "$.v", "longer than 65536 bytes")
-		}
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		survivesInAStackCappedChild(t, func(t *testing.T) {
+			deep := strings.Repeat("(", 1_500_000)
+			for _, text := range []string{"v: ${ " + deep + " }\n", "v: \"x ${{ " + deep + "\"\n", "v: \"x ${{ '}}}' }} " + deep + "\"\n"} {
+				_, err := sb.MakeTemplate(t.Context(), text)
+				expectError(t, err, InvalidTemplate, "$.v", "longer than 65536 bytes")
+			}
+		})
 	})
 }
 
 func TestDistinctValuesFullOfInterpolationsMakeQuickly(t *testing.T) {
-	var written strings.Builder
-	for value := range 10 {
-		fmt.Fprintf(&written, "v%d: '%d%s'\n", value, value, strings.Repeat("${{a}}", 10_900))
-	}
-	started := time.Now()
-	template := mustTemplate(t, written.String())
-	if took := time.Since(started); took > raceSlowdown*time.Second {
-		t.Fatalf("making %d bytes took %v", written.Len(), took)
-	}
-	expectEqual(t, evalAs[string](t, template, map[string]any{"a": 1}, "v3"), "3"+strings.Repeat("1", 10_900))
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var written strings.Builder
+		for value := range 10 {
+			fmt.Fprintf(&written, "v%d: '%d%s'\n", value, value, strings.Repeat("${{a}}", 10_900))
+		}
+		started := time.Now()
+		template := mustTemplate(t, sb, written.String())
+		if took := time.Since(started); took > raceSlowdown*time.Second {
+			t.Fatalf("making %d bytes took %v", written.Len(), took)
+		}
+		expectEqual(t, evalAs[string](t, template, map[string]any{"a": 1}, "v3"), "3"+strings.Repeat("1", 10_900))
+	})
 }
 
 func TestAnEndHiddenBehindClusteredClosersIsStillFound(t *testing.T) {
-	inString := "'}}" + strings.Repeat(" ", 50_000) + strings.Repeat("}}", 5_000) + "'"
-	template := mustTemplate(t, "v: \"${{ "+inString+".length }}\"\n")
-	expectEqual(t, evalAs[string](t, template, nil, "v"), fmt.Sprint(len(inString)-2))
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		inString := "'}}" + strings.Repeat(" ", 50_000) + strings.Repeat("}}", 5_000) + "'"
+		template := mustTemplate(t, sb, "v: \"${{ "+inString+".length }}\"\n")
+		expectEqual(t, evalAs[string](t, template, nil, "v"), fmt.Sprint(len(inString)-2))
+	})
 }
 
 func TestAnEndSearchThatOutgrowsItsValueIsRefused(t *testing.T) {
@@ -176,20 +200,22 @@ func TestAnEndSearchThatOutgrowsItsValueIsRefused(t *testing.T) {
 }
 
 func TestAClosedExpressionReportsItsOwnSyntaxError(t *testing.T) {
-	for written, fragments := range map[string][]string{
-		"v: \"${ `\\\\1` }\"\n":         {"${`\\1`}:", "Octal escape sequences are not allowed in this context"},
-		"v: \"a ${{ `\\\\1` }} b\"\n":   {"${{`\\1`}}:", "Octal escape sequences are not allowed in this context"},
-		"v: \"${ 1 + `\\\\u` }\"\n":     {"${1 + `\\u`}:", "invalid escape"},
-		"v: \"${ /a/z }\"\n":            {"Invalid flags supplied to RegExp constructor 'z'"},
-		"v: \"${ /(/ }\"\n":             {"Unterminated group"},
-		"v: \"a ${{ /(/ }} b\"\n":       {"${{/(/}}:", "Unterminated group"},
-		"v: \"${ '\\\\u{110000}' }\"\n": {"Unexpected token ILLEGAL"},
-		"v: \"${ '\\\\x4' }\"\n":        {"Unexpected token ILLEGAL"},
-		"v: \"${ 'abc }\"\n":            {"Unexpected token ILLEGAL"},
-		"v: \"${ `${1` }\"\n":           {"unclosed ${"},
-	} {
-		_, err := MakeTrustedTemplate(written)
-		expectError(t, err, InvalidTemplate, append([]string{"$.v"}, fragments...)...)
-		expectNoFragment(t, err, "unclosed ${{", "}} b")
-	}
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		for written, fragments := range map[string][]string{
+			"v: \"${ `\\\\1` }\"\n":         {"${`\\1`}:", "Octal escape sequences are not allowed in this context"},
+			"v: \"a ${{ `\\\\1` }} b\"\n":   {"${{`\\1`}}:", "Octal escape sequences are not allowed in this context"},
+			"v: \"${ 1 + `\\\\u` }\"\n":     {"${1 + `\\u`}:", "invalid escape"},
+			"v: \"${ /a/z }\"\n":            {"Invalid flags supplied to RegExp constructor 'z'"},
+			"v: \"${ /(/ }\"\n":             {"Unterminated group"},
+			"v: \"a ${{ /(/ }} b\"\n":       {"${{/(/}}:", "Unterminated group"},
+			"v: \"${ '\\\\u{110000}' }\"\n": {"Unexpected token ILLEGAL"},
+			"v: \"${ '\\\\x4' }\"\n":        {"Unexpected token ILLEGAL"},
+			"v: \"${ 'abc }\"\n":            {"Unexpected token ILLEGAL"},
+			"v: \"${ `${1` }\"\n":           {"unclosed ${"},
+		} {
+			_, err := sb.MakeTemplate(t.Context(), written)
+			expectError(t, err, InvalidTemplate, append([]string{"$.v"}, fragments...)...)
+			expectNoFragment(t, err, "unclosed ${{", "}} b")
+		}
+	})
 }

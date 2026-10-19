@@ -39,6 +39,7 @@ type delimiter struct {
 var (
 	wholeValue    = delimiter{opens: "${", closes: "}"}
 	interpolation = delimiter{opens: "${{", closes: "}}"}
+	bare          = delimiter{}
 )
 
 func (d delimiter) around(code string) string {
@@ -92,7 +93,7 @@ func (c *compiler) compileWhole(trimmed string) (text, error) {
 		return text{}, errNotAWholeExpression
 	}
 	code := after[:end]
-	compiled, err := compileExpression(code, false)
+	compiled, err := compileExpression(code, wholeValue)
 	if err != nil {
 		return text{}, fmt.Errorf("%s: %w", wholeValue.around(code), err)
 	}
@@ -114,7 +115,7 @@ func (c *compiler) compileInterpolations(written string) (text, error) {
 		if err != nil {
 			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, excerpt(after, codeExcerptLength), err)
 		}
-		code, err := compileExpression(after[:end], true)
+		code, err := compileExpression(after[:end], interpolation)
 		if err != nil {
 			return text{}, fmt.Errorf("%s: %w", interpolation.around(after[:end]), err)
 		}
