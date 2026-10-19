@@ -28,6 +28,7 @@ type _Document struct {
 type _Subtree struct {
 	node any
 	path *_DataPath
+	root any
 }
 
 func makeDocument(ctx context.Context, written string, configured _ExpressionSettings) (*_Document, error) {
@@ -76,7 +77,7 @@ func (d *_Document) prepare(request _Work) (_Prepared, error) {
 			return _Rendered{}, err
 		}
 		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
-		tree, err := renderer.render(chosen.node, renderer.place(chosen.path))
+		tree, err := renderer.render(chosen.node, renderer.place(chosen))
 		if err != nil {
 			return _Rendered{}, err
 		}
@@ -97,8 +98,11 @@ func encodeResult(result _Rendered) ([]byte, error) {
 }
 
 func (d *_Document) selectPath(path []string) (_Subtree, error) {
-	current, location := d.root, (*_DataPath)(nil)
+	current, location, root := d.root, (*_DataPath)(nil), any(nil)
 	for _, step := range path {
+		if root == nil {
+			root = d.compiled.staticRoot(current)
+		}
 		switch typed := current.(type) {
 		case *_Mapping:
 			found, ok := typed.values[step]
@@ -116,7 +120,7 @@ func (d *_Document) selectPath(path []string) (_Subtree, error) {
 			return _Subtree{}, d.missingInside(_Subtree{node: current, path: location}, step)
 		}
 	}
-	return _Subtree{node: current, path: location}, nil
+	return _Subtree{node: current, path: location, root: root}, nil
 }
 
 func (d *_Document) missingInside(leaf _Subtree, step string) error {

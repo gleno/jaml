@@ -20,21 +20,23 @@ type _Renderer struct {
 type _Place struct {
 	path  *_DataPath
 	skips *_ShapeCursor
+	root  any
 }
 
-func (r *_Renderer) place(path *_DataPath) _Place {
-	if r.skips == nil {
-		return _Place{path: path}
+func (r *_Renderer) place(chosen _Subtree) _Place {
+	var place = _Place{path: chosen.path, root: chosen.root}
+	if r.skips != nil {
+		place.skips = &_ShapeCursor{shape: r.skips}
 	}
-	return _Place{path: path, skips: &_ShapeCursor{shape: r.skips}}
+	return place
 }
 
 func (p _Place) key(key string) _Place {
-	return _Place{path: p.path.atKey(key), skips: p.skips.key(key)}
+	return _Place{path: p.path.atKey(key), skips: p.skips.key(key), root: p.root}
 }
 
 func (p _Place) item(index int) _Place {
-	return _Place{path: p.path.atIndex(index), skips: p.skips.item()}
+	return _Place{path: p.path.atIndex(index), skips: p.skips.item(), root: p.root}
 }
 
 func (r *_Renderer) render(node any, place _Place) (any, error) {
@@ -42,8 +44,11 @@ func (r *_Renderer) render(node any, place _Place) (any, error) {
 		r.skipped = append(r.skipped, r.relative(place.path))
 		return nil, nil
 	}
+	if place.root == nil {
+		place.root = r.compiled.staticRoot(node)
+	}
 	if place.skips == nil {
-		if encoded, spliced := r.compiled.spliced(node); spliced {
+		if encoded, spliced := r.compiled.spliced(place.root, node); spliced {
 			return encoded, nil
 		}
 	}

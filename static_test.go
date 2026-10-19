@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -92,6 +93,17 @@ type _SkipsBeside struct {
 	Static map[string]any `json:"static"`
 }
 
+type _SkipsDeep struct {
+	Static struct {
+		Deep struct {
+			Deeper []*Expression `json:"deeper"`
+		} `json:"deep"`
+	} `json:"static"`
+	Shared struct {
+		A *Expression `json:"a"`
+	} `json:"shared"`
+}
+
 type _SkipsInside struct {
 	Static map[string]*Expression `json:"static"`
 	Shared *Expression            `json:"shared"`
@@ -126,7 +138,7 @@ func renderedBytes(t *testing.T, d *_Document, request _Work) (string, [][]strin
 }
 
 func TestSplicedResolvesWriteTheSameBytesAsWalkedOnes(t *testing.T) {
-	var targets = []reflect.Type{reflect.TypeFor[any](), reflect.TypeFor[_SkipsBeside](), reflect.TypeFor[_SkipsInside]()}
+	var targets = []reflect.Type{reflect.TypeFor[any](), reflect.TypeFor[_SkipsBeside](), reflect.TypeFor[_SkipsInside](), reflect.TypeFor[_SkipsDeep]()}
 	var coercions = [][]Option{nil, {WithNullCoercion(Strict)}, {WithUndefinedCoercion(Loose)}}
 	for index, written := range splicingCorpus {
 		for _, options := range coercions {
@@ -144,7 +156,7 @@ func TestSplicedResolvesWriteTheSameBytesAsWalkedOnes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, path := range [][]string{nil, {"code"}, {"static"}, {"more"}, {"2"}} {
+				for _, path := range [][]string{nil, {"code"}, {"static"}, {"static", "deep"}, {"static", "deep", "deeper"}, {"code", "beside"}, {"code", "list", "2"}, {"more"}, {"more", "0"}, {"again"}, {"merged"}, {"2"}, {"3", "x", "2"}, {"kept"}} {
 					if _, err := spliced.selectPath(path); err != nil {
 						continue
 					}
@@ -168,4 +180,57 @@ func TestAnExpressionFieldInsideStaticDataStillBindsItsView(t *testing.T) {
 		expectEqual(t, mustResolve[map[string]string](t, t.Context(), got.More[1]), map[string]string{"x": "y"})
 		expectEqual(t, mustResolve[map[string]string](t, t.Context(), got.Shared), map[string]string{"x": "y"})
 	})
+}
+
+const chainDepth = 60
+
+func chainedStaticJaml() (string, []string) {
+	var written strings.Builder
+	var path []string
+	for level := range chainDepth {
+		written.WriteString(strings.Repeat("  ", level) + "k:\n")
+		path = append(path, "k")
+	}
+	written.WriteString(strings.Repeat("  ", chainDepth) + "leaf: " + strings.Repeat("x", 1<<20) + "\n")
+	return written.String(), path
+}
+
+func collectedHeap() uint64 {
+	var stats runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&stats)
+	return stats.HeapAlloc
+}
+
+func TestResolvingEveryPrefixOfAStaticChainKeepsOneEncoding(t *testing.T) {
+	var written, path = chainedStaticJaml()
+	var document = mustJaml(t, mustSandbox(t, trustedKind), written)
+	if _, err := Resolve[json.RawMessage](t.Context(), document.At(path[:chainDepth/2]...)); err != nil {
+		t.Fatal(err)
+	}
+	var before = collectedHeap()
+	for depth := range chainDepth + 1 {
+		if _, err := Resolve[json.RawMessage](t.Context(), document.At(path[:depth]...)); err != nil {
+			t.Fatalf("at depth %d: %v", depth, err)
+		}
+	}
+	var grown = int64(collectedHeap()) - int64(before)
+	runtime.KeepAlive(document)
+	if grown > 3<<20/2 {
+		t.Fatalf("resolving every prefix grew the live heap by %d bytes past one encoding", grown)
+	}
+}
+
+func TestASecureChildSurvivesResolvingEveryPrefixOfAStaticChain(t *testing.T) {
+	var written, path = chainedStaticJaml()
+	var sb = mustSandbox(t, isolatedKind, WithMemoryLimit(32<<20))
+	var document = mustJaml(t, sb, written)
+	var first = childPID(t, sb)
+	for resolved := range 200 {
+		var depth = resolved % (chainDepth + 1)
+		if _, err := Resolve[json.RawMessage](t.Context(), document.At(path[:depth]...)); err != nil {
+			t.Fatalf("resolve %d at depth %d: %v", resolved, depth, err)
+		}
+	}
+	expectEqual(t, childPID(t, sb), first)
 }

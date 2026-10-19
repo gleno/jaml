@@ -42,21 +42,108 @@ func (c *_Compiled) holdsCode(node any) bool {
 	return c.coded[identityOf(node)]
 }
 
-func (c *_Compiled) spliced(node any) (_Encoded, bool) {
+func (c *_Compiled) staticRoot(node any) any {
 	var identity = identityOf(node)
 	if identity == nil || c.coded[identity] {
+		return nil
+	}
+	return node
+}
+
+func (c *_Compiled) spliced(root any, node any) (_Encoded, bool) {
+	if root == nil {
 		return nil, false
 	}
+	var encoding = c.encodingOf(root)
+	if encoding == nil {
+		return nil, false
+	}
+	span, recorded := encoding.extents[identityOf(node)]
+	if !recorded {
+		return nil, false
+	}
+	return encoding.written[span.start:span.end:span.end], true
+}
+
+func (c *_Compiled) encodingOf(root any) *_Encoding {
+	var identity = identityOf(root)
 	if known, seen := c.encoded.Load(identity); seen {
-		return known.(_Encoded), known.(_Encoded) != nil
+		return known.(*_Encoding)
 	}
-	var encoded = unboundedWriter()
-	var spliceable _Encoded
-	if encoded.data(node) == nil {
-		spliceable = encoded.written
+	var encoding = &_Encoding{extents: map[any]_Extent{}}
+	var writer = unboundedWriter()
+	if encoding.write(writer, root) != nil {
+		encoding = nil
+	} else {
+		encoding.written = writer.written
 	}
-	known, _ := c.encoded.LoadOrStore(identity, spliceable)
-	return known.(_Encoded), known.(_Encoded) != nil
+	known, _ := c.encoded.LoadOrStore(identity, encoding)
+	return known.(*_Encoding)
+}
+
+type _Encoding struct {
+	written []byte
+	extents map[any]_Extent
+}
+
+type _Extent struct {
+	start int
+	end   int
+}
+
+func (e *_Encoding) write(w *_WireWriter, node any) error {
+	var start = len(w.written)
+	var err error
+	switch typed := node.(type) {
+	case *_Mapping:
+		err = e.mapping(w, typed)
+	case []any:
+		err = e.list(w, typed)
+	default:
+		return w.data(node)
+	}
+	if err != nil {
+		return err
+	}
+	if identity := identityOf(node); identity != nil {
+		if _, recorded := e.extents[identity]; !recorded {
+			e.extents[identity] = _Extent{start: start, end: len(w.written)}
+		}
+	}
+	return nil
+}
+
+func (e *_Encoding) mapping(w *_WireWriter, mapping *_Mapping) error {
+	w.mark('{')
+	for index, key := range mapping.keys {
+		if index > 0 {
+			w.mark(',')
+		}
+		if err := w.quoted(key); err != nil {
+			return err
+		}
+		w.mark(':')
+		if err := e.write(w, mapping.values[key]); err != nil {
+			return err
+		}
+	}
+	return w.raw("}")
+}
+
+func (e *_Encoding) list(w *_WireWriter, list []any) error {
+	if list == nil {
+		return w.raw("null")
+	}
+	w.mark('[')
+	for index, item := range list {
+		if index > 0 {
+			w.mark(',')
+		}
+		if err := e.write(w, item); err != nil {
+			return err
+		}
+	}
+	return w.raw("]")
 }
 
 type _CodeOutline struct {
