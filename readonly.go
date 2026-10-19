@@ -26,7 +26,7 @@ func (r realm) explainWrite(compiled expression, err error) error {
 	if !errors.As(err, &exception) || !compiled.writesWhere(exception) || !r.refusesWrite(exception.Value()) {
 		return err
 	}
-	return newThrown("TypeError: "+readOnlyRefusal, r.snapshot(exception.Value()))
+	return &Thrown{Message: "TypeError: " + readOnlyRefusal, Value: r.snapshot(exception.Value())}
 }
 
 func (r realm) refusesWrite(thrown goja.Value) bool {

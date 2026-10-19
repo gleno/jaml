@@ -61,7 +61,7 @@ func uncatchable(err error) error {
 }
 
 func (r realm) describeException(exception *goja.Exception) *Thrown {
-	return newThrown(r.describe(exception.Value()), r.snapshot(exception.Value()))
+	return &Thrown{Message: r.describe(exception.Value()), Value: r.snapshot(exception.Value())}
 }
 
 func (r realm) describe(value goja.Value) string {

@@ -277,7 +277,11 @@ func expectDeepCut(t *testing.T, value any) {
 }
 
 func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
-	carried := describeFailure(fail(EvaluationFailed, "$.v: %w", &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})).rebuild()
+	var sent reply
+	if err := json.Unmarshal(frames{limit: 1 << 20}.failure(1, "$.v", fail(EvaluationFailed, "$.v: %w", &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})), &sent); err != nil {
+		t.Fatal(err)
+	}
+	carried := sent.Failure.rebuild()
 	var caught *Thrown
 	if !errors.As(carried, &caught) {
 		t.Fatalf("no Thrown in %v", carried)

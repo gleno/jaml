@@ -80,15 +80,6 @@ func framesFor(limit memoryLimit) frames {
 	return frames{limit: int(min(int64(limit)/4, math.MaxInt))}
 }
 
-func (f frames) seal(at string, outgoing reply) ([]byte, error) {
-	encoded, err := wireJSON(outgoing)
-	if err != nil || len(encoded) <= f.limit {
-		return encoded, err
-	}
-	refusal := describeFailure(located(at, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
-	return wireJSON(reply{Job: outgoing.Job, Failure: &refusal})
-}
-
 func wireJSON(value any) ([]byte, error) {
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
@@ -173,25 +164,13 @@ func describeFailure(err error) failure {
 	if !isOwn {
 		failed = expressionError{kind: EvaluationFailed, cause: err}
 	}
-	described := failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error(), Thrown: thrownOnWireFrom(err)}
+	described := failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
 		}
 	}
 	return described
-}
-
-func thrownOnWireFrom(err error) *thrownOnWire {
-	var caught *Thrown
-	if !errors.As(err, &caught) {
-		return nil
-	}
-	value, marshalErr := wireJSON(caught.Value)
-	if marshalErr != nil {
-		value = json.RawMessage("null")
-	}
-	return &thrownOnWire{Message: caught.Message, Value: value}
 }
 
 func (r reply) outcomes() int {

@@ -115,7 +115,7 @@ func (e *evaluator) accept(incoming request) error {
 		held := e.holding(incoming.Unit)
 		if held == nil {
 			e.finish(incoming.Job)
-			e.replies.send("", reply{Job: incoming.Job, Missing: true})
+			e.replies.write(e.replies.frames.missing(incoming.Job))
 			return nil
 		}
 		go e.serve(ctx, incoming.Job, held, *incoming.Work)
@@ -177,30 +177,29 @@ func (e *evaluator) build(ctx context.Context, job uint64, plan blueprint) {
 	e.mu.Unlock()
 	e.finish(job)
 	if err != nil {
-		refused := describeFailure(err)
-		e.replies.send("", reply{Job: job, Failure: &refused})
+		e.replies.write(e.replies.frames.failure(job, "", err))
 		return
 	}
-	e.replies.send("", reply{Job: job, Built: true})
+	e.replies.write(e.replies.frames.built(job))
 }
 
 func (e *evaluator) serve(ctx context.Context, job uint64, held servable, request work) {
 	defer e.finish(job)
 	run, err := held.prepare(request)
 	if err != nil {
-		refused := describeFailure(err)
-		e.replies.send("", reply{Job: job, Failure: &refused})
+		e.replies.write(e.replies.frames.failure(job, "", err))
 		return
 	}
-	at := selectedPath(request.Path).String()
-	var result answered
-	e.watch.during(func() { result, err = run(ctx) })
-	if err != nil {
-		failed := describeFailure(err)
-		e.replies.send(at, reply{Job: job, Failure: &failed})
-		return
-	}
-	e.replies.send(at, reply{Job: job, Data: result.data, Skipped: result.skipped})
+	var sealed []byte
+	e.watch.during(func() {
+		result, err := run(ctx)
+		if err != nil {
+			sealed = e.replies.frames.failure(job, selectedPath(request.Path).String(), err)
+			return
+		}
+		sealed = e.replies.frames.answer(job, result)
+	})
+	e.replies.write(sealed)
 }
 
 func (e *evaluator) finish(job uint64) {
@@ -226,19 +225,14 @@ func (w *replyWriter) greet(greeting hello) {
 	w.write(encoded)
 }
 
-func (w *replyWriter) send(at string, outgoing reply) {
-	encoded, err := w.frames.seal(at, outgoing)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
-		os.Exit(exitProtocolBroken)
-	}
-	w.write(encoded)
-}
-
 func (w *replyWriter) write(frame []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if _, err := w.out.Write(append(frame, '\n')); err != nil {
+	if _, err := w.out.Write(frame); err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
+		os.Exit(exitProtocolBroken)
+	}
+	if _, err := w.out.Write([]byte{'\n'}); err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
 		os.Exit(exitProtocolBroken)
 	}

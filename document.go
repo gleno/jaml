@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -11,7 +10,13 @@ type servable interface {
 	prepare(request work) (prepared, error)
 }
 
-type prepared func(ctx context.Context) (answered, error)
+type prepared func(ctx context.Context) (_Rendered, error)
+
+type _Rendered struct {
+	tree    any
+	at      *dataPath
+	skipped [][]string
+}
 
 type _Document struct {
 	root     any
@@ -63,66 +68,27 @@ func (d *_Document) prepare(request work) (prepared, error) {
 		return nil, err
 	}
 	var plan = sessionPlan{values: request.Values, scripts: request.Scripts, pinned: request.Pinned}
-	return func(ctx context.Context) (answered, error) {
+	return func(ctx context.Context) (_Rendered, error) {
 		var engine = &lazySession{ctx: ctx, plan: plan}
 		defer engine.close()
 		if err := engine.warm(); err != nil {
-			return answered{}, err
+			return _Rendered{}, err
 		}
 		var walk = &renderer{texts: d.texts, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.at.depth()}
 		tree, err := walk.render(chosen.node, walk.place(chosen.at))
 		if err != nil {
-			return answered{}, err
+			return _Rendered{}, err
 		}
-		data, err := encodeResult(tree, chosen.at)
-		return answered{data: data, skipped: walk.skipped}, err
+		return _Rendered{tree: tree, at: chosen.at, skipped: walk.skipped}, nil
 	}, nil
 }
 
-func encodeResult(tree any, at *dataPath) ([]byte, error) {
-	var encoded bytes.Buffer
-	if err := writeTree(&encoded, tree); err != nil {
-		return nil, fail(CoercionFailed, "%w", err).within(at.String())
+func encodeResult(result _Rendered) ([]byte, error) {
+	var encoded = unboundedWriter()
+	if err := encoded.data(result.tree); err != nil {
+		return nil, fail(CoercionFailed, "%w", err).within(result.at.String())
 	}
-	return encoded.Bytes(), nil
-}
-
-func writeTree(out *bytes.Buffer, node any) error {
-	switch typed := node.(type) {
-	case *_Mapping:
-		out.WriteByte('{')
-		for index, key := range typed.keys {
-			if index > 0 {
-				out.WriteByte(',')
-			}
-			if err := writeTree(out, key); err != nil {
-				return err
-			}
-			out.WriteByte(':')
-			if err := writeTree(out, typed.values[key]); err != nil {
-				return err
-			}
-		}
-		out.WriteByte('}')
-	case []any:
-		out.WriteByte('[')
-		for index, item := range typed {
-			if index > 0 {
-				out.WriteByte(',')
-			}
-			if err := writeTree(out, item); err != nil {
-				return err
-			}
-		}
-		out.WriteByte(']')
-	default:
-		encoded, err := wireJSON(node)
-		if err != nil {
-			return err
-		}
-		out.Write(encoded)
-	}
-	return nil
+	return encoded.written, nil
 }
 
 func (d *_Document) selectPath(path []string) (subtree, error) {

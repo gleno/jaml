@@ -36,18 +36,30 @@ func (thrownPolicy) instance(func() error) (bool, error) {
 	return true, nil
 }
 
-func (r realm) snapshot(thrown goja.Value) json.RawMessage {
+func (r realm) snapshot(thrown goja.Value) any {
 	var taken any
 	var err error
 	if contained := r.contain(func() { taken, err = readData(r, thrown, thrownPolicy{}) }); contained != nil || err != nil {
-		return json.RawMessage("null")
+		return nil
 	}
 	if _, isUndefined := taken.(undefined); isUndefined {
-		return json.RawMessage("null")
+		return nil
 	}
-	encoded, err := wireJSON(taken)
-	if err != nil {
-		return json.RawMessage("null")
+	return asDecoded(taken)
+}
+
+func asDecoded(value any) any {
+	switch typed := value.(type) {
+	case int64:
+		return float64(typed)
+	case []any:
+		for index, item := range typed {
+			typed[index] = asDecoded(item)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			typed[key] = asDecoded(item)
+		}
 	}
-	return encoded
+	return value
 }

@@ -67,5 +67,9 @@ func (u *localUnit) serve(ctx context.Context, request work) outcome {
 	if err != nil {
 		return refused{err: err}
 	}
-	return result
+	data, err := encodeResult(result)
+	if err != nil {
+		return refused{err: err}
+	}
+	return answered{data: data, skipped: result.skipped}
 }

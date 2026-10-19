@@ -57,3 +57,14 @@ func TestHTMLCharactersCountAsTheyAreAtTheReplyCap(t *testing.T) {
 		})
 	}
 }
+
+func TestAnAnswerJustUnderTheCapKeepsTheChild(t *testing.T) {
+	sb := mustIsolated(t, WithMemoryLimit(64<<20))
+	before := childPID(t, sb)
+	huge := mustExpression(t, sb, "x => 'x'.repeat(x)")
+	var text string
+	if err := resolveInto(within(t, 30*time.Second), &text, huge, 16_700_000); err != nil || len(text) != 16_700_000 {
+		t.Fatalf("an answer under the cap: %d bytes, %v", len(text), err)
+	}
+	expectEqual(t, childPID(t, sb), before)
+}
