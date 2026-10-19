@@ -61,7 +61,7 @@ An expression you drop without ending its context is still forgotten: once the g
 - **Functions are called.** Code that evaluates to a function is called with the `args` of the `Resolve`; a function that returns a function is called again, with no arguments.
 - **Nothing runs until you resolve.** Making an expression parses the YAML and compiles all its code, so syntax errors surface immediately, but evaluates nothing.
 - **A pinned order.** Code runs in the order the document is written, so scripts with state behave the same every time.
-- **Results are data.** Code must produce JSON data: scalars, lists, objects. Symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances, functions inside data, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
+- **Results are data.** Code must produce JSON data: scalars, lists, objects. Symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances (an array or object counts as data only with its plain prototype or none), functions inside data, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does. A field typed `*jaml.Expression` is not evaluated: it receives a view you resolve later.
 - **The world of an evaluation travels on the context.** Values, scripts, the clock and the random seed.
 - **Thrown values as data.** What code threw is reachable as `*jaml.Thrown`, with its message and a JSON snapshot of the value.

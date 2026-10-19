@@ -121,12 +121,12 @@ func (r _Realm) describeObject(object *goja.Object) string {
 		return "a function"
 	}
 	switch {
+	case !r.isData(object):
+		return r.describeInstance(object)
 	case object.ClassName() == "Array":
 		return "an array"
-	case r.isPlain(object):
-		return "an object"
 	}
-	return describeInstance(object)
+	return "an object"
 }
 
 func errorText(object *goja.Object) string {

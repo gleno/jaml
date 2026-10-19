@@ -63,6 +63,8 @@ func TestThrownValuesAreNamedByTheirType(t *testing.T) {
 		"instance":           {"throw new (class Point {})()", ": threw an instance of Point: "},
 		"function":           {"throw () => 1", ": threw a function: "},
 		"array":              {"throw [1]", ": threw an array: "},
+		"array subclass":     {"throw new (class Stack extends Array {})()", ": threw an instance of Stack: "},
+		"null array":         {"throw Object.setPrototypeOf([1], null)", ": threw an array: "},
 		"proxy":              {"throw new Proxy({}, { get() { throw new Error('trap ran') } })", ": threw a proxy: "},
 		"multi-line message": {"throw new Error('a\\n\\n  b')", ": Error: a b: "},
 		"long message":       {"throw new Error('x'.repeat(1000))", ": Error: " + strings.Repeat("x", 193) + "…: evaluation failed"},

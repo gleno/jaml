@@ -29,6 +29,7 @@ type _Undefined struct{}
 type _Realm struct {
 	vm              *goja.Runtime
 	objectPrototype *goja.Object
+	arrayPrototype  *goja.Object
 	ownKeys         goja.Callable
 	freeze          goja.Callable
 	parse           goja.Callable
@@ -38,7 +39,8 @@ func captureRealm(vm *goja.Runtime) _Realm {
 	var object = vm.Get("Object").ToObject(vm)
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
 	freeze, _ := goja.AssertFunction(object.Get("freeze"))
-	return _Realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
+	var arrayPrototype = vm.Get("Array").ToObject(vm).Get("prototype").ToObject(vm)
+	return _Realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), arrayPrototype: arrayPrototype, ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
 }
 
 func (r _Realm) native(run func()) error {
@@ -59,9 +61,35 @@ func (r _Realm) contain(run func()) error {
 	return err
 }
 
-func (r _Realm) isPlain(object *goja.Object) bool {
+func (r _Realm) isData(object *goja.Object) bool {
 	var prototype = object.Prototype()
-	return prototype == nil || prototype.SameAs(r.objectPrototype)
+	switch object.ClassName() {
+	case "Object":
+		return prototype == nil || prototype.SameAs(r.objectPrototype)
+	case "Array":
+		return prototype == nil || prototype.SameAs(r.arrayPrototype)
+	}
+	return false
+}
+
+func (r _Realm) describeInstance(object *goja.Object) string {
+	var plain, custom = r.objectPrototype, "an object with a custom prototype"
+	switch object.ClassName() {
+	case "Object":
+	case "Array":
+		plain, custom = r.arrayPrototype, "an array with a custom prototype"
+	default:
+		return "an instance of " + object.ClassName()
+	}
+	constructor, isObject := object.Get("constructor").(*goja.Object)
+	if !isObject || constructor.SameAs(plain.Get("constructor")) {
+		return custom
+	}
+	name, isString := constructor.Get("name").(goja.String)
+	if !isString || name.Length() == 0 {
+		return custom
+	}
+	return "an instance of " + excerpt(name.String(), codeExcerptLength)
 }
 
 type _NotData struct {
@@ -200,22 +228,21 @@ func (r *_DataReader) readObject(object *goja.Object, path *_DataPath) (any, err
 	}
 	r.ancestors[object] = true
 	defer delete(r.ancestors, object)
-	switch {
-	case object.ClassName() == "Array":
-		return r.readArray(object, path)
-	case object.ClassName() == "Object" && r.realm.isPlain(object):
-		return r.readFields(object, path)
+	if !r.realm.isData(object) {
+		asFields, err := r.policy.instance(func() error { return r.refuseInstance(object, path) })
+		if err != nil || !asFields {
+			return nil, err
+		}
 	}
-	asFields, err := r.policy.instance(func() error { return r.refuseInstance(object, path) })
-	if err != nil || !asFields {
-		return nil, err
+	if object.ClassName() == "Array" {
+		return r.readArray(object, path)
 	}
 	return r.readFields(object, path)
 }
 
 func (r *_DataReader) refuseInstance(object *goja.Object, path *_DataPath) error {
 	var described string
-	if err := r.attempt(path, func() { described = describeInstance(object) }); err != nil {
+	if err := r.attempt(path, func() { described = r.realm.describeInstance(object) }); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s is %s%s", describeResultAt(path), described, notYAML)
@@ -232,21 +259,6 @@ func (r *_DataReader) property(object *goja.Object, key string, path *_DataPath)
 	var value goja.Value
 	var err = r.attempt(path, func() { value = object.Get(key) })
 	return value, err
-}
-
-func describeInstance(object *goja.Object) string {
-	if object.ClassName() != "Object" {
-		return "an instance of " + object.ClassName()
-	}
-	constructor, isObject := object.Get("constructor").(*goja.Object)
-	if !isObject {
-		return "an object with a custom prototype"
-	}
-	name, isString := constructor.Get("name").(goja.String)
-	if !isString || name.Length() == 0 {
-		return "an object with a custom prototype"
-	}
-	return "an instance of " + excerpt(name.String(), codeExcerptLength)
 }
 
 func (r *_DataReader) readArray(array *goja.Object, path *_DataPath) (any, error) {

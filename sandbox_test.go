@@ -232,6 +232,7 @@ func TestThrownIsReachableWithItsMessageAndValueInBothKinds(t *testing.T) {
 		"nan":    {"(() => { throw [NaN, -0, Infinity] })()", "threw an array", []any{nil, float64(0), nil}},
 		"getter": {"(() => { throw {get a() { return 'read' }} })()", "threw an object", map[string]any{"a": "read"}},
 		"trap":   {"(() => { throw {ok: 1, get bad() { throw new Error('trap') }} })()", "threw an object", nil},
+		"stack":  {"(() => { throw (class Stack extends Array {}).of(1, 2) })()", "threw an instance of Stack", []any{float64(1), float64(2)}},
 		"deep":   {"(() => { let a = 'leaf'; for (let i = 0; i < 5000; i++) a = [a]; throw a })()", "threw an array", nil},
 	}
 	for name, c := range cases {
