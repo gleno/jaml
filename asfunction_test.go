@@ -16,13 +16,13 @@ func TestAsFunctionAcceptsFunctionLiterals(t *testing.T) {
 			"((function (x) { return x.a }))",
 			"/* leading */ x => x.a // trailing",
 		} {
-			compiled, err := sb.Compile(t.Context(), source, AsFunction())
+			compiled, err := sb.MakeExpression(t.Context(), source, AsFunction())
 			if err != nil {
-				t.Fatalf("Compile(%q): %v", source, err)
+				t.Fatalf("MakeExpression(%q): %v", source, err)
 			}
 			var got any
-			if err := compiled.Call(t.Context(), &got, map[string]any{"a": 1}, 2); err != nil {
-				t.Fatalf("Call(%q): %v", source, err)
+			if err := resolveInto(t.Context(), &got, compiled, map[string]any{"a": 1}, 2); err != nil {
+				t.Fatalf("Resolve(%q): %v", source, err)
 			}
 			if a, isMap := got.(map[string]any); isMap {
 				got = a["a"]
@@ -55,8 +55,8 @@ func TestAsFunctionRefusesEverythingElse(t *testing.T) {
 			"":                         "empty expression",
 		}
 		for source, fragment := range cases {
-			_, err := sb.Compile(t.Context(), source, AsFunction())
-			expectError(t, err, InvalidTemplate, fragment)
+			_, err := sb.MakeExpression(t.Context(), source, AsFunction())
+			expectError(t, err, InvalidExpression, fragment)
 		}
 	})
 }
@@ -64,33 +64,32 @@ func TestAsFunctionRefusesEverythingElse(t *testing.T) {
 func TestAsFunctionEvaluatesNothing(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		ctx := within(t, 20*time.Second)
-		_, err := sb.Compile(ctx, "(() => { globalThis.fired = true; while (true) {} })()", AsFunction())
-		expectError(t, err, InvalidTemplate, "not a function literal")
+		_, err := sb.MakeExpression(ctx, "(() => { globalThis.fired = true; while (true) {} })()", AsFunction())
+		expectError(t, err, InvalidExpression, "not a function literal")
 		for _, source := range []string{
 			"() => { while (true) {} }",
 			"() => { const hoard = []; for (;;) hoard.push(new Array(1 << 20).fill(hoard.length)) }",
 		} {
-			if _, err := sb.Compile(ctx, source, AsFunction()); err != nil {
-				t.Fatalf("Compile(%q): %v", source, err)
+			if _, err := sb.MakeExpression(ctx, source, AsFunction()); err != nil {
+				t.Fatalf("MakeExpression(%q): %v", source, err)
 			}
 		}
 	}, WithBuildTimeout(2*time.Second))
 }
 
-func TestAsFunctionLeavesNoWayToEval(t *testing.T) {
+func TestAsFunctionResolvesWithoutArgumentsToo(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		compiled, err := sb.Compile(t.Context(), "x => 1", AsFunction())
+		compiled, err := sb.MakeExpression(t.Context(), "x => x === undefined", AsFunction())
 		if err != nil {
-			t.Fatalf("Compile: %v", err)
+			t.Fatalf("MakeExpression: %v", err)
 		}
-		var out any
-		expectError(t, compiled.Eval(t.Context(), &out, nil), EvaluationFailed, "$: x => 1: result is a function")
+		expectEqual(t, mustResolve[bool](t, t.Context(), compiled), true)
 	})
 }
 
-func TestAsFunctionIsRefusedForTemplates(t *testing.T) {
+func TestAsFunctionIsRefusedOnJaml(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		_, err := sb.MakeTemplate(t.Context(), "a: ${ x => x }\n", AsFunction())
-		expectError(t, err, InvalidTemplate, "jaml.AsFunction applies to Compile, not to templates")
+		_, err := sb.MakeExpressionFromJaml(t.Context(), "a: ${ x => x }\n", AsFunction())
+		expectError(t, err, InvalidExpression, "jaml.AsFunction applies to MakeExpression, not to MakeExpressionFromJaml")
 	})
 }

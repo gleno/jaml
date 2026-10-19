@@ -10,13 +10,17 @@ import (
 	"github.com/dop251/goja"
 )
 
-const maxCallStackSize = 4096
+const (
+	maxCallStackSize = 4096
+	maxUnwraps       = 16
+)
 
 var errInterrupted = errors.New("interrupted")
 
 type sessionPlan struct {
-	vars   boundVars
-	pinned pinned
+	values  boundValues
+	scripts []string
+	pinned  pinned
 }
 
 type lazySession struct {
@@ -31,10 +35,18 @@ func (l *lazySession) open() (*session, error) {
 	}
 	opened, err := openSession(l.ctx, l.plan)
 	if err != nil {
-		return nil, fail(EvaluationFailed, "binding vars: %w", err)
+		return nil, err
 	}
 	l.opened = opened
 	return opened, nil
+}
+
+func (l *lazySession) warm() error {
+	if len(l.plan.scripts) == 0 {
+		return nil
+	}
+	_, err := l.open()
+	return err
 }
 
 func (l *lazySession) close() {
@@ -57,7 +69,11 @@ func openSession(ctx context.Context, plan sessionPlan) (*session, error) {
 	vm.SetRandSource(plan.pinned.random())
 	opened := &session{ctx: ctx, realm: captureRealm(vm)}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
-	if err := opened.bind(plan.vars); err != nil {
+	if err := opened.bind(plan.values); err != nil {
+		opened.close()
+		return nil, fail(EvaluationFailed, "binding values: %w", err)
+	}
+	if err := opened.run(plan.scripts, plan.values); err != nil {
 		opened.close()
 		return nil, err
 	}
@@ -98,22 +114,41 @@ func (s *session) halted() error {
 	return nil
 }
 
-func (s *session) bind(vars boundVars) error {
-	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		if err := s.enter(func(r realm) error { return r.bindVar(name, vars[name]) }); err != nil {
+func (s *session) bind(values boundValues) error {
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		if err := s.enter(func(r realm) error { return r.bindValue(name, values[name]) }); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r realm) bindVar(name string, value datum) error {
+func (r realm) bindValue(name string, value datum) error {
 	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(value.encoded)))
 	if err != nil {
-		return fmt.Errorf("var %q: %w", clip(name, keyExcerptLength), r.explain(err))
+		return fmt.Errorf("value %q: %w", clip(name, keyExcerptLength), r.explain(err))
 	}
-	if err := r.vm.GlobalObject().DefineDataProperty(name, parsed, goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_TRUE); err != nil {
-		return fmt.Errorf("var %q cannot be bound: %w", clip(name, keyExcerptLength), r.explain(err))
+	if err := r.deepFreeze(parsed); err != nil {
+		return fmt.Errorf("value %q: %w", clip(name, keyExcerptLength), r.explain(err))
+	}
+	if err := r.vm.GlobalObject().DefineDataProperty(name, parsed, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return fmt.Errorf("value %q cannot be bound: %w", clip(name, keyExcerptLength), r.explain(err))
+	}
+	return nil
+}
+
+func (r realm) deepFreeze(value goja.Value) error {
+	object, isObject := value.(*goja.Object)
+	if !isObject {
+		return nil
+	}
+	if _, err := r.freeze(goja.Undefined(), object); err != nil {
+		return err
+	}
+	for _, key := range object.Keys() {
+		if err := r.deepFreeze(object.Get(key)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -149,12 +184,8 @@ func guardJSONParse(vm *goja.Runtime) goja.Callable {
 	return callable
 }
 
-func (s *session) evaluate(compiled expression) (any, error) {
-	return s.attempt(func(r realm) (goja.Value, error) { return r.vm.RunProgram(compiled.program) })
-}
-
-func (s *session) call(compiled expression, args []datum) (any, error) {
-	return s.attempt(func(r realm) (goja.Value, error) { return r.invoke(compiled, args) })
+func (s *session) evaluate(compiled expression, args []datum) (any, error) {
+	return s.attempt(func(r realm) (goja.Value, error) { return r.settle(compiled, args) })
 }
 
 func (s *session) attempt(produce func(realm) (goja.Value, error)) (any, error) {
@@ -170,16 +201,30 @@ func (s *session) attempt(produce func(realm) (goja.Value, error)) (any, error) 
 	return result, err
 }
 
-func (r realm) invoke(compiled expression, args []datum) (goja.Value, error) {
-	returned, err := r.vm.RunProgram(compiled.program)
-	if err != nil {
-		return nil, err
+func (r realm) settle(compiled expression, args []datum) (goja.Value, error) {
+	value, err := r.vm.RunProgram(compiled.program)
+	for calls := 0; err == nil; calls++ {
+		function, isFunction := goja.AssertFunction(value)
+		switch {
+		case !isFunction:
+			return value, nil
+		case calls == maxUnwraps:
+			return nil, fmt.Errorf("still a function after %d calls", maxUnwraps)
+		case calls == 0:
+			arguments, failed := r.arguments(args)
+			if failed != nil {
+				return nil, failed
+			}
+			value, err = function(r.vm.GlobalObject(), arguments...)
+		default:
+			value, err = function(r.vm.GlobalObject())
+		}
 	}
-	function, isFunction := goja.AssertFunction(returned)
-	if !isFunction {
-		return nil, fmt.Errorf("evaluates to a value of type %s, not a function", typeOf(returned))
-	}
-	values := make([]goja.Value, len(args))
+	return nil, err
+}
+
+func (r realm) arguments(args []datum) ([]goja.Value, error) {
+	var values = make([]goja.Value, len(args))
 	for index, arg := range args {
 		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(arg.encoded)))
 		if err != nil {
@@ -187,7 +232,7 @@ func (r realm) invoke(compiled expression, args []datum) (goja.Value, error) {
 		}
 		values[index] = parsed
 	}
-	return function(goja.Undefined(), values...)
+	return values, nil
 }
 
 func (s *session) breakOnEngineFailure(err *error) {

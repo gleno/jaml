@@ -116,7 +116,7 @@ func tap(t *testing.T, child *life, log *requestLog) {
 }
 
 func unitOf(compiled *Expression) string {
-	return compiled.held.unit.(*remoteUnit).plan.Written
+	return compiled.held.keep.unit.(*remoteUnit).plan.Written
 }
 
 func expectSharingAgain(t *testing.T, sb *Sandbox, compiled *Expression, jobs int) {
@@ -132,8 +132,8 @@ func expectSharingAgain(t *testing.T, sb *Sandbox, compiled *Expression, jobs in
 
 func TestAMemoryBombAmongEightFailsAloneAndTheOthersReturn(t *testing.T) {
 	sb := mustIsolated(t, WithMemoryLimit(64<<20), WithMaxConcurrency(8))
-	peers := mustCompile(t, sb, slowCall)
-	bomb := mustCompile(t, sb, "x => { let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return 'x'.repeat(1e9).length }")
+	peers := mustExpression(t, sb, slowCall)
+	bomb := mustExpression(t, sb, "x => { let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return 'x'.repeat(1e9).length }")
 	log := recordRequests(t, sb)
 	before := childPID(t, sb)
 	peak := watchPeak(sb)
@@ -141,14 +141,14 @@ func TestAMemoryBombAmongEightFailsAloneAndTheOthersReturn(t *testing.T) {
 	for job := range 7 {
 		wait.Go(func() {
 			var tag int
-			if err := peers.Call(within(t, 60*time.Second), &tag, map[string]any{"loops": slowLoops(1), "tag": job}); err != nil || tag != job {
+			if err := resolveInto(within(t, 60*time.Second), &tag, peers, map[string]any{"loops": slowLoops(1), "tag": job}); err != nil || tag != job {
 				t.Errorf("peer %d: got %d, %v", job, tag, err)
 			}
 		})
 	}
 	time.Sleep(20 * time.Millisecond)
 	var out any
-	err := bomb.Call(within(t, 60*time.Second), &out, map[string]any{"loops": slowLoops(0.05)})
+	err := resolveInto(within(t, 60*time.Second), &out, bomb, map[string]any{"loops": slowLoops(0.05)})
 	wait.Wait()
 	expectError(t, err, MemoryLimit, "$: exceeded the memory limit of 67108864 bytes")
 	expectEqual(t, peak(), 8)
@@ -162,13 +162,13 @@ func TestAMemoryBombAmongEightFailsAloneAndTheOthersReturn(t *testing.T) {
 
 func TestJobsThatOnlyOverflowTogetherSucceedOnReplay(t *testing.T) {
 	sb := mustIsolated(t, WithMemoryLimit(64<<20), WithMaxConcurrency(2))
-	holder := mustCompile(t, sb, "x => { const held = 'x'.repeat(40 << 20); let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return held.length + x.tag }")
+	holder := mustExpression(t, sb, "x => { const held = 'x'.repeat(40 << 20); let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return held.length + x.tag }")
 	before := childPID(t, sb)
 	var wait sync.WaitGroup
 	for job := range 2 {
 		wait.Go(func() {
 			var length int
-			if err := holder.Call(within(t, 60*time.Second), &length, map[string]any{"loops": slowLoops(2), "tag": job}); err != nil || length != 40<<20+job {
+			if err := resolveInto(within(t, 60*time.Second), &length, holder, map[string]any{"loops": slowLoops(2), "tag": job}); err != nil || length != 40<<20+job {
 				t.Errorf("holder %d: got %d, %v", job, length, err)
 			}
 		})
@@ -177,19 +177,19 @@ func TestJobsThatOnlyOverflowTogetherSucceedOnReplay(t *testing.T) {
 	if childPID(t, sb) == before {
 		t.Fatal("80 MiB held at once fit under a 64 MiB ceiling")
 	}
-	expectSharingAgain(t, sb, mustCompile(t, sb, slowCall), 2)
+	expectSharingAgain(t, sb, mustExpression(t, sb, slowCall), 2)
 }
 
 func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 	sb := mustIsolated(t, WithMaxConcurrency(8))
-	peers := mustCompile(t, sb, slowCall)
-	runaway := mustCompile(t, sb, "/^(a+)+(?=b)/.test('a'.repeat(32) + 'c')")
+	peers := mustExpression(t, sb, slowCall)
+	runaway := mustExpression(t, sb, "/^(a+)+(?=b)/.test('a'.repeat(32) + 'c')")
 	before := childPID(t, sb)
 	var wait sync.WaitGroup
 	for job := range 7 {
 		wait.Go(func() {
 			var tag int
-			if err := peers.Call(within(t, 60*time.Second), &tag, map[string]any{"loops": slowLoops(2.5), "tag": job}); err != nil || tag != job {
+			if err := resolveInto(within(t, 60*time.Second), &tag, peers, map[string]any{"loops": slowLoops(2.5), "tag": job}); err != nil || tag != job {
 				t.Errorf("peer %d: got %d, %v", job, tag, err)
 			}
 		})
@@ -197,7 +197,7 @@ func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	started := time.Now()
 	var out any
-	err := runaway.Eval(within(t, 100*time.Millisecond), &out, nil)
+	err := resolveInto(within(t, 100*time.Millisecond), &out, runaway)
 	stopped := time.Since(started)
 	wait.Wait()
 	expectError(t, err, EvaluationFailed, "$: cancelled: context deadline exceeded")
@@ -215,8 +215,8 @@ func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 
 func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 	sb := mustIsolated(t, WithMemoryLimit(64<<20), WithMaxConcurrency(4))
-	observer := mustCompile(t, sb, "x => { let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return [Date.now(), Math.random(), Math.random()] }")
-	bomb := mustCompile(t, sb, "x => { let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return 'x'.repeat(1e9).length }")
+	observer := mustExpression(t, sb, "x => { let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return [Date.now(), Math.random(), Math.random()] }")
+	bomb := mustExpression(t, sb, "x => { let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return 'x'.repeat(1e9).length }")
 	log := recordRequests(t, sb)
 	fixed := WithRandomSeed(WithFixedClock(t.Context(), time.UnixMilli(1_700_000_000_000)), 7)
 	contexts := map[string]context.Context{"unset": t.Context(), "fixed": fixed}
@@ -228,7 +228,7 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 			bounded, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 			var drawn []any
-			if err := observer.Call(bounded, &drawn, map[string]any{"loops": slowLoops(1)}); err != nil {
+			if err := resolveInto(bounded, &drawn, observer, map[string]any{"loops": slowLoops(1)}); err != nil {
 				t.Errorf("%s: %v", name, err)
 			}
 			guard.Lock()
@@ -238,7 +238,7 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 	}
 	time.Sleep(20 * time.Millisecond)
 	var out any
-	expectError(t, bomb.Call(within(t, 60*time.Second), &out, map[string]any{"loops": slowLoops(0.05)}), MemoryLimit)
+	expectError(t, resolveInto(within(t, 60*time.Second), &out, bomb, map[string]any{"loops": slowLoops(0.05)}), MemoryLimit)
 	wait.Wait()
 	attempts := log.served(unitOf(observer))
 	expectEqual(t, len(attempts), 4)
@@ -253,9 +253,9 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 			t.Fatalf("no Call saw the pinned clock %d: %v", pin.Millis, seen)
 		}
 	}
-	trusted := mustCompile(t, mustSandbox(t, trustedKind), "x => [Date.now(), Math.random(), Math.random()]")
+	trusted := mustExpression(t, mustSandbox(t, trustedKind), "x => [Date.now(), Math.random(), Math.random()]")
 	var expected []any
-	if err := trusted.Call(fixed, &expected, nil); err != nil {
+	if err := resolveInto(fixed, &expected, trusted, nil); err != nil {
 		t.Fatal(err)
 	}
 	expectEqual(t, seen["fixed"], expected)
@@ -263,10 +263,10 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 
 func TestAnEvalIsOneRequest(t *testing.T) {
 	sb := mustIsolated(t)
-	template := mustTemplate(t, sb, "a: ${ n }\nb: \"${{ n + 1 }} and ${{ n + 2 }}\"\nc: [\"${ n * 2 }\", plain]\n")
+	document := mustJaml(t, sb, "a: ${ n }\nb: \"${{ n + 1 }} and ${{ n + 2 }}\"\nc: [\"${ n * 2 }\", plain]\n")
 	log := recordRequests(t, sb)
 	for n := range 3 {
-		got := isolatedEvalAs[map[string]any](t, template, map[string]any{"n": n})
+		got := isolatedEvalAs[map[string]any](t, document, map[string]any{"n": n})
 		expectEqual(t, got["a"], float64(n))
 	}
 	expectEqual(t, log.count(opServe), 3)
@@ -275,8 +275,8 @@ func TestAnEvalIsOneRequest(t *testing.T) {
 
 func TestARespawnRebuildsLazily(t *testing.T) {
 	sb := mustIsolated(t)
-	used := mustTemplate(t, sb, "v: ${ 1 }\n")
-	idle := mustTemplate(t, sb, "v: ${ 2 }\n")
+	used := mustJaml(t, sb, "v: ${ 1 }\n")
+	idle := mustJaml(t, sb, "v: ${ 2 }\n")
 	log := recordRequests(t, sb)
 	killChild(t, sb)
 	expectEqual(t, isolatedEvalAs[int](t, used, nil, "v"), 1)

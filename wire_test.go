@@ -139,12 +139,12 @@ func TestAStaleDropLeavesANewerResidency(t *testing.T) {
 
 func TestAUnitTheChildLostIsBuiltAgain(t *testing.T) {
 	sb := mustIsolated(t)
-	template := mustTemplate(t, sb, "v: ${ 4 }\n")
+	document := mustJaml(t, sb, "v: ${ 4 }\n")
 	child := currentChild(t, sb)
-	build := residentBuild(t, child, template.held.unit.(*remoteUnit))
+	build := residentBuild(t, child, document.held.keep.unit.(*remoteUnit))
 	deliver(t, child, request{Op: opForget, Unit: build})
 	expectMissing(t, child, build)
-	expectEqual(t, isolatedEvalAs[int](t, template, nil, "v"), 4)
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 4)
 	expectEqual(t, currentChild(t, sb), child)
 }
 

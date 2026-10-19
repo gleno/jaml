@@ -11,11 +11,11 @@ import (
 
 func busyFor(t *testing.T, sb *Sandbox, busy time.Duration) <-chan error {
 	t.Helper()
-	template := mustTemplate(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
+	document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
 	spinning := make(chan error, 1)
 	go func() {
 		var out any
-		spinning <- template.Eval(within(t, busy), &out, nil, "spin")
+		spinning <- resolveInto(within(t, busy), &out, document.At("spin"))
 	}()
 	time.Sleep(100 * time.Millisecond)
 	return spinning
@@ -24,12 +24,12 @@ func busyFor(t *testing.T, sb *Sandbox, busy time.Duration) <-chan error {
 func TestABuildTimeoutBoundsTheBuildNotTheWaitForItsSlot(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		spinning := busyFor(t, sb, time.Second)
-		if _, err := sb.Compile(within(t, 5*time.Second), "1"); err != nil {
+		if _, err := sb.MakeExpression(within(t, 5*time.Second), "1"); err != nil {
 			t.Fatalf("a compile that waited for its slot longer than its build timeout failed: %v", err)
 		}
 		<-spinning
 		spinning = busyFor(t, sb, time.Second)
-		_, err := sb.Compile(within(t, 100*time.Millisecond), "1")
+		_, err := sb.MakeExpression(within(t, 100*time.Millisecond), "1")
 		expectError(t, err, EvaluationFailed, "building: cancelled: context deadline exceeded")
 		<-spinning
 	}, WithMaxConcurrency(1), WithBuildTimeout(50*time.Millisecond))
@@ -47,7 +47,7 @@ func TestABuildOverrunningItsTimeoutFailsAlikeInBothKinds(t *testing.T) {
 	text := manyExpressions(20000)
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for range 3 {
-			_, err := sb.MakeTemplate(t.Context(), text)
+			_, err := sb.MakeExpressionFromJaml(t.Context(), text)
 			expectError(t, err, EvaluationFailed, "cancelled: the build took longer than its timeout of 30ms")
 		}
 	}, WithBuildTimeout(30*time.Millisecond))
@@ -67,7 +67,7 @@ func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 		cancel()
 		return idleUnit{}, nil
 	})}
-	_, err := sb.MakeTemplate(ctx, "v: 1\n")
+	_, err := sb.MakeExpressionFromJaml(ctx, "v: 1\n")
 	expectError(t, err, EvaluationFailed, "building: cancelled: context canceled")
 }
 
@@ -79,7 +79,7 @@ func TestABuildThatOutlivesItsSandboxIsClosed(t *testing.T) {
 		end()
 		return idleUnit{}, nil
 	})}
-	_, err := sb.Compile(ctx, "1")
+	_, err := sb.MakeExpression(ctx, "1")
 	expectError(t, err, Closed)
 }
 
@@ -121,12 +121,12 @@ func TestABuildRaceRecordsExactlyOneVerdict(t *testing.T) {
 
 func TestAPlainDecimalKeyIsSpelledAsAnIndex(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "\"0\":\n  boom: ${ (() => { throw new Error('boom') })() }\n  \"01\": 1\n")
+		document := mustJaml(t, sb, "\"0\":\n  boom: ${ (() => { throw new Error('boom') })() }\n  \"01\": 1\n")
 		var out any
-		expectError(t, template.Eval(t.Context(), &out, nil, "0", "boom"), EvaluationFailed, "$[0].boom: ", "Error: boom")
-		expectError(t, template.Eval(t.Context(), &out, nil, "0", "nope"), MissingPath, `$[0] has no key "nope"`)
-		expectError(t, template.Eval(t.Context(), &out, nil, "0"), EvaluationFailed, "$[0].boom: ", "Error: boom")
-		expectEqual(t, evalAs[int](t, template, nil, "0", "01"), 1)
+		expectError(t, resolveInto(t.Context(), &out, document.At("0", "boom")), EvaluationFailed, "$[0].boom: ", "Error: boom")
+		expectError(t, resolveInto(t.Context(), &out, document.At("0", "nope")), MissingPath, `$[0] has no key "nope"`)
+		expectError(t, resolveInto(t.Context(), &out, document.At("0")), EvaluationFailed, "$[0].boom: ", "Error: boom")
+		expectEqual(t, mustResolve[int](t, t.Context(), document.At("0", "01")), 1)
 	})
 }
 
@@ -142,28 +142,28 @@ func TestInvalidUTF8TemplateTextIsRefusedAlikeInBothKinds(t *testing.T) {
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for text, message := range cases {
-			_, err := sb.MakeTemplate(t.Context(), text)
-			expectError(t, err, InvalidTemplate, message)
+			_, err := sb.MakeExpressionFromJaml(t.Context(), text)
+			expectError(t, err, InvalidExpression, message)
 		}
 	})
 }
 
 func TestInvalidUTF8ExpressionSourceIsRefusedAlikeInBothKinds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		_, err := sb.Compile(t.Context(), "'a\xffb'")
-		expectError(t, err, InvalidTemplate, "syntax error at line 1, column 3 of the expression: Invalid UTF-8 character")
-		_, err = sb.Compile(t.Context(), "1 +\n 1 // \xff")
-		expectError(t, err, InvalidTemplate, "syntax error at line 2, column 7 of the expression: Invalid UTF-8 character")
+		_, err := sb.MakeExpression(t.Context(), "'a\xffb'")
+		expectError(t, err, InvalidExpression, "syntax error at line 1, column 3 of the expression: Invalid UTF-8 character")
+		_, err = sb.MakeExpression(t.Context(), "1 +\n 1 // \xff")
+		expectError(t, err, InvalidExpression, "syntax error at line 2, column 7 of the expression: Invalid UTF-8 character")
 	})
 }
 
 func TestAnInvalidUTF8PathStepIsMissingAlikeInBothKinds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "\"�\": 1\nk: v\nlist: [1]\n")
+		document := mustJaml(t, sb, "\"�\": 1\nk: v\nlist: [1]\n")
 		var out any
-		expectError(t, template.Eval(t.Context(), &out, nil, "\xff"), MissingPath, `$ has no key "\xff"`)
-		expectError(t, template.Eval(t.Context(), &out, nil, "k", "\xff"), MissingPath, `$.k has no key "\xff"`)
-		expectError(t, template.Eval(t.Context(), &out, nil, "list", "\xff"), MissingPath, `$.list has no key "\xff"`)
-		expectError(t, template.Eval(t.Context(), &out, nil, "nope", "\xff"), MissingPath, `$.nope has no key "\xff"`)
+		expectError(t, resolveInto(t.Context(), &out, document.At("\xff")), MissingPath, `$ has no key "\xff"`)
+		expectError(t, resolveInto(t.Context(), &out, document.At("k", "\xff")), MissingPath, `$.k has no key "\xff"`)
+		expectError(t, resolveInto(t.Context(), &out, document.At("list", "\xff")), MissingPath, `$.list has no key "\xff"`)
+		expectError(t, resolveInto(t.Context(), &out, document.At("nope", "\xff")), MissingPath, `$.nope has no key "\xff"`)
 	})
 }

@@ -15,7 +15,7 @@ type localUnit struct {
 	built  servable
 }
 
-func newTrusted(configured sandboxSettings) *trustedEngine {
+func newTrusted(configured _SandboxSettings) *trustedEngine {
 	return &trustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout}
 }
 
@@ -63,9 +63,9 @@ func (u *localUnit) serve(ctx context.Context, request work) outcome {
 	if err != nil {
 		return refused{err: err}
 	}
-	data, err := run(ctx)
+	result, err := run(ctx)
 	if err != nil {
 		return refused{err: err}
 	}
-	return answered{data: data}
+	return result
 }

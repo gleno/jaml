@@ -85,7 +85,7 @@ func startLife(spec childSpec) (*life, error) {
 }
 
 func startFailure(err error) error {
-	if _, isTemplateError := err.(templateError); isTemplateError {
+	if _, isOwn := err.(expressionError); isOwn {
 		return err
 	}
 	return fail(EvaluationFailed, "starting the evaluator: %w", err)
@@ -336,7 +336,7 @@ func (s *replyStream) frame() ([]byte, error) {
 }
 
 func located(at string, err error) error {
-	if _, isLocated := err.(templateError); isLocated {
+	if _, isLocated := err.(expressionError); isLocated {
 		return err
 	}
 	if at == "" {

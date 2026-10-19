@@ -30,13 +30,15 @@ type realm struct {
 	vm              *goja.Runtime
 	objectPrototype *goja.Object
 	ownKeys         goja.Callable
+	freeze          goja.Callable
 	parse           goja.Callable
 }
 
 func captureRealm(vm *goja.Runtime) realm {
 	object := vm.Get("Object").ToObject(vm)
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
-	return realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys, parse: guardJSONParse(vm)}
+	freeze, _ := goja.AssertFunction(object.Get("freeze"))
+	return realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
 }
 
 func (r realm) native(run func()) error {

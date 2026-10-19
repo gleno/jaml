@@ -193,14 +193,14 @@ func (e *evaluator) serve(ctx context.Context, job uint64, held servable, reques
 		return
 	}
 	at := selectedPath(request.Path).String()
-	var data []byte
-	e.watch.during(func() { data, err = run(ctx) })
+	var result answered
+	e.watch.during(func() { result, err = run(ctx) })
 	if err != nil {
 		failed := describeFailure(err)
 		e.replies.send(at, reply{Job: job, Failure: &failed})
 		return
 	}
-	e.replies.send(at, reply{Job: job, Data: data})
+	e.replies.send(at, reply{Job: job, Data: result.data, Skipped: result.skipped})
 }
 
 func (e *evaluator) finish(job uint64) {

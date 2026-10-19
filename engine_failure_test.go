@@ -65,21 +65,21 @@ func TestJSONParseGuardsTheTextAnObjectConvertsTo(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		text := expressionTemplate("JSON.parse({ toString: () => '['.repeat(4097) + ']'.repeat(4097) }).length")
 		var out any
-		expectError(t, mustTemplate(t, sb, text).Eval(t.Context(), &out, nil, "v"), EvaluationFailed, "JSON text nests deeper than 4096")
+		expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, text).At("v")), EvaluationFailed, "JSON text nests deeper than 4096")
 	})
 }
 
 func TestJSONParseDepthRefusalIsCatchable(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		text := expressionTemplate("(() => { try { JSON.parse(payload); return 'parsed' } catch (e) { return e instanceof RangeError } })()")
-		expectEqual(t, evalAs[any](t, mustTemplate(t, sb, text), map[string]any{"payload": nestedJSONText(4097)}, "v"), true)
+		expectEqual(t, mustResolve[any](t, valued(t.Context(), map[string]any{"payload": nestedJSONText(4097)}), mustJaml(t, sb, text).At("v")), true)
 	})
 }
 
 func TestJSONParseStillParsesWithAReviver(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		text := expressionTemplate(`JSON.parse('{"a": 1}', (k, v) => typeof v === 'number' ? v + 1 : v)`)
-		expectEqual(t, evalAs[map[string]int](t, mustTemplate(t, sb, text), nil, "v"), map[string]int{"a": 2})
+		expectEqual(t, evalAs[map[string]int](t, mustJaml(t, sb, text), nil, "v"), map[string]int{"a": 2})
 	})
 }
 
@@ -87,7 +87,7 @@ func TestAnUntrustedMillionDeepJSONVarFailsTheEvalInsteadOfTheHost(t *testing.T)
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		survivesInAStackCappedChild(t, func(t *testing.T) {
 			var out any
-			err := mustTemplate(t, sb, "v: ${ JSON.parse(payload) }\n").Eval(t.Context(), &out, map[string]any{"payload": nestedJSONText(1 << 20)}, "v")
+			err := resolveInto(valued(t.Context(), map[string]any{"payload": nestedJSONText(1 << 20)}), &out, mustJaml(t, sb, "v: ${ JSON.parse(payload) }\n").At("v"))
 			expectError(t, err, EvaluationFailed, "JSON text nests deeper than 4096")
 		})
 	})
@@ -97,7 +97,7 @@ func TestADeeplyNestedThrownArrayIsDescribedWithoutWalkingIt(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		survivesInAStackCappedChild(t, func(t *testing.T) {
 			var out any
-			expectError(t, mustTemplate(t, sb, deeplyThrown("a")).Eval(t.Context(), &out, nil, "v"), EvaluationFailed, "threw an array")
+			expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, deeplyThrown("a")).At("v")), EvaluationFailed, "threw an array")
 		})
 	})
 }
@@ -106,8 +106,8 @@ func TestADeeplyNestedThrownMessageIsNotWalked(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		survivesInAStackCappedChild(t, func(t *testing.T) {
 			var out any
-			expectError(t, mustTemplate(t, sb, deeplyThrown("{ message: a }")).Eval(t.Context(), &out, nil, "v"), EvaluationFailed, "threw an object")
-			expectError(t, mustTemplate(t, sb, deeplyThrown("{ name: a, message: 'unnamed' }")).Eval(t.Context(), &out, nil, "v"), EvaluationFailed, ": unnamed")
+			expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, deeplyThrown("{ message: a }")).At("v")), EvaluationFailed, "threw an object")
+			expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, deeplyThrown("{ name: a, message: 'unnamed' }")).At("v")), EvaluationFailed, ": unnamed")
 		})
 	})
 }
@@ -127,7 +127,7 @@ func TestThrownValuesAreDescribedWithoutConvertingObjects(t *testing.T) {
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
 				var out any
-				err := mustTemplate(t, sb, expressionTemplate("(() => { "+c.source+" })()")).Eval(t.Context(), &out, nil, "v")
+				err := resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { "+c.source+" })()")).At("v"))
 				expectError(t, err, EvaluationFailed, c.expected)
 			})
 		}
@@ -146,26 +146,26 @@ func TestAGoPanicInsideABuiltInFailsTheEvalInBothKinds(t *testing.T) {
 }
 
 func TestAPanickedSessionRunsNothingMore(t *testing.T) {
-	vars, err := admitVars(map[string]any{"width": 1 << 52})
+	vars, err := admitValues(map[string]any{"width": 1 << 52})
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := openSession(t.Context(), sessionPlan{vars: vars})
+	opened, err := openSession(t.Context(), sessionPlan{values: vars})
 	if err != nil {
 		t.Fatal(err)
 	}
-	panicking, err := compileExpression("'-'.repeat(width)", wholeValue)
+	panicking, err := compileExpression("'-'.repeat(width)", dollar.value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	harmless, err := compileExpression("1", wholeValue)
+	harmless, err := compileExpression("1", dollar.value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := opened.evaluate(panicking); err == nil || !strings.Contains(err.Error(), "the engine failed") {
+	if _, err := opened.evaluate(panicking, nil); err == nil || !strings.Contains(err.Error(), "the engine failed") {
 		t.Fatalf("expected the engine to fail, got %v", err)
 	}
-	if _, err := opened.evaluate(harmless); err == nil || !strings.Contains(err.Error(), "an earlier expression broke the engine") {
+	if _, err := opened.evaluate(harmless, nil); err == nil || !strings.Contains(err.Error(), "an earlier expression broke the engine") {
 		t.Fatalf("expected the broken session to refuse, got %v", err)
 	}
 }
@@ -173,7 +173,7 @@ func TestAPanickedSessionRunsNothingMore(t *testing.T) {
 func TestTheGuardedJSONParseLooksLikeTheBuiltIn(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		text := expressionTemplate("[JSON.parse.name, JSON.parse.length, Object.getOwnPropertyDescriptor(JSON.parse, 'name').writable, Object.getOwnPropertyDescriptor(JSON.parse, 'length').configurable, Object.keys(JSON.parse).length]")
-		expectEqual(t, evalAs[[]any](t, mustTemplate(t, sb, text), nil, "v"), []any{"parse", float64(2), false, true, float64(0)})
+		expectEqual(t, evalAs[[]any](t, mustJaml(t, sb, text), nil, "v"), []any{"parse", float64(2), false, true, float64(0)})
 	})
 }
 

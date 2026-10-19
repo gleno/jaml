@@ -219,7 +219,7 @@ func servedFrom(incoming reply) outcome {
 	case incoming.Missing:
 		return refused{err: errMissing}
 	}
-	return answered{data: incoming.Data}
+	return answered{data: incoming.Data, skipped: incoming.Skipped}
 }
 
 func (l *life) unsent(err error) outcome {

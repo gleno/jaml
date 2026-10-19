@@ -72,35 +72,6 @@ func (r realm) describe(value goja.Value) string {
 	return excerpt(text, thrownExcerptLength)
 }
 
-func typeOf(value goja.Value) string {
-	switch typed := value.(type) {
-	case nil:
-		return "undefined"
-	case *goja.Symbol:
-		return "symbol"
-	case goja.String:
-		return "string"
-	case *goja.Object:
-		if _, isFunction := goja.AssertFunction(typed); isFunction {
-			return "function"
-		}
-		return "object"
-	}
-	switch value.Export().(type) {
-	case nil:
-		if goja.IsNull(value) {
-			return "object"
-		}
-		return "undefined"
-	case bool:
-		return "boolean"
-	case *big.Int:
-		return "bigint"
-	default:
-		return "number"
-	}
-}
-
 func holdsEngineValue(err error) bool {
 	pending := []error{err}
 	for len(pending) > 0 {

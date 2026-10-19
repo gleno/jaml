@@ -10,25 +10,25 @@ import (
 	"time"
 )
 
-var everyKind = []error{TemplateError, InvalidTemplate, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, MemoryLimit}
+var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, MemoryLimit}
 
 func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
+		document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
 		var out any
-		err := template.Eval(within(t, 100*time.Millisecond), &out, nil, "spin")
+		err := resolveInto(within(t, 100*time.Millisecond), &out, document.At("spin"))
 		expectError(t, err, EvaluationFailed, "$.spin", "deadline exceeded")
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected context.DeadlineExceeded in %v", err)
 		}
 		done, cancel := context.WithCancel(t.Context())
 		cancel()
-		err = template.Eval(done, &out, nil, "spin")
+		err = resolveInto(done, &out, document.At("spin"))
 		expectError(t, err, EvaluationFailed, "cancelled")
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled in %v", err)
 		}
-		_, err = sb.MakeTemplate(done, "v: 1\n")
+		_, err = sb.MakeExpressionFromJaml(done, "v: 1\n")
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled from a cancelled construction, got %v", err)
 		}
@@ -38,7 +38,7 @@ func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 			cancelWithCause(cause)
 		}()
-		err = template.Eval(withCause, &out, nil, "spin")
+		err = resolveInto(withCause, &out, document.At("spin"))
 		if !errors.Is(err, cause) {
 			t.Fatalf("expected the context's cause in %v", err)
 		}
@@ -46,10 +46,10 @@ func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 }
 
 func TestAMemoryBombIsAMemoryLimit(t *testing.T) {
-	template := mustTemplate(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ 'x'.repeat(1e9).length }\"\n")
+	document := mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ 'x'.repeat(1e9).length }\"\n")
 	var out any
-	err := template.Eval(within(t, 20*time.Second), &out, nil, "v")
-	expectError(t, err, MemoryLimit, "$.v: exceeded the memory limit of 67108864 bytes: evaluation failed: template error")
+	err := resolveInto(within(t, 20*time.Second), &out, document.At("v"))
+	expectError(t, err, MemoryLimit, "$.v: exceeded the memory limit of 67108864 bytes: evaluation failed: expression error")
 	expectError(t, err, EvaluationFailed)
 }
 
@@ -65,10 +65,10 @@ func TestARuntimeOutOfMemoryIsAMemoryLimit(t *testing.T) {
 func TestErrorsKeepTheirMessageFormat(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var out any
-		err := mustTemplate(t, sb, "v: ${ nope }\n").Eval(t.Context(), &out, nil)
-		expectEqual(t, err.Error(), "$.v: ${nope}: ReferenceError: nope is not defined: evaluation failed: template error")
-		_, err = sb.MakeTemplate(t.Context(), "v: ${ 1 + }\n")
-		expectError(t, err, InvalidTemplate, "$.v: ${1 +}: syntax error")
+		err := resolveInto(t.Context(), &out, mustJaml(t, sb, "v: ${ nope }\n"))
+		expectEqual(t, err.Error(), "$.v: ${nope}: ReferenceError: nope is not defined: evaluation failed: expression error")
+		_, err = sb.MakeExpressionFromJaml(t.Context(), "v: ${ 1 + }\n")
+		expectError(t, err, InvalidExpression, "$.v: ${1 +}: syntax error")
 	})
 }
 
@@ -118,12 +118,12 @@ func expectTheSameChildAfter(t *testing.T, sb *Sandbox, run func()) {
 	}
 }
 
-func evalOrHang(t *testing.T, template *Template, ctx context.Context, vars map[string]any) error {
+func evalOrHang(t *testing.T, document *Expression, ctx context.Context, vars map[string]any) error {
 	t.Helper()
 	returned := make(chan error, 1)
 	go func() {
 		var out any
-		returned <- template.Eval(ctx, &out, vars, "v")
+		returned <- resolveInto(valued(ctx, vars), &out, document.At("v"))
 	}()
 	select {
 	case err := <-returned:
@@ -144,9 +144,9 @@ func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) 
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
 			eachKind(t, func(t *testing.T, sb *Sandbox) {
-				template := mustTemplate(t, sb, expressionTemplate(source))
+				document := mustJaml(t, sb, expressionTemplate(source))
 				var err error
-				expectTheSameChildAfter(t, sb, func() { err = evalOrHang(t, template, within(t, 200*time.Millisecond), nil) })
+				expectTheSameChildAfter(t, sb, func() { err = evalOrHang(t, document, within(t, 200*time.Millisecond), nil) })
 				expectError(t, err, EvaluationFailed, "deadline exceeded")
 				if !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("expected context.DeadlineExceeded in %v", err)
@@ -156,7 +156,7 @@ func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) 
 					t.Fatalf("a throw read past its context still produced %+v", *caught)
 				}
 				var two int
-				if err := mustTemplate(t, sb, "v: ${ 1 + 1 }\n").Eval(within(t, 5*time.Second), &two, nil, "v"); err != nil {
+				if err := resolveInto(within(t, 5*time.Second), &two, mustJaml(t, sb, "v: ${ 1 + 1 }\n").At("v")); err != nil {
 					t.Fatalf("the next Eval after the spin: %v", err)
 				}
 			}, WithMaxConcurrency(1))
@@ -172,12 +172,12 @@ func TestBindingVarsEndsWithItsContext(t *testing.T) {
 	}
 	cancelAt := 600 * time.Millisecond * raceSlowdown
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "v: ${ 1 }\n")
+		document := mustJaml(t, sb, "v: ${ 1 }\n")
 		expectTheSameChildAfter(t, sb, func() {
 			ctx, cancel := context.WithCancel(t.Context())
 			started := time.Now()
 			time.AfterFunc(cancelAt, cancel)
-			err := evalOrHang(t, template, ctx, vars)
+			err := evalOrHang(t, document, ctx, vars)
 			expectError(t, err, EvaluationFailed, "cancelled")
 			if took := time.Since(started); took > cancelAt+cancelAt/2 {
 				t.Fatalf("binding ran %v past its context", took-cancelAt)

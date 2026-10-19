@@ -16,9 +16,9 @@ import (
 func TestAnOrphanedEvaluatorExits(t *testing.T) {
 	if os.Getenv("JAML_ORPHAN_PARENT") == "1" {
 		sb := mustIsolated(t)
-		template := mustTemplate(t, sb, "v: ${ (() => { while (true) {} })() }\n")
+		document := mustJaml(t, sb, "v: ${ (() => { while (true) {} })() }\n")
 		os.Stdout.WriteString("CHILD " + strconv.Itoa(childPID(t, sb)) + "\n")
-		go func() { var out any; _ = template.Eval(context.Background(), &out, nil, "v") }()
+		go func() { var out any; _ = resolveInto(context.Background(), &out, document.At("v")) }()
 		time.Sleep(200 * time.Millisecond)
 		syscall.Kill(os.Getpid(), syscall.SIGKILL)
 	}

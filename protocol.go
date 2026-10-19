@@ -15,7 +15,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 6
+	protocolVersion      = 7
 	exitMemoryLimit      = 86
 	requestsFD           = 3
 	responsesFD          = 4
@@ -46,28 +46,28 @@ type request struct {
 }
 
 type blueprint struct {
-	Written    string   `json:"written"`
-	Null       Coercion `json:"null"`
-	Undefined  Coercion `json:"undefined"`
-	Expression bool     `json:"expression,omitempty"`
-	Function   bool     `json:"function,omitempty"`
+	Written   string   `json:"written"`
+	Null      Coercion `json:"null"`
+	Undefined Coercion `json:"undefined"`
+	Raw       bool     `json:"raw,omitempty"`
+	Function  bool     `json:"function,omitempty"`
+	Sigil     string   `json:"sigil,omitempty"`
 }
 
 type work struct {
-	Path   []string  `json:"path,omitempty"`
-	Vars   boundVars `json:"vars,omitempty"`
-	Call   *callArgs `json:"call,omitempty"`
-	Pinned pinned    `json:"pinned"`
-}
-
-type callArgs struct {
-	Args []datum `json:"args"`
+	Path    []string    `json:"path,omitempty"`
+	Values  boundValues `json:"values,omitempty"`
+	Scripts []string    `json:"scripts,omitempty"`
+	Args    []datum     `json:"args,omitempty"`
+	Skips   *_Shape     `json:"skips,omitempty"`
+	Pinned  pinned      `json:"pinned"`
 }
 
 type reply struct {
 	Job     uint64          `json:"job"`
 	Built   bool            `json:"built,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"`
+	Skipped [][]string      `json:"skipped,omitempty"`
 	Failure *failure        `json:"failure,omitempty"`
 	Missing bool            `json:"missing,omitempty"`
 }
@@ -120,7 +120,7 @@ type failureKind struct {
 }
 
 var failureKinds = []failureKind{
-	{"InvalidTemplate", InvalidTemplate},
+	{"InvalidExpression", InvalidExpression},
 	{"InvalidTarget", InvalidTarget},
 	{"MissingPath", MissingPath},
 	{"EvaluationFailed", EvaluationFailed},
@@ -132,7 +132,7 @@ var failureKinds = []failureKind{
 func (b blueprint) build(ctx context.Context) (built servable, err error) {
 	defer func() {
 		if failure := buildPanic(recover()); failure != nil {
-			err = fail(InvalidTemplate, "%s: %w", (*dataPath)(nil), failure)
+			err = fail(InvalidExpression, "%s: %w", (*dataPath)(nil), failure)
 		}
 	}()
 	configured, err := configure(b.options())
@@ -142,16 +142,19 @@ func (b blueprint) build(ctx context.Context) (built servable, err error) {
 	if ctx.Err() != nil {
 		return nil, cancelled(ctx)
 	}
-	if b.Expression {
-		return compileStandalone(b.Written, configured)
+	if b.Raw {
+		return compileRaw(b.Written, configured)
 	}
-	return makeTemplate(ctx, b.Written, configured)
+	return makeDocument(ctx, b.Written, configured)
 }
 
 func (b blueprint) options() []Option {
-	options := []Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)}
+	var options = []Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)}
 	if b.Function {
 		options = append(options, AsFunction())
+	}
+	if b.Sigil != "" {
+		options = append(options, WithSigil(b.Sigil))
 	}
 	return options
 }
@@ -165,9 +168,9 @@ func buildPanic(recovered any) error {
 }
 
 func describeFailure(err error) failure {
-	failed, isTemplateError := err.(templateError)
-	if !isTemplateError {
-		failed = templateError{kind: EvaluationFailed, cause: err}
+	failed, isOwn := err.(expressionError)
+	if !isOwn {
+		failed = expressionError{kind: EvaluationFailed, cause: err}
 	}
 	described := failure{Kind: "EvaluationFailed", Message: failed.Error(), Thrown: thrownOnWireFrom(err)}
 	for _, kind := range failureKinds {
@@ -232,7 +235,7 @@ func (f failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return templateError{kind: kind, cause: carriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+	return expressionError{kind: kind, cause: carriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
 }
 
 func (t *thrownOnWire) rebuild() *Thrown {

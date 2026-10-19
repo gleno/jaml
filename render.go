@@ -1,23 +1,51 @@
 package jaml
 
 import (
-	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 type renderer struct {
 	texts    map[string]text
-	settings settings
+	settings _ExpressionSettings
 	engine   *lazySession
+	args     []datum
+	skips    *_Shape
+	depth    int
+	skipped  [][]string
 }
 
-func (r *renderer) render(node any, at *dataPath) (any, error) {
+type _Place struct {
+	at    *dataPath
+	skips *_ShapeCursor
+}
+
+func (r *renderer) place(at *dataPath) _Place {
+	if r.skips == nil {
+		return _Place{at: at}
+	}
+	return _Place{at: at, skips: &_ShapeCursor{shape: r.skips}}
+}
+
+func (p _Place) key(key string) _Place {
+	return _Place{at: p.at.atKey(key), skips: p.skips.key(key)}
+}
+
+func (p _Place) item(index int) _Place {
+	return _Place{at: p.at.atIndex(index), skips: p.skips.item()}
+}
+
+func (r *renderer) render(node any, place _Place) (any, error) {
+	if place.skips.skips() {
+		r.skipped = append(r.skipped, r.relative(place.at))
+		return map[string]any{}, nil
+	}
 	switch typed := node.(type) {
-	case map[string]any:
-		rendered := make(map[string]any, len(typed))
-		for _, key := range slices.Sorted(maps.Keys(typed)) {
-			value, err := r.render(typed[key], at.atKey(key))
+	case *_Mapping:
+		rendered := make(map[string]any, len(typed.keys))
+		for _, key := range typed.keys {
+			value, err := r.render(typed.values[key], place.key(key))
 			if err != nil {
 				return nil, err
 			}
@@ -27,7 +55,7 @@ func (r *renderer) render(node any, at *dataPath) (any, error) {
 	case []any:
 		rendered := make([]any, len(typed))
 		for index, item := range typed {
-			value, err := r.render(item, at.atIndex(index))
+			value, err := r.render(item, place.item(index))
 			if err != nil {
 				return nil, err
 			}
@@ -39,10 +67,23 @@ func (r *renderer) render(node any, at *dataPath) (any, error) {
 		if !hasCode {
 			return typed, nil
 		}
-		return r.renderText(compiled, at)
+		return r.renderText(compiled, place.at)
 	default:
 		return node, nil
 	}
+}
+
+func (r *renderer) relative(at *dataPath) []string {
+	var steps []string
+	for step := at; step.depth() > r.depth; step = step.parent {
+		if step.keyed {
+			steps = append(steps, step.key)
+		} else {
+			steps = append(steps, strconv.Itoa(step.index))
+		}
+	}
+	slices.Reverse(steps)
+	return steps
 }
 
 func (r *renderer) renderText(compiled text, at *dataPath) (any, error) {
@@ -97,23 +138,11 @@ func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := session.evaluate(compiled)
+	result, err := session.evaluate(compiled, r.args)
 	if err != nil {
 		return nil, fail(EvaluationFailed, "%s: %s: %w", at, compiled.written(), err)
 	}
 	return result, nil
-}
-
-func (r *renderer) call(compiled expression, args []datum) (any, error) {
-	session, err := r.engine.open()
-	if err != nil {
-		return nil, err
-	}
-	result, err := session.call(compiled, args)
-	if err != nil {
-		return nil, fail(EvaluationFailed, "%s: %s: %w", (*dataPath)(nil), compiled.written(), err)
-	}
-	return r.admit(result, compiled, nil)
 }
 
 func stringify(value any) (string, error) {

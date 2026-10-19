@@ -1,23 +1,25 @@
 package jaml
 
 import (
-	"reflect"
 	goruntime "runtime"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gleno/fault"
 )
 
 var (
-	TemplateError    = fault.Sentinel("template error")
-	InvalidTemplate  = TemplateError.WithMessage("invalid template")
-	InvalidTarget    = TemplateError.WithMessage("invalid target")
-	MissingPath      = TemplateError.WithMessage("missing path")
-	EvaluationFailed = TemplateError.WithMessage("evaluation failed")
-	CoercionFailed   = TemplateError.WithMessage("coercion failed")
-	Closed           = TemplateError.WithMessage("closed")
-	Unsupported      = TemplateError.WithMessage("unsupported")
-	MemoryLimit      = EvaluationFailed.WithMessage("exceeded the memory limit")
+	ExpressionError   = fault.Sentinel("expression error")
+	InvalidExpression = ExpressionError.WithMessage("invalid expression")
+	InvalidTarget     = ExpressionError.WithMessage("invalid target")
+	MissingPath       = ExpressionError.WithMessage("missing path")
+	EvaluationFailed  = ExpressionError.WithMessage("evaluation failed")
+	CoercionFailed    = ExpressionError.WithMessage("coercion failed")
+	Closed            = ExpressionError.WithMessage("closed")
+	Unsupported       = ExpressionError.WithMessage("unsupported")
+	MemoryLimit       = EvaluationFailed.WithMessage("exceeded the memory limit")
 )
 
 type Coercion int
@@ -34,17 +36,20 @@ const (
 	defaultBuildTimeout = 5 * time.Second
 )
 
-type Option func(*settings) error
+const defaultSigil = "$"
 
-type settings struct {
+type Option func(*_ExpressionSettings) error
+
+type _ExpressionSettings struct {
 	null      Coercion
 	undefined Coercion
 	function  bool
+	sigil     string
 }
 
-type SandboxOption func(*sandboxSettings) error
+type SandboxOption func(*_SandboxSettings) error
 
-type sandboxSettings struct {
+type _SandboxSettings struct {
 	memoryLimit    memoryLimit
 	maxConcurrency int
 	buildTimeout   time.Duration
@@ -54,34 +59,44 @@ type memoryLimit int64
 
 func makeMemoryLimit(bytes int64) (memoryLimit, error) {
 	if bytes < smallestMemoryLimit || bytes > largestMemoryLimit {
-		return 0, fail(InvalidTemplate, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)
+		return 0, fail(InvalidExpression, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)
 	}
 	return memoryLimit(bytes), nil
 }
 
 func WithNullCoercion(coercion Coercion) Option {
-	return func(s *settings) error {
+	return func(s *_ExpressionSettings) error {
 		s.null = coercion
 		return nil
 	}
 }
 
 func WithUndefinedCoercion(coercion Coercion) Option {
-	return func(s *settings) error {
+	return func(s *_ExpressionSettings) error {
 		s.undefined = coercion
 		return nil
 	}
 }
 
 func AsFunction() Option {
-	return func(s *settings) error {
+	return func(s *_ExpressionSettings) error {
 		s.function = true
 		return nil
 	}
 }
 
+func WithSigil(sigil string) Option {
+	return func(s *_ExpressionSettings) error {
+		if err := checkSigil(sigil); err != nil {
+			return err
+		}
+		s.sigil = sigil
+		return nil
+	}
+}
+
 func WithMemoryLimit(bytes int64) SandboxOption {
-	return func(s *sandboxSettings) error {
+	return func(s *_SandboxSettings) error {
 		limit, err := makeMemoryLimit(bytes)
 		if err != nil {
 			return err
@@ -92,9 +107,9 @@ func WithMemoryLimit(bytes int64) SandboxOption {
 }
 
 func WithMaxConcurrency(jobs int) SandboxOption {
-	return func(s *sandboxSettings) error {
+	return func(s *_SandboxSettings) error {
 		if jobs < 1 {
-			return fail(InvalidTemplate, "max concurrency must be at least 1, got %d", jobs)
+			return fail(InvalidExpression, "max concurrency must be at least 1, got %d", jobs)
 		}
 		s.maxConcurrency = jobs
 		return nil
@@ -102,48 +117,51 @@ func WithMaxConcurrency(jobs int) SandboxOption {
 }
 
 func WithBuildTimeout(timeout time.Duration) SandboxOption {
-	return func(s *sandboxSettings) error {
+	return func(s *_SandboxSettings) error {
 		if timeout <= 0 {
-			return fail(InvalidTemplate, "build timeout must be positive, got %s", timeout)
+			return fail(InvalidExpression, "build timeout must be positive, got %s", timeout)
 		}
 		s.buildTimeout = timeout
 		return nil
 	}
 }
 
-func configure(options []Option) (settings, error) {
-	configured := settings{null: Loose, undefined: Strict}
+func configure(options []Option) (_ExpressionSettings, error) {
+	var configured = _ExpressionSettings{null: Loose, undefined: Strict}
 	for index, option := range options {
 		if option == nil {
-			return settings{}, fail(InvalidTemplate, "option %d is nil", index+1)
+			return _ExpressionSettings{}, fail(InvalidExpression, "option %d is nil", index+1)
 		}
 		if err := option(&configured); err != nil {
-			return settings{}, err
+			return _ExpressionSettings{}, err
 		}
 	}
 	if err := checkCoercion("null", configured.null); err != nil {
-		return settings{}, err
+		return _ExpressionSettings{}, err
 	}
 	if err := checkCoercion("undefined", configured.undefined); err != nil {
-		return settings{}, err
+		return _ExpressionSettings{}, err
+	}
+	if configured.sigil == "" {
+		configured.sigil = defaultSigil
 	}
 	return configured, nil
 }
 
-func configureSandbox(options []SandboxOption) (sandboxSettings, error) {
-	configured := sandboxSettings{maxConcurrency: goruntime.GOMAXPROCS(0), buildTimeout: defaultBuildTimeout}
+func configureSandbox(options []SandboxOption) (_SandboxSettings, error) {
+	var configured = _SandboxSettings{maxConcurrency: goruntime.GOMAXPROCS(0), buildTimeout: defaultBuildTimeout}
 	for index, option := range options {
 		if option == nil {
-			return sandboxSettings{}, fail(InvalidTemplate, "option %d is nil", index+1)
+			return _SandboxSettings{}, fail(InvalidExpression, "option %d is nil", index+1)
 		}
 		if err := option(&configured); err != nil {
-			return sandboxSettings{}, err
+			return _SandboxSettings{}, err
 		}
 	}
 	return configured, nil
 }
 
-func (s sandboxSettings) memoryLimitOrDefault() memoryLimit {
+func (s _SandboxSettings) memoryLimitOrDefault() memoryLimit {
 	if s.memoryLimit == 0 {
 		return defaultMemoryLimit
 	}
@@ -152,18 +170,21 @@ func (s sandboxSettings) memoryLimitOrDefault() memoryLimit {
 
 func checkCoercion(name string, coercion Coercion) error {
 	if coercion != Loose && coercion != Strict {
-		return fail(InvalidTemplate, "%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion)
+		return fail(InvalidExpression, "%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion)
 	}
 	return nil
 }
 
-func describeTarget(into any) string {
-	if into == nil {
-		return "nil"
+func checkSigil(sigil string) error {
+	switch {
+	case sigil == "":
+		return fail(InvalidExpression, "a sigil must not be empty")
+	case !utf8.ValidString(sigil):
+		return fail(InvalidExpression, "a sigil must be valid UTF-8")
+	case strings.ContainsAny(sigil, "{}"):
+		return fail(InvalidExpression, "a sigil must not hold a brace, got %q", sigil)
+	case strings.IndexFunc(sigil, unicode.IsSpace) >= 0:
+		return fail(InvalidExpression, "a sigil must not hold whitespace, got %q", sigil)
 	}
-	target := reflect.ValueOf(into)
-	if target.Kind() == reflect.Pointer && target.IsNil() {
-		return "nil " + target.Type().String()
-	}
-	return target.Type().String()
+	return nil
 }

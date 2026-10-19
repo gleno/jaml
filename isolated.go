@@ -17,7 +17,7 @@ type remoteUnit struct {
 	lifetime   context.Context
 }
 
-func startIsolated(lifetime context.Context, configured sandboxSettings) (*isolatedEngine, error) {
+func startIsolated(lifetime context.Context, configured _SandboxSettings) (*isolatedEngine, error) {
 	spec := childSpec{lifetime: lifetime, limit: configured.memoryLimitOrDefault(), buildTimeout: configured.buildTimeout}
 	first, err := startLife(spec)
 	if err != nil {

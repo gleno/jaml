@@ -8,7 +8,7 @@ import (
 
 func TestConcurrentEvalsDoNotInterfere(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, `
+		document := mustJaml(t, sb, `
 name: ${{who}}
 doubled: ${ n * 2 }
 items: "${ Array.from({length: n % 5}, (_, i) => who + i) }"
@@ -28,7 +28,7 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 					n := worker*100 + round
 					who := fmt.Sprintf("w%d", worker)
 					var out shape
-					if err := template.Eval(t.Context(), &out, map[string]any{"who": who, "n": n}); err != nil {
+					if err := resolveInto(valued(t.Context(), map[string]any{"who": who, "n": n}), &out, document); err != nil {
 						failures <- err
 						return
 					}
@@ -54,13 +54,13 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 
 func TestSharedVarsAreNotMutated(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "v: ${ (shared.list.push(1), shared.list.length) }\n")
+		document := mustJaml(t, sb, "v: ${ [...shared.list, 1].length }\n")
 		vars := map[string]any{"shared": map[string]any{"list": []any{}}}
 		var wait sync.WaitGroup
 		for range 8 {
 			wait.Go(func() {
 				var out int
-				if err := template.Eval(t.Context(), &out, vars, "v"); err != nil || out != 1 {
+				if err := resolveInto(valued(t.Context(), vars), &out, document.At("v")); err != nil || out != 1 {
 					t.Errorf("got %d, %v", out, err)
 				}
 			})

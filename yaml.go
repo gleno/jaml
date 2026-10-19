@@ -49,7 +49,7 @@ func readOneDocument(source string) (*yaml.Node, error) {
 	decoder := yaml.NewDecoder(strings.NewReader(source))
 	var document yaml.Node
 	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fail(InvalidTemplate, "%w", err)
+		return nil, fail(InvalidExpression, "%w", err)
 	}
 	for {
 		var another yaml.Node
@@ -58,10 +58,10 @@ func readOneDocument(source string) (*yaml.Node, error) {
 			return &document, nil
 		}
 		if err != nil {
-			return nil, fail(InvalidTemplate, "%w", err)
+			return nil, fail(InvalidExpression, "%w", err)
 		}
 		if another.Kind != 0 && !isEmptyDocument(&another) {
-			return nil, fail(InvalidTemplate, "line %d starts a second YAML document; a template is one document", another.Line)
+			return nil, fail(InvalidExpression, "line %d starts a second YAML document; a jaml document is one YAML document", another.Line)
 		}
 	}
 }
@@ -138,7 +138,7 @@ func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
 		return resolveScalar(node, at.path)
 	}
 	if at.path.depth() >= maxDataDepth {
-		return nil, fail(InvalidTemplate, "%w", tooDeep(at.path.String()))
+		return nil, fail(InvalidExpression, "%w", tooDeep(at.path.String()))
 	}
 	if node.Anchor != "" {
 		r.expanding[node] = true
@@ -173,10 +173,23 @@ func (r *yamlReader) sequence(node *yaml.Node, at dataAt) ([]any, error) {
 	return data, nil
 }
 
-func (r *yamlReader) mapping(node *yaml.Node, at dataAt) (map[string]any, error) {
-	data := make(map[string]any, len(node.Content)/2)
+type _Mapping struct {
+	keys   []string
+	values map[string]any
+}
+
+func (m *_Mapping) with(key string, value any) {
+	if _, taken := m.values[key]; taken {
+		return
+	}
+	m.keys = append(m.keys, key)
+	m.values[key] = value
+}
+
+func (r *yamlReader) mapping(node *yaml.Node, at dataAt) (*_Mapping, error) {
+	var own = make(map[string]any, len(node.Content)/2)
 	lines := make(map[string]int, len(node.Content)/2)
-	var merged []map[string]any
+	var written []any
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		keyNode, valueNode := node.Content[i], node.Content[i+1]
 		key, err := mappingKey(keyNode, at.path)
@@ -192,31 +205,40 @@ func (r *yamlReader) mapping(node *yaml.Node, at dataAt) (map[string]any, error)
 			if err != nil {
 				return nil, err
 			}
-			merged = append(merged, sources...)
+			written = append(written, sources)
 			continue
 		}
 		value, err := r.data(valueNode, at.atKey(key))
 		if err != nil {
 			return nil, err
 		}
-		data[key] = value
+		own[key] = value
+		written = append(written, key)
 	}
-	for _, source := range merged {
-		for key, value := range source {
-			if _, taken := data[key]; !taken {
-				data[key] = value
+	var data = &_Mapping{values: make(map[string]any, len(own))}
+	for _, entry := range written {
+		switch typed := entry.(type) {
+		case string:
+			data.with(typed, own[typed])
+		case []*_Mapping:
+			for _, source := range typed {
+				for _, key := range source.keys {
+					if _, overridden := own[key]; !overridden {
+						data.with(key, source.values[key])
+					}
+				}
 			}
 		}
 	}
 	return data, nil
 }
 
-func (r *yamlReader) mergeSources(node *yaml.Node, at dataAt) ([]map[string]any, error) {
+func (r *yamlReader) mergeSources(node *yaml.Node, at dataAt) ([]*_Mapping, error) {
 	items := []*yaml.Node{node}
 	if node.Kind == yaml.SequenceNode {
 		items = node.Content
 	}
-	sources := make([]map[string]any, 0, len(items))
+	sources := make([]*_Mapping, 0, len(items))
 	for _, item := range items {
 		if dealias(item).Kind != yaml.MappingNode {
 			return nil, refuse(at.path, fmt.Sprintf("line %d: a merge key (<<) takes a mapping or a list of mappings", item.Line))
@@ -225,7 +247,7 @@ func (r *yamlReader) mergeSources(node *yaml.Node, at dataAt) ([]map[string]any,
 		if err != nil {
 			return nil, err
 		}
-		sources = append(sources, source.(map[string]any))
+		sources = append(sources, source.(*_Mapping))
 	}
 	return sources, nil
 }
@@ -457,5 +479,5 @@ func (n numeral) float() (any, error) {
 }
 
 func refuse(at *dataPath, message string) error {
-	return fail(InvalidTemplate, "%s: %s", at, message)
+	return fail(InvalidExpression, "%s: %s", at, message)
 }

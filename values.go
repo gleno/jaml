@@ -20,7 +20,7 @@ type datum struct {
 	encoded json.RawMessage
 }
 
-type boundVars map[string]datum
+type boundValues map[string]datum
 
 var refusedNames = sync.OnceValue(func() map[string]bool {
 	names := map[string]bool{}
@@ -43,13 +43,13 @@ var refusedNames = sync.OnceValue(func() map[string]bool {
 	return names
 })
 
-func admitVars(vars map[string]any) (boundVars, error) {
-	admitted := make(boundVars, len(vars))
-	for _, name := range slices.Sorted(maps.Keys(vars)) {
+func admitValues(values map[string]any) (boundValues, error) {
+	var admitted = make(boundValues, len(values))
+	for _, name := range slices.Sorted(maps.Keys(values)) {
 		if err := admitName(name); err != nil {
 			return nil, err
 		}
-		value, err := admitDatum(fmt.Sprintf("var %q", clip(name, keyExcerptLength)), vars[name])
+		value, err := admitDatum(fmt.Sprintf("value %q", clip(name, keyExcerptLength)), values[name])
 		if err != nil {
 			return nil, err
 		}
@@ -73,10 +73,10 @@ func admitArguments(args []any) ([]datum, error) {
 func admitName(name string) error {
 	shown := clip(name, keyExcerptLength)
 	if !utf8.ValidString(name) {
-		return fmt.Errorf("var %q is not named in valid UTF-8", shown)
+		return fmt.Errorf("value %q is not named in valid UTF-8", shown)
 	}
 	if refusedNames()[name] {
-		return fmt.Errorf("var %q collides with a JavaScript global", shown)
+		return fmt.Errorf("value %q collides with a JavaScript global", shown)
 	}
 	return nil
 }
@@ -116,7 +116,7 @@ func (d *datum) UnmarshalJSON(written []byte) error {
 	return nil
 }
 
-func (v *boundVars) UnmarshalJSON(written []byte) error {
+func (v *boundValues) UnmarshalJSON(written []byte) error {
 	var decoded map[string]datum
 	if err := json.Unmarshal(written, &decoded); err != nil {
 		return err

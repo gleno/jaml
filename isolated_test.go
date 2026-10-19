@@ -65,21 +65,21 @@ func expectDeath(t *testing.T, process *life) {
 	}
 }
 
-func isolatedEvalAs[T any](t *testing.T, template *Template, vars map[string]any, path ...string) T {
+func isolatedEvalAs[T any](t *testing.T, document *Expression, vars map[string]any, path ...string) T {
 	t.Helper()
 	var out T
-	if err := template.Eval(within(t, 30*time.Second), &out, vars, path...); err != nil {
+	if err := resolveInto(valued(within(t, 30*time.Second), vars), &out, document.At(path...)); err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
 	return out
 }
 
-func evalBounded(t *testing.T, template *Template, ctx context.Context, path string) error {
+func evalBounded(t *testing.T, document *Expression, ctx context.Context, path string) error {
 	t.Helper()
 	result := make(chan error, 1)
 	go func() {
 		var out any
-		result <- template.Eval(ctx, &out, nil, path)
+		result <- resolveInto(ctx, &out, document.At(path))
 	}()
 	select {
 	case err := <-result:
@@ -125,15 +125,15 @@ config:
 
 func TestAnInfiniteLoopEndsWithItsContext(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 + 1 }\n")
+		document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 + 1 }\n")
 		started := time.Now()
 		var out any
-		err := template.Eval(within(t, 100*time.Millisecond), &out, nil, "spin")
+		err := resolveInto(within(t, 100*time.Millisecond), &out, document.At("spin"))
 		expectError(t, err, EvaluationFailed, "$.spin: cancelled: context deadline exceeded")
 		if elapsed := time.Since(started); elapsed > 3*time.Second {
 			t.Fatalf("the context did not stop the loop in time: %s", elapsed)
 		}
-		expectEqual(t, evalAs[int](t, template, nil, "ok"), 2)
+		expectEqual(t, mustResolve[int](t, t.Context(), document.At("ok")), 2)
 	})
 }
 
@@ -147,27 +147,27 @@ func TestMemoryBombsHitTheLimit(t *testing.T) {
 	}
 	for name, text := range bombs {
 		t.Run(name, func(t *testing.T) {
-			template := mustTemplate(t, mustIsolated(t, WithMemoryLimit(64<<20)), text+"ok: 1\n")
+			document := mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), text+"ok: 1\n")
 			var out any
-			expectError(t, template.Eval(within(t, 20*time.Second), &out, nil, "v"), MemoryLimit, "$.v", "exceeded the memory limit of 67108864 bytes")
-			expectEqual(t, isolatedEvalAs[int](t, template, nil, "ok"), 1)
+			expectError(t, resolveInto(within(t, 20*time.Second), &out, document.At("v")), MemoryLimit, "$.v", "exceeded the memory limit of 67108864 bytes")
+			expectEqual(t, isolatedEvalAs[int](t, document, nil, "ok"), 1)
 		})
 	}
 }
 
 func TestThrownErrorsKeepTheEvaluator(t *testing.T) {
 	sb := mustIsolated(t)
-	template := mustTemplate(t, sb, "bad: ${ (() => { throw new RangeError('too far') })() }\ngood: ${ 3 }\n")
+	document := mustJaml(t, sb, "bad: ${ (() => { throw new RangeError('too far') })() }\ngood: ${ 3 }\n")
 	before := childPID(t, sb)
 	var out any
-	expectError(t, template.Eval(within(t, 10*time.Second), &out, nil, "bad"), EvaluationFailed, "$.bad", "RangeError: too far")
-	expectEqual(t, isolatedEvalAs[int](t, template, nil, "good"), 3)
+	expectError(t, resolveInto(within(t, 10*time.Second), &out, document.At("bad")), EvaluationFailed, "$.bad", "RangeError: too far")
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "good"), 3)
 	expectEqual(t, childPID(t, sb), before)
 }
 
 func TestADeadEvaluatorIsReplaced(t *testing.T) {
 	sb := mustIsolated(t)
-	template := mustTemplate(t, sb, "slow: \"${ (() => { let n = 0; for (let i = 0; i < loops; i++) n += i % 3; return 7 })() }\"\nok: ${ 4 }\n")
+	document := mustJaml(t, sb, "slow: \"${ (() => { let n = 0; for (let i = 0; i < loops; i++) n += i % 3; return 7 })() }\"\nok: ${ 4 }\n")
 	first := childPID(t, sb)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -175,8 +175,8 @@ func TestADeadEvaluatorIsReplaced(t *testing.T) {
 			_ = running.Kill()
 		}
 	}()
-	expectEqual(t, isolatedEvalAs[int](t, template, map[string]any{"loops": 3e7 / raceSlowdown}, "slow"), 7)
-	expectEqual(t, isolatedEvalAs[int](t, template, nil, "ok"), 4)
+	expectEqual(t, isolatedEvalAs[int](t, document, map[string]any{"loops": 3e7 / raceSlowdown}, "slow"), 7)
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "ok"), 4)
 	if replaced := childPID(t, sb); replaced == first {
 		t.Fatalf("expected a fresh evaluator, still %d", replaced)
 	}
@@ -186,21 +186,21 @@ func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T)
 	sb := mustIsolated(t, WithMaxConcurrency(8))
 	before := liveChildren(t)
 	pid := childPID(t, sb)
-	templates := make([]*Template, 12)
+	documents := make([]*Expression, 12)
 	expressions := make([]*Expression, 12)
-	for index := range templates {
-		templates[index] = mustTemplate(t, sb, fmt.Sprintf("v: ${ n * %d }\n", index))
-		expressions[index] = mustCompile(t, sb, fmt.Sprintf("x => x + %d", index))
+	for index := range documents {
+		documents[index] = mustJaml(t, sb, fmt.Sprintf("v: ${ n * %d }\n", index))
+		expressions[index] = mustExpression(t, sb, fmt.Sprintf("x => x + %d", index))
 	}
 	var wait sync.WaitGroup
-	for index := range templates {
+	for index := range documents {
 		wait.Go(func() {
 			for round := range 20 {
 				var fromTemplate, fromCall int
-				if err := templates[index].Eval(within(t, 30*time.Second), &fromTemplate, map[string]any{"n": round}, "v"); err != nil || fromTemplate != round*index {
+				if err := resolveInto(valued(within(t, 30*time.Second), map[string]any{"n": round}), &fromTemplate, documents[index].At("v")); err != nil || fromTemplate != round*index {
 					t.Errorf("template %d round %d: got %d, %v", index, round, fromTemplate, err)
 				}
-				if err := expressions[index].Call(within(t, 30*time.Second), &fromCall, round); err != nil || fromCall != round+index {
+				if err := resolveInto(within(t, 30*time.Second), &fromCall, expressions[index], round); err != nil || fromCall != round+index {
 					t.Errorf("expression %d round %d: got %d, %v", index, round, fromCall, err)
 				}
 			}
@@ -231,36 +231,36 @@ func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 }
 
 func TestBadOptionsSurfaceEarly(t *testing.T) {
-	_, err := mustIsolated(t).MakeTemplate(t.Context(), "v: ${ 1 + }\n")
-	expectError(t, err, InvalidTemplate, "$.v")
-	_, err = MakeSandbox(t.Context(), WithMemoryLimit(-1))
-	expectError(t, err, InvalidTemplate, "memory limit")
+	_, err := mustIsolated(t).MakeExpressionFromJaml(t.Context(), "v: ${ 1 + }\n")
+	expectError(t, err, InvalidExpression, "$.v")
+	_, err = MakeSecureSandbox(t.Context(), WithMemoryLimit(-1))
+	expectError(t, err, InvalidExpression, "memory limit")
 	_, err = MakeTrustedSandbox(t.Context(), WithMemoryLimit(64<<20))
-	expectError(t, err, InvalidTemplate, "MakeSandbox")
+	expectError(t, err, InvalidExpression, "MakeSecureSandbox")
 	for _, kind := range sandboxKinds {
 		_, err = kind.make(t.Context(), WithMaxConcurrency(0))
-		expectError(t, err, InvalidTemplate, "max concurrency must be at least 1, got 0")
+		expectError(t, err, InvalidExpression, "max concurrency must be at least 1, got 0")
 		_, err = kind.make(t.Context(), WithBuildTimeout(0))
-		expectError(t, err, InvalidTemplate, "build timeout must be positive")
+		expectError(t, err, InvalidExpression, "build timeout must be positive")
 		_, err = kind.make(t.Context(), nil)
-		expectError(t, err, InvalidTemplate, "option 1 is nil")
+		expectError(t, err, InvalidExpression, "option 1 is nil")
 	}
 }
 
 func TestMemoryLimitsOutsideTheirRangeAreRefused(t *testing.T) {
 	for _, bytes := range []int64{0, -1, 16<<20 - 1, 1<<40 + 1, 1 << 62} {
-		_, err := MakeSandbox(t.Context(), WithMemoryLimit(bytes))
-		expectError(t, err, InvalidTemplate, "memory limit", "16 MiB", "1 TiB", fmt.Sprintf("got %d", bytes))
+		_, err := MakeSecureSandbox(t.Context(), WithMemoryLimit(bytes))
+		expectError(t, err, InvalidExpression, "memory limit", "16 MiB", "1 TiB", fmt.Sprintf("got %d", bytes))
 		_, err = MakeTrustedSandbox(t.Context(), WithMemoryLimit(bytes))
-		expectError(t, err, InvalidTemplate, "memory limit")
+		expectError(t, err, InvalidExpression, "memory limit")
 	}
 }
 
 func TestMemoryLimitsAtTheirBoundsServe(t *testing.T) {
 	for _, bytes := range []int64{16 << 20, 1 << 40} {
-		template := mustTemplate(t, mustIsolated(t, WithMemoryLimit(bytes)), "v: ${ 1 }\n")
+		document := mustJaml(t, mustIsolated(t, WithMemoryLimit(bytes)), "v: ${ 1 }\n")
 		for range 100 {
-			expectEqual(t, isolatedEvalAs[int](t, template, nil, "v"), 1)
+			expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
 		}
 	}
 }
@@ -278,20 +278,20 @@ func TestTheEvaluatorRefusesALimitOutsideTheRange(t *testing.T) {
 
 func TestAnAnswerTooDeepNeverReachesTheWire(t *testing.T) {
 	sb := mustIsolated(t)
-	template := mustTemplate(t, sb, "deep: ${ (() => { let a = []; for (let i = 0; i < 9999; i++) a = [a]; return a })() }\nok: ${ 5 }\n")
+	document := mustJaml(t, sb, "deep: ${ (() => { let a = []; for (let i = 0; i < 9999; i++) a = [a]; return a })() }\nok: ${ 5 }\n")
 	before := childPID(t, sb)
-	expectError(t, evalBounded(t, template, within(t, 2*time.Second), "deep"), EvaluationFailed, "$.deep", "nests deeper than 4096")
-	expectEqual(t, isolatedEvalAs[int](t, template, nil, "ok"), 5)
+	expectError(t, evalBounded(t, document, within(t, 2*time.Second), "deep"), EvaluationFailed, "$.deep", "nests deeper than 4096")
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "ok"), 5)
 	expectEqual(t, childPID(t, sb), before)
 }
 
 func TestVarsTooDeepNeverReachTheWire(t *testing.T) {
 	sb := mustIsolated(t)
-	template := mustTemplate(t, sb, "v: ${ 1 }\n")
+	document := mustJaml(t, sb, "v: ${ 1 }\n")
 	before := childPID(t, sb)
 	var out int
-	err := template.Eval(within(t, 10*time.Second), &out, map[string]any{"deep": nestedVar(10001)}, "v")
-	expectError(t, err, EvaluationFailed, `var "deep" nests deeper than 4096`)
-	expectEqual(t, isolatedEvalAs[int](t, template, nil, "v"), 1)
+	err := resolveInto(valued(within(t, 10*time.Second), map[string]any{"deep": nestedVar(10001)}), &out, document.At("v"))
+	expectError(t, err, EvaluationFailed, `value "deep" nests deeper than 4096`)
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
 	expectEqual(t, childPID(t, sb), before)
 }

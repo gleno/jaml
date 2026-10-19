@@ -2,20 +2,20 @@ package jaml
 
 import "fmt"
 
-type templateError struct {
+type expressionError struct {
 	kind  error
 	cause error
 }
 
 func fail(kind error, format string, args ...any) error {
-	return templateError{kind: kind, cause: fmt.Errorf(format, args...)}
+	return expressionError{kind: kind, cause: fmt.Errorf(format, args...)}
 }
 
-func (e templateError) Error() string {
+func (e expressionError) Error() string {
 	return e.cause.Error() + ": " + e.kind.Error()
 }
 
-func (e templateError) Unwrap() []error {
+func (e expressionError) Unwrap() []error {
 	return []error{e.kind, e.cause}
 }
 

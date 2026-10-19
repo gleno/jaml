@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -19,30 +18,38 @@ type segment struct {
 }
 
 type compiler struct {
-	ctx   context.Context
-	texts map[string]text
+	ctx        context.Context
+	texts      map[string]text
+	delimiters _Delimiters
 }
 
-func compileTexts(ctx context.Context, root any) (map[string]text, error) {
-	c := &compiler{ctx: ctx, texts: map[string]text{}}
+func compileTexts(ctx context.Context, root any, delimiters _Delimiters) (map[string]text, error) {
+	var c = &compiler{ctx: ctx, texts: map[string]text{}, delimiters: delimiters}
 	if err := c.visit(root, nil); err != nil {
 		return nil, err
 	}
 	return c.texts, nil
 }
 
-var errNotAWholeExpression = errors.New("a value that starts with ${ must be one whole expression; interpolate into text with ${{ }}")
-
 type delimiter struct {
 	opens  string
 	closes string
 }
 
-var (
-	wholeValue    = delimiter{opens: "${", closes: "}"}
-	interpolation = delimiter{opens: "${{", closes: "}}"}
-	bare          = delimiter{}
-)
+type _Delimiters struct {
+	value         delimiter
+	interpolation delimiter
+}
+
+var bare = delimiter{}
+
+func delimitersFor(sigil string) _Delimiters {
+	return _Delimiters{value: delimiter{opens: sigil + "{", closes: "}"}, interpolation: delimiter{opens: sigil + "{{", closes: "}}"}}
+}
+
+func (d _Delimiters) notWhole() error {
+	return fmt.Errorf("a value that starts with %s must be one whole expression; interpolate into text with %s }}", d.value.opens, d.interpolation.opens)
+}
 
 func (d delimiter) around(code string) string {
 	return d.opens + excerpt(code, codeExcerptLength) + d.closes
@@ -61,7 +68,7 @@ func (c *compiler) visit(node any, at *dataPath) error {
 	}
 	compiled, err := c.compileText(written)
 	if err != nil {
-		return fail(InvalidTemplate, "%s: %w", at, err)
+		return fail(InvalidExpression, "%s: %w", at, err)
 	}
 	if compiled.holdsCode() {
 		c.texts[written] = compiled
@@ -80,8 +87,8 @@ func (c *compiler) compileText(written string) (compiled text, err error) {
 		}
 	}()
 	trimmed := strings.TrimSpace(written)
-	whole := strings.HasPrefix(trimmed, wholeValue.opens) && !strings.HasPrefix(trimmed, interpolation.opens)
-	if !whole && !strings.Contains(written, interpolation.opens) {
+	whole := strings.HasPrefix(trimmed, c.delimiters.value.opens) && !strings.HasPrefix(trimmed, c.delimiters.interpolation.opens)
+	if !whole && !strings.Contains(written, c.delimiters.interpolation.opens) {
 		return text{}, nil
 	}
 	if err := refuseLongCode(written); err != nil {
@@ -94,13 +101,14 @@ func (c *compiler) compileText(written string) (compiled text, err error) {
 }
 
 func (c *compiler) compileWhole(trimmed string) (text, error) {
+	var wholeValue = c.delimiters.value
 	after := trimmed[len(wholeValue.opens):]
 	end, err := searchingEndsIn(trimmed).expressionEnd(after, wholeValue)
 	if err != nil {
 		return text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, excerpt(after, codeExcerptLength), err)
 	}
 	if end != len(after)-len(wholeValue.closes) {
-		return text{}, errNotAWholeExpression
+		return text{}, c.delimiters.notWhole()
 	}
 	code := after[:end]
 	compiled, err := compileExpression(code, wholeValue)
@@ -111,6 +119,7 @@ func (c *compiler) compileWhole(trimmed string) (text, error) {
 }
 
 func (c *compiler) compileInterpolations(written string) (text, error) {
+	var interpolation = c.delimiters.interpolation
 	var compiled text
 	search := searchingEndsIn(written)
 	rest := written

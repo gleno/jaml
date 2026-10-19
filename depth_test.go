@@ -14,8 +14,8 @@ type bothKinds struct {
 
 func makeInBothKinds(t *testing.T, text string) bothKinds {
 	t.Helper()
-	_, trusted := sharedSandbox(t, trustedKind).MakeTemplate(t.Context(), text)
-	_, isolated := sharedSandbox(t, isolatedKind).MakeTemplate(t.Context(), text)
+	_, trusted := sharedSandbox(t, trustedKind).MakeExpressionFromJaml(t.Context(), text)
+	_, isolated := sharedSandbox(t, isolatedKind).MakeExpressionFromJaml(t.Context(), text)
 	return bothKinds{trusted: trusted, isolated: isolated}
 }
 
@@ -76,12 +76,12 @@ func TestInterpolatedResultsNestAtMost4096DeepInBothKinds(t *testing.T) {
 
 func TestVarsNestAtMost4096DeepInBothKinds(t *testing.T) {
 	text := "v: ${ typeof deep }\n"
-	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4097)}).expectRefused(t, EvaluationFailed, `binding vars: var "deep" nests deeper than 4096`)
+	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4097)}).expectRefused(t, EvaluationFailed, `binding values: value "deep" nests deeper than 4096`)
 	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4096)}).expectAccepted(t)
 }
 
 func TestTemplatesNestAtMost4096DeepInBothKinds(t *testing.T) {
-	makeInBothKinds(t, deepTemplate(4097, "1")).expectRefused(t, InvalidTemplate, "nests deeper than 4096")
+	makeInBothKinds(t, deepTemplate(4097, "1")).expectRefused(t, InvalidExpression, "nests deeper than 4096")
 	makeInBothKinds(t, deepTemplate(4096, "1")).expectAccepted(t)
 }
 
@@ -91,7 +91,7 @@ func TestTemplatesNestedThroughAliasesCountTheirFullDepth(t *testing.T) {
 	for link := 1; link <= 64; link++ {
 		fmt.Fprintf(&text, "a%d: &a%d %s*a%d%s\n", link, link, strings.Repeat("[", 64), link-1, strings.Repeat("]", 64))
 	}
-	makeInBothKinds(t, text.String()).expectRefused(t, InvalidTemplate, "$.a64", "nests deeper than 4096")
+	makeInBothKinds(t, text.String()).expectRefused(t, InvalidExpression, "$.a64", "nests deeper than 4096")
 }
 
 func TestTheDeepestTemplateHoldsTheDeepestResultInBothKinds(t *testing.T) {

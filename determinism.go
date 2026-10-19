@@ -18,8 +18,8 @@ type pinned struct {
 	Seed   uint64 `json:"seed"`
 }
 
-func WithFixedClock(ctx context.Context, at time.Time) context.Context {
-	return context.WithValue(ctx, fixedClockKey{}, at)
+func WithFixedClock(ctx context.Context, time time.Time) context.Context {
+	return context.WithValue(ctx, fixedClockKey{}, time)
 }
 
 func WithRandomSeed(ctx context.Context, seed uint64) context.Context {

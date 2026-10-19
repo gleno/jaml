@@ -31,8 +31,8 @@ func TestSecureAndTrustedShareTheLocalZone(t *testing.T) {
 		previous := time.Local
 		time.Local = location
 		text := "h: ${ new Date(0).getHours() }\n"
-		trusted := evalAs[int](t, mustTemplate(t, mustSandbox(t, trustedKind), text), nil, "h")
-		secure := isolatedEvalAs[int](t, mustTemplate(t, mustIsolated(t), text), nil, "h")
+		trusted := evalAs[int](t, mustJaml(t, mustSandbox(t, trustedKind), text), nil, "h")
+		secure := isolatedEvalAs[int](t, mustJaml(t, mustIsolated(t), text), nil, "h")
 		time.Local = previous
 		expectEqual(t, trusted, hour)
 		expectEqual(t, secure, trusted)
@@ -49,8 +49,8 @@ func TestTheEvaluatorHasItsOwnProcessGroup(t *testing.T) {
 }
 
 func TestTheMemoryLimitBoundsGrowthOverTheHostsHeap(t *testing.T) {
-	template := mustTemplate(t, mustIsolated(t, WithMemoryLimit(ballastLimit)), "v: \"${ 'x'.repeat(24 << 20).length }\"\n")
-	expectEqual(t, isolatedEvalAs[int](t, template, nil, "v"), 24<<20)
+	document := mustJaml(t, mustIsolated(t, WithMemoryLimit(ballastLimit)), "v: \"${ 'x'.repeat(24 << 20).length }\"\n")
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 24<<20)
 	expectEqual(t, len(hostBallast), 0)
 }
 
@@ -71,7 +71,7 @@ func hoursAtEpochInBothKinds(t *testing.T, local *time.Location) (int, int) {
 	time.Local = local
 	defer func() { time.Local = previous }()
 	text := "h: ${ new Date(0).getHours() }\n"
-	return evalAs[int](t, mustTemplate(t, mustSandbox(t, trustedKind), text), nil, "h"), isolatedEvalAs[int](t, mustTemplate(t, mustIsolated(t), text), nil, "h")
+	return evalAs[int](t, mustJaml(t, mustSandbox(t, trustedKind), text), nil, "h"), isolatedEvalAs[int](t, mustJaml(t, mustIsolated(t), text), nil, "h")
 }
 
 func tokyoZoneData(t *testing.T) []byte {

@@ -1,0 +1,177 @@
+package jaml
+
+import (
+	"context"
+	"encoding"
+	"encoding/json"
+	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
+
+func Resolve[T any](ctx context.Context, e *Expression, args ...any) (T, error) {
+	var result T
+	var err = e.resolve(ctx, &result, args)
+	return result, err
+}
+
+func (e *Expression) resolve(ctx context.Context, into any, args []any) error {
+	if e == nil || e.held == nil {
+		return unmadeExpression("Resolve")
+	}
+	if err := admitPath(e.path); err != nil {
+		return err
+	}
+	if err := e.held.admit(ctx); err != nil {
+		return err
+	}
+	var target = reflect.TypeOf(into).Elem()
+	if err := checkTarget(target); err != nil {
+		return err
+	}
+	skips, err := skipsFor(target)
+	if err != nil {
+		return err
+	}
+	values, err := admitValues(valuesOf(ctx))
+	if err != nil {
+		return fail(EvaluationFailed, "binding values: %w", err)
+	}
+	scripts, err := admitScripts(scriptsOf(ctx))
+	if err != nil {
+		return err
+	}
+	arguments, err := admitArguments(args)
+	if err != nil {
+		return fail(EvaluationFailed, "binding arguments: %w", err)
+	}
+	var request = work{Path: e.path, Values: values, Scripts: scripts, Args: arguments, Skips: skips}
+	return e.held.answer(ctx, request, func(settled answered) error {
+		if err := json.Unmarshal(settled.data, into); err != nil {
+			return err
+		}
+		var decoded = reflect.ValueOf(into).Elem()
+		for _, path := range settled.skipped {
+			bindView(decoded, path, &Expression{held: e.held, path: slices.Concat(e.path, path)})
+		}
+		return nil
+	})
+}
+
+func checkTarget(target reflect.Type) error {
+	switch target.Kind() {
+	case reflect.Func, reflect.Chan, reflect.UnsafePointer, reflect.Complex64, reflect.Complex128:
+		return fail(InvalidTarget, "Resolve cannot decode into a %s", target)
+	case reflect.Interface:
+		if target.NumMethod() > 0 {
+			return fail(InvalidTarget, "Resolve cannot decode into the interface %s", target)
+		}
+	}
+	return nil
+}
+
+func admitScripts(scripts []string) ([]string, error) {
+	for index, source := range scripts {
+		switch {
+		case !utf8.ValidString(source):
+			return nil, fail(InvalidExpression, "script %d: %w", index+1, syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character"))
+		case len(source) > maxCodeBytes:
+			return nil, fail(InvalidExpression, "script %d is longer than %d bytes", index+1, maxCodeBytes)
+		}
+	}
+	return scripts, nil
+}
+
+func skipsFor(target reflect.Type) (*_Shape, error) {
+	nodes, err := shapeOf(target)
+	if err != nil || nodes == nil {
+		return nil, err
+	}
+	return &_Shape{Nodes: nodes}, nil
+}
+
+func bindView(value reflect.Value, path []string, view *Expression) {
+	if len(path) == 0 {
+		if value.Type() == expressionPointer {
+			value.Set(reflect.ValueOf(view))
+		}
+		return
+	}
+	switch value.Kind() {
+	case reflect.Pointer:
+		if value.IsNil() {
+			value.Set(reflect.New(value.Type().Elem()))
+		}
+		bindView(value.Elem(), path, view)
+	case reflect.Struct:
+		if field, found := fieldNamed(value, path[0]); found {
+			bindView(field, path[1:], view)
+		}
+	case reflect.Map:
+		key, readable := mapKey(value.Type().Key(), path[0])
+		if !readable {
+			return
+		}
+		var held = reflect.New(value.Type().Elem()).Elem()
+		if existing := value.MapIndex(key); existing.IsValid() {
+			held.Set(existing)
+		}
+		bindView(held, path[1:], view)
+		value.SetMapIndex(key, held)
+	case reflect.Slice, reflect.Array:
+		if index, err := strconv.Atoi(path[0]); err == nil && index < value.Len() {
+			bindView(value.Index(index), path[1:], view)
+		}
+	}
+}
+
+func mapKey(kind reflect.Type, written string) (reflect.Value, bool) {
+	var key = reflect.New(kind)
+	if unmarshaler, decodes := key.Interface().(encoding.TextUnmarshaler); decodes {
+		return key.Elem(), unmarshaler.UnmarshalText([]byte(written)) == nil
+	}
+	switch kind.Kind() {
+	case reflect.String:
+		return reflect.ValueOf(written).Convert(kind), true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		number, err := strconv.ParseInt(written, 10, kind.Bits())
+		key.Elem().SetInt(number)
+		return key.Elem(), err == nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		number, err := strconv.ParseUint(written, 10, kind.Bits())
+		key.Elem().SetUint(number)
+		return key.Elem(), err == nil
+	}
+	return reflect.Value{}, false
+}
+
+func fieldNamed(value reflect.Value, key string) (reflect.Value, bool) {
+	var folded []int
+	for _, field := range jsonFields(value.Type()) {
+		if field.name == key {
+			return fieldAt(value, field.index), true
+		}
+		if folded == nil && strings.EqualFold(field.name, key) {
+			folded = field.index
+		}
+	}
+	if folded == nil {
+		return reflect.Value{}, false
+	}
+	return fieldAt(value, folded), true
+}
+
+func fieldAt(value reflect.Value, index []int) reflect.Value {
+	for _, step := range index {
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				value.Set(reflect.New(value.Type().Elem()))
+			}
+			value = value.Elem()
+		}
+		value = value.Field(step)
+	}
+	return value
+}

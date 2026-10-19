@@ -20,7 +20,7 @@ func TestTargetsDecodeThroughEncodingJSON(t *testing.T) {
 			Extra  json.RawMessage   `json:"extra"`
 			Hidden string            `json:"-"`
 		}
-		template := mustTemplate(t, sb, `
+		parsed := mustJaml(t, sb, `
 services:
   - name: ${{prefix}}-api
     labels: {team: "${{team}}"}
@@ -28,7 +28,7 @@ services:
     extra: "${ [1, {two: 2}] }"
     Hidden: nope
 `)
-		got := evalAs[[]service](t, template, map[string]any{"prefix": "atlas", "team": "rev", "retries": 3}, "services")
+		got := evalAs[[]service](t, parsed, map[string]any{"prefix": "atlas", "team": "rev", "retries": 3}, "services")
 		three := 3
 		expectEqual(t, len(got), 1)
 		expectEqual(t, got[0].Name, "atlas-api")
@@ -45,9 +45,9 @@ func TestMismatchedTypesAreCoercionErrors(t *testing.T) {
 			Port int `json:"port"`
 		}
 		var out shape
-		expectError(t, mustTemplate(t, sb, "port: ${'eighty'}\n").Eval(t.Context(), &out, nil), CoercionFailed, "$.port: json: cannot unmarshal string into Go struct field shape.port")
+		expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, "port: ${'eighty'}\n")), CoercionFailed, "$.port: json: cannot unmarshal string into Go struct field shape.port")
 		var text string
-		expectError(t, mustTemplate(t, sb, "v: ${1}\n").Eval(t.Context(), &text, nil, "v"), CoercionFailed, "$.v")
+		expectError(t, resolveInto(t.Context(), &text, mustJaml(t, sb, "v: ${1}\n").At("v")), CoercionFailed, "$.v")
 	})
 }
 
@@ -60,18 +60,24 @@ type SelfEmbedding = selfEmbedding
 
 func TestRecursiveEmbeddingTerminates(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		got := evalAs[SelfEmbedding](t, mustTemplate(t, sb, "v: 1\n"), nil)
+		got := mustResolve[SelfEmbedding](t, t.Context(), mustJaml(t, sb, "v: 1\n"))
 		expectEqual(t, got.V, 1)
 	})
 }
 
-func TestTargetMustBeANonNilPointer(t *testing.T) {
+func TestATargetJSONCannotDecodeIntoIsRefused(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "a: 1\n")
-		var out map[string]any
-		expectError(t, template.Eval(t.Context(), out, nil), InvalidTarget, "map[string]interface {}")
-		expectError(t, template.Eval(t.Context(), nil, nil), InvalidTarget, "nil")
-		expectError(t, template.Eval(t.Context(), (*int)(nil), nil), InvalidTarget, "nil *int")
+		document := mustJaml(t, sb, "a: 1\n")
+		_, err := Resolve[func()](t.Context(), document)
+		expectError(t, err, InvalidTarget, "func()")
+		_, err = Resolve[chan int](t.Context(), document)
+		expectError(t, err, InvalidTarget, "chan int")
+		_, err = Resolve[error](t.Context(), document)
+		expectError(t, err, InvalidTarget, "the interface error")
+		_, err = Resolve[struct{ A Expression }](t.Context(), document)
+		expectError(t, err, InvalidTarget, "never a jaml.Expression held by value")
+		_, err = Resolve[map[string]**Expression](t.Context(), document)
+		expectError(t, err, InvalidTarget, "never a jaml.Expression held by value")
 	})
 }
 

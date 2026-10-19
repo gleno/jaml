@@ -17,7 +17,7 @@ type sandboxKind struct {
 
 var (
 	trustedKind  = sandboxKind{name: "trusted", make: MakeTrustedSandbox}
-	isolatedKind = sandboxKind{name: "isolated", make: MakeSandbox}
+	isolatedKind = sandboxKind{name: "isolated", make: MakeSecureSandbox}
 	sandboxKinds = []sandboxKind{trustedKind, isolatedKind}
 )
 
@@ -61,31 +61,55 @@ func sharedSandbox(t *testing.T, kind sandboxKind) *Sandbox {
 	return made
 }
 
-func mustTemplate(t *testing.T, sb *Sandbox, text string, options ...Option) *Template {
+func mustJaml(t *testing.T, sb *Sandbox, jaml string, options ...Option) *Expression {
 	t.Helper()
-	template, err := sb.MakeTemplate(t.Context(), text, options...)
+	made, err := sb.MakeExpressionFromJaml(t.Context(), jaml, options...)
 	if err != nil {
-		t.Fatalf("MakeTemplate: %v", err)
+		t.Fatalf("MakeExpressionFromJaml: %v", err)
 	}
-	return template
+	return made
 }
 
-func mustCompile(t *testing.T, sb *Sandbox, source string) *Expression {
+func mustExpression(t *testing.T, sb *Sandbox, expression string, options ...Option) *Expression {
 	t.Helper()
-	compiled, err := sb.Compile(t.Context(), source)
+	made, err := sb.MakeExpression(t.Context(), expression, options...)
 	if err != nil {
-		t.Fatalf("Compile: %v", err)
+		t.Fatalf("MakeExpression: %v", err)
 	}
-	return compiled
+	return made
 }
 
-func evalAs[T any](t *testing.T, template *Template, vars map[string]any, path ...string) T {
-	t.Helper()
-	var out T
-	if err := template.Eval(t.Context(), &out, vars, path...); err != nil {
-		t.Fatalf("Eval: %v", err)
+func withValues(t *testing.T, values map[string]any) context.Context {
+	return WithValues(t.Context(), values)
+}
+
+func valued(ctx context.Context, values map[string]any) context.Context {
+	if values == nil {
+		return ctx
 	}
-	return out
+	return WithValues(ctx, values)
+}
+
+func evalAs[T any](t *testing.T, e *Expression, values map[string]any, path ...string) T {
+	t.Helper()
+	return mustResolve[T](t, valued(t.Context(), values), e.At(path...))
+}
+
+func resolveInto[T any](ctx context.Context, into *T, e *Expression, args ...any) error {
+	resolved, err := Resolve[T](ctx, e, args...)
+	if err == nil {
+		*into = resolved
+	}
+	return err
+}
+
+func mustResolve[T any](t *testing.T, ctx context.Context, e *Expression, args ...any) T {
+	t.Helper()
+	resolved, err := Resolve[T](ctx, e, args...)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	return resolved
 }
 
 func within(t *testing.T, limit time.Duration) context.Context {
@@ -103,8 +127,8 @@ func expectError(t *testing.T, err error, sentinel error, fragments ...string) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected %v, got %v", sentinel, err)
 	}
-	if !errors.Is(err, TemplateError) {
-		t.Fatalf("expected every error to be a TemplateError, got %v", err)
+	if !errors.Is(err, ExpressionError) {
+		t.Fatalf("expected every error to be an ExpressionError, got %v", err)
 	}
 	for _, fragment := range fragments {
 		if !strings.Contains(err.Error(), fragment) {
@@ -122,7 +146,7 @@ func expectEqual(t *testing.T, got, want any) {
 
 func TestTheSpecifiedExample(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, `
+		document := mustJaml(t, sb, `
 config:
   value1: 123
   value2: ${1+1}
@@ -133,32 +157,34 @@ config:
 			Value2 int    `json:"value2"`
 			Value3 string `json:"value3"`
 		}
-		got := evalAs[config](t, template, map[string]any{"name": "abc"}, "config")
+		got := mustResolve[config](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
 		expectEqual(t, got, config{Value1: 123, Value2: 2, Value3: "some string abc"})
 	})
 }
 
 func TestTheExampleIntoAMap(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "config:\n  value1: 123\n  value2: ${1+1}\n  value3: \"some string ${{name}}\"\n")
-		got := evalAs[map[string]any](t, template, map[string]any{"name": "abc"}, "config")
+		document := mustJaml(t, sb, "config:\n  value1: 123\n  value2: ${1+1}\n  value3: \"some string ${{name}}\"\n")
+		got := mustResolve[map[string]any](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
 		expectEqual(t, got, map[string]any{"value1": float64(123), "value2": float64(2), "value3": "some string abc"})
 	})
 }
 
-func TestATemplateEvaluatesNothingUntilEval(t *testing.T) {
+func TestAnExpressionEvaluatesNothingUntilResolve(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "a: ${ (() => { throw new Error('boom') })() }\nb: 1\n")
-		expectEqual(t, evalAs[int](t, template, nil, "b"), 1)
-		var out map[string]any
-		expectError(t, template.Eval(t.Context(), &out, nil), EvaluationFailed, "$.a", "Error: boom")
+		document := mustJaml(t, sb, "a: ${ (() => { throw new Error('boom') })() }\nb: 1\n")
+		expectEqual(t, mustResolve[int](t, t.Context(), document.At("b")), 1)
+		_, err := Resolve[map[string]any](t.Context(), document)
+		expectError(t, err, EvaluationFailed, "$.a", "Error: boom")
 	})
 }
 
-func TestATemplateIsReusableWithDifferentVars(t *testing.T) {
+func TestAnExpressionIsReusableWithDifferentValues(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "greeting: hello ${{who}}\n")
-		expectEqual(t, evalAs[string](t, template, map[string]any{"who": "ada"}, "greeting"), "hello ada")
-		expectEqual(t, evalAs[string](t, template, map[string]any{"who": "bob"}, "greeting"), "hello bob")
+		greeting := mustJaml(t, sb, "greeting: hello ${{who}}\n").At("greeting")
+		expectEqual(t, mustResolve[string](t, withValues(t, map[string]any{"who": "ada"}), greeting), "hello ada")
+		expectEqual(t, mustResolve[string](t, withValues(t, map[string]any{"who": "bob"}), greeting), "hello bob")
 	})
 }
+
+var dollar = delimitersFor(defaultSigil)

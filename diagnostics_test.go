@@ -25,7 +25,7 @@ func TestAPreviewCutsBetweenCharacters(t *testing.T) {
 	both.expectRefused(t, EvaluationFailed, "$.v: ${'"+strings.Repeat("й", 59)+"…}: ReferenceError: q is not defined")
 	expectWellFormedAndBounded(t, both.trusted)
 	made := makeInBothKinds(t, "v: \"${ '"+long+"' + ) }\"\n")
-	made.expectRefused(t, InvalidTemplate, "…")
+	made.expectRefused(t, InvalidExpression, "…")
 	expectWellFormedAndBounded(t, made.trusted)
 }
 
@@ -40,7 +40,7 @@ func TestSyntaxErrorsCountCharactersAndQuoteWhereTheyPoint(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			makeInBothKinds(t, c.text).expectRefused(t, InvalidTemplate, c.expected)
+			makeInBothKinds(t, c.text).expectRefused(t, InvalidExpression, c.expected)
 		})
 	}
 }
@@ -108,14 +108,14 @@ func engineValuesIn(err error) []string {
 func TestAThrowKeepsASnapshotAsItsCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var out any
-		err := mustTemplate(t, sb, expressionTemplate("(() => { throw new RangeError('far') })()")).Eval(t.Context(), &out, nil, "v")
+		err := resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { throw new RangeError('far') })()")).At("v"))
 		var caught *Thrown
 		if !errors.As(err, &caught) {
 			t.Fatalf("expected a thrown snapshot in %v", err)
 		}
 		expectEqual(t, caught.Message, "RangeError: far")
 		expectEqual(t, caught.Value, map[string]any{})
-		err = mustTemplate(t, sb, expressionTemplate("(() => { throw { get message() { throw 'inner' } } })()")).Eval(t.Context(), &out, nil, "v")
+		err = resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { throw { get message() { throw 'inner' } } })()")).At("v"))
 		if !errors.As(err, &caught) {
 			t.Fatalf("expected a thrown snapshot in %v", err)
 		}
@@ -142,7 +142,7 @@ func TestNoEngineValueEscapesAnEval(t *testing.T) {
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
 				var out any
-				err := mustTemplate(t, sb, expressionTemplate(c.source)).Eval(t.Context(), &out, c.vars, "v")
+				err := resolveInto(valued(t.Context(), c.vars), &out, mustJaml(t, sb, expressionTemplate(c.source)).At("v"))
 				expectError(t, err, EvaluationFailed)
 				if found := engineValuesIn(err); len(found) > 0 {
 					t.Fatalf("%v reaches %v", err, found)
@@ -172,7 +172,7 @@ func TestAThrowingGetterNamesItsResultPath(t *testing.T) {
 func thrownValue(t *testing.T, sb *Sandbox, source string) any {
 	t.Helper()
 	var out any
-	err := mustTemplate(t, sb, expressionTemplate("(() => { "+source+" })()")).Eval(t.Context(), &out, nil, "v")
+	err := resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { "+source+" })()")).At("v"))
 	var caught *Thrown
 	if !errors.As(err, &caught) {
 		t.Fatalf("expected a thrown snapshot in %v", err)

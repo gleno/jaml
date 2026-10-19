@@ -15,8 +15,8 @@ type agreement struct {
 func (a agreement) eval(t *testing.T, newOut func() any) bothKinds {
 	t.Helper()
 	trustedOut, isolatedOut := newOut(), newOut()
-	trusted := mustTemplate(t, sharedSandbox(t, trustedKind), a.text, a.options...).Eval(within(t, 30*time.Second), trustedOut, a.vars, a.path...)
-	isolated := mustTemplate(t, sharedSandbox(t, isolatedKind), a.text, a.options...).Eval(within(t, 30*time.Second), isolatedOut, a.vars, a.path...)
+	trusted := mustJaml(t, sharedSandbox(t, trustedKind), a.text, a.options...).At(a.path...).resolve(valued(within(t, 30*time.Second), a.vars), trustedOut, nil)
+	isolated := mustJaml(t, sharedSandbox(t, isolatedKind), a.text, a.options...).At(a.path...).resolve(valued(within(t, 30*time.Second), a.vars), isolatedOut, nil)
 	if trusted == nil && isolated == nil {
 		expectEqual(t, isolatedOut, trustedOut)
 	}
@@ -46,7 +46,7 @@ func TestFailuresAgreeInBothKinds(t *testing.T) {
 		"empty thrown message": {agreement{text: "v: \"${ (() => { throw { message: '' } })() }\"\n"}, EvaluationFailed},
 		"thrown error":         {agreement{text: "v: ${ (() => { throw new TypeError('t') })() }\n"}, EvaluationFailed},
 		"missing var":          {agreement{text: "v: ${ nope }\n"}, EvaluationFailed},
-		"not data":             {agreement{text: "v: ${ () => 1 }\n"}, EvaluationFailed},
+		"not data":             {agreement{text: "v: ${ [() => 1] }\n"}, EvaluationFailed},
 		"missing path":         {agreement{text: "v: ${ 1 }\n", path: []string{"w"}}, MissingPath},
 		"path into code":       {agreement{text: "v: \"${ ({a: 1}) }\"\n", path: []string{"v", "a"}}, MissingPath},
 		"immutable global var": {agreement{text: "v: ${ 1 }\n", vars: map[string]any{"undefined": 1}}, EvaluationFailed},

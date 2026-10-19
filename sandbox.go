@@ -2,10 +2,10 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"reflect"
 	goruntime "runtime"
+	"slices"
+	"sync"
 )
 
 var (
@@ -25,7 +25,10 @@ type unit interface {
 
 type outcome interface{ isOutcome() }
 
-type answered struct{ data []byte }
+type answered struct {
+	data    []byte
+	skipped [][]string
+}
 
 type refused struct{ err error }
 
@@ -37,21 +40,26 @@ type Sandbox struct {
 	engine   engine
 }
 
-type Template struct {
-	held *handle
-}
-
 type Expression struct {
 	held *handle
+	path []string
 }
 
 type handle struct {
 	lifetime context.Context
+	keep     *_Keep
+}
+
+type _Keep struct {
+	sandbox  context.Context
+	lifetime context.Context
 	end      context.CancelCauseFunc
+	mu       sync.Mutex
+	holders  int
 	unit     unit
 }
 
-func MakeSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
+func MakeSecureSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
 	if err := isolationSupported(); err != nil {
 		return nil, err
 	}
@@ -72,16 +80,16 @@ func MakeTrustedSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox
 		return nil, err
 	}
 	if configured.memoryLimit != 0 {
-		return nil, fail(InvalidTemplate, "a trusted sandbox has no memory limit; use MakeSandbox")
+		return nil, fail(InvalidExpression, "a trusted sandbox has no memory limit; use MakeSecureSandbox")
 	}
 	return &Sandbox{lifetime: ctx, engine: newTrusted(configured)}, nil
 }
 
-func (s *Sandbox) MakeTemplate(ctx context.Context, text string, options ...Option) (*Template, error) {
+func (s *Sandbox) MakeExpressionFromJaml(ctx context.Context, jaml string, options ...Option) (*Expression, error) {
 	if s == nil || s.engine == nil {
 		return nil, unmadeSandbox()
 	}
-	if err := admitTemplateText(text); err != nil {
+	if err := admitJamlText(jaml); err != nil {
 		return nil, err
 	}
 	configured, err := configure(options)
@@ -89,49 +97,86 @@ func (s *Sandbox) MakeTemplate(ctx context.Context, text string, options ...Opti
 		return nil, err
 	}
 	if configured.function {
-		return nil, fail(InvalidTemplate, "jaml.AsFunction applies to Compile, not to templates")
+		return nil, fail(InvalidExpression, "jaml.AsFunction applies to MakeExpression, not to MakeExpressionFromJaml")
 	}
-	held, err := s.make(ctx, blueprint{Written: text, Null: configured.null, Undefined: configured.undefined})
-	if err != nil {
-		return nil, err
-	}
-	return &Template{held: held}, nil
+	return s.make(ctx, blueprint{Written: jaml, Null: configured.null, Undefined: configured.undefined, Sigil: configured.sigil})
 }
 
-func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option) (*Expression, error) {
+func (s *Sandbox) MakeExpression(ctx context.Context, expression string, options ...Option) (*Expression, error) {
 	if s == nil || s.engine == nil {
 		return nil, unmadeSandbox()
 	}
-	if err := admitSource(source); err != nil {
+	if err := admitSource(expression); err != nil {
 		return nil, err
 	}
 	configured, err := configure(options)
 	if err != nil {
 		return nil, err
 	}
-	held, err := s.make(ctx, blueprint{Written: source, Null: configured.null, Undefined: configured.undefined, Expression: true, Function: configured.function})
-	if err != nil {
-		return nil, err
+	if configured.sigil != defaultSigil {
+		return nil, fail(InvalidExpression, "jaml.WithSigil applies to MakeExpressionFromJaml, not to MakeExpression")
 	}
-	return &Expression{held: held}, nil
+	return s.make(ctx, blueprint{Written: expression, Null: configured.null, Undefined: configured.undefined, Raw: true, Function: configured.function})
 }
 
-func (s *Sandbox) make(ctx context.Context, plan blueprint) (*handle, error) {
+func (s *Sandbox) make(ctx context.Context, plan blueprint) (*Expression, error) {
 	if failure := s.framed(ctx, nil); failure != nil {
 		return nil, failure
 	}
-	lifetime, end := context.WithCancelCause(ctx)
-	unfollow := context.AfterFunc(s.lifetime, func() { end(errSandboxEnded) })
-	built, err := s.engine.build(lifetime, plan)
+	var keep = keepWithin(s.lifetime)
+	held, err := keep.hold(ctx)
+	if err != nil {
+		return nil, err
+	}
+	built, err := s.engine.build(keep.lifetime, plan)
 	if failure := s.framed(ctx, err); failure != nil {
-		unfollow()
-		end(failure)
+		keep.end(failure)
 		return nil, failure
 	}
+	keep.unit = built
+	return &Expression{held: held}, nil
+}
+
+func keepWithin(sandbox context.Context) *_Keep {
+	lifetime, end := context.WithCancelCause(context.Background())
+	unfollow := context.AfterFunc(sandbox, func() { end(errSandboxEnded) })
 	context.AfterFunc(lifetime, func() { unfollow() })
-	held := &handle{lifetime: lifetime, end: end, unit: built}
+	return &_Keep{sandbox: sandbox, lifetime: lifetime, end: end}
+}
+
+func (k *_Keep) hold(ctx context.Context) (*handle, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.ended() {
+		return nil, fail(Closed, "its context or its sandbox's context has ended")
+	}
+	k.holders++
+	lifetime, end := context.WithCancelCause(ctx)
+	unfollow := context.AfterFunc(k.lifetime, func() { end(context.Cause(k.lifetime)) })
+	context.AfterFunc(lifetime, func() {
+		unfollow()
+		k.release()
+	})
+	held := &handle{lifetime: lifetime, keep: k}
 	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
 	return held, nil
+}
+
+func (k *_Keep) ended() bool {
+	return k.lifetime.Err() != nil || k.sandbox.Err() != nil
+}
+
+func (h *handle) ended() bool {
+	return h.lifetime.Err() != nil || h.keep.ended()
+}
+
+func (k *_Keep) release() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.holders--
+	if k.holders == 0 {
+		k.end(errLifetimeOver)
+	}
 }
 
 func (s *Sandbox) framed(ctx context.Context, err error) error {
@@ -147,73 +192,36 @@ func (s *Sandbox) framed(ctx context.Context, err error) error {
 }
 
 func unmadeSandbox() error {
-	return fail(InvalidTemplate, "a sandbox not made by MakeSandbox or MakeTrustedSandbox")
+	return fail(InvalidExpression, "a sandbox not made by MakeSecureSandbox or MakeTrustedSandbox")
 }
 
-func (t *Template) Eval(ctx context.Context, into any, vars map[string]any, path ...string) error {
-	if t == nil || t.held == nil {
-		return fail(InvalidTemplate, "Eval on a template not made by Sandbox.MakeTemplate")
+func (e *Expression) At(path ...string) *Expression {
+	if e == nil {
+		return nil
 	}
-	if err := admitPath(path); err != nil {
-		return err
-	}
-	if err := t.held.admit(ctx); err != nil {
-		return err
-	}
-	if err := checkTarget("Eval", into); err != nil {
-		return err
-	}
-	encoded, err := admitVars(vars)
-	if err != nil {
-		return fail(EvaluationFailed, "binding vars: %w", err)
-	}
-	return t.held.answer(ctx, into, work{Path: path, Vars: encoded})
+	return &Expression{held: e.held, path: slices.Concat(e.path, path)}
 }
 
-func (e *Expression) Eval(ctx context.Context, into any, vars map[string]any) error {
+func (e *Expression) Copy(ctx context.Context) (*Expression, error) {
 	if e == nil || e.held == nil {
-		return fail(InvalidTemplate, "Eval on an expression not made by Sandbox.Compile")
+		return nil, unmadeExpression("Copy")
 	}
 	if err := e.held.admit(ctx); err != nil {
-		return err
+		return nil, err
 	}
-	if err := checkTarget("Eval", into); err != nil {
-		return err
-	}
-	encoded, err := admitVars(vars)
+	held, err := e.held.keep.hold(ctx)
 	if err != nil {
-		return fail(EvaluationFailed, "binding vars: %w", err)
+		return nil, err
 	}
-	return e.held.answer(ctx, into, work{Vars: encoded})
+	return &Expression{held: held, path: e.path}, nil
 }
 
-func (e *Expression) Call(ctx context.Context, into any, args ...any) error {
-	if e == nil || e.held == nil {
-		return fail(InvalidTemplate, "Call on an expression not made by Sandbox.Compile")
-	}
-	if err := e.held.admit(ctx); err != nil {
-		return err
-	}
-	if err := checkTarget("Call", into); err != nil {
-		return err
-	}
-	encoded, err := admitArguments(args)
-	if err != nil {
-		return fail(EvaluationFailed, "binding arguments: %w", err)
-	}
-	return e.held.answer(ctx, into, work{Call: &callArgs{Args: encoded}})
-}
-
-func checkTarget(method string, into any) error {
-	target := reflect.ValueOf(into)
-	if target.Kind() != reflect.Pointer || target.IsNil() {
-		return fail(InvalidTarget, "%s needs a non-nil pointer, got %s", method, describeTarget(into))
-	}
-	return nil
+func unmadeExpression(method string) error {
+	return fail(InvalidExpression, "%s on an expression not made by a Sandbox", method)
 }
 
 func (h *handle) admit(ctx context.Context) error {
-	if h.lifetime.Err() != nil {
+	if h.ended() {
 		return fail(Closed, "its context or its sandbox's context has ended")
 	}
 	if ctx.Err() != nil {
@@ -222,24 +230,24 @@ func (h *handle) admit(ctx context.Context) error {
 	return nil
 }
 
-func (h *handle) answer(ctx context.Context, into any, request work) error {
+func (h *handle) answer(ctx context.Context, request work, decode func(settled answered) error) error {
 	defer goruntime.KeepAlive(h)
 	request.Pinned = pin(ctx)
 	job, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
 	unbind := context.AfterFunc(h.lifetime, func() { stop(errLifetimeOver) })
 	defer unbind()
-	result := h.unit.serve(job, request)
+	result := h.keep.unit.serve(job, request)
 	at := selectedPath(request.Path).String()
 	switch {
-	case h.lifetime.Err() != nil:
+	case h.ended():
 		return fail(Closed, "its context or its sandbox's context ended while it ran")
 	case ctx.Err() != nil:
 		return located(at, cancelled(ctx))
 	}
 	switch settled := result.(type) {
 	case answered:
-		if err := json.Unmarshal(settled.data, into); err != nil {
+		if err := decode(settled); err != nil {
 			return fail(CoercionFailed, "%s: %w", blame(at, settled.data, err), err)
 		}
 		return nil

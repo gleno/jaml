@@ -57,7 +57,7 @@ func callSlowly(t *testing.T, compiled *Expression, jobs int, scale float64) {
 	for job := range jobs {
 		wait.Go(func() {
 			var tag int
-			if err := compiled.Call(within(t, 60*time.Second), &tag, map[string]any{"loops": slowLoops(scale), "tag": job}); err != nil || tag != job {
+			if err := resolveInto(within(t, 60*time.Second), &tag, compiled, map[string]any{"loops": slowLoops(scale), "tag": job}); err != nil || tag != job {
 				t.Errorf("job %d: got %d, %v", job, tag, err)
 			}
 		})
@@ -67,7 +67,7 @@ func callSlowly(t *testing.T, compiled *Expression, jobs int, scale float64) {
 
 func TestMaxConcurrencyIsHonoured(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		compiled := mustCompile(t, sb, slowCall)
+		compiled := mustExpression(t, sb, slowCall)
 		peak := watchPeak(sb)
 		callSlowly(t, compiled, 6, 1)
 		expectEqual(t, peak(), 2)
@@ -84,19 +84,19 @@ func TestMaxConcurrencyDefaultsToGOMAXPROCS(t *testing.T) {
 func TestCallPassesArgumentsAsCopies(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var sum map[string]any
-		if err := mustCompile(t, sb, "(a, b) => ({sum: a.n + b.n, keys: Object.keys(a), missing: typeof c})").Call(t.Context(), &sum, map[string]any{"n": 1}, map[string]any{"n": 2}); err != nil {
+		if err := resolveInto(t.Context(), &sum, mustExpression(t, sb, "(a, b) => ({sum: a.n + b.n, keys: Object.keys(a), missing: typeof c})"), map[string]any{"n": 1}, map[string]any{"n": 2}); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, sum, map[string]any{"sum": float64(3), "keys": []any{"n"}, "missing": "undefined"})
 		shared := map[string]any{"list": []any{1}}
 		var length int
-		if err := mustCompile(t, sb, "a => (a.list.push(9), a.list.length)").Call(t.Context(), &length, shared); err != nil {
+		if err := resolveInto(t.Context(), &length, mustExpression(t, sb, "a => (a.list.push(9), a.list.length)"), shared); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, length, 2)
 		expectEqual(t, shared, map[string]any{"list": []any{1}})
 		var none any
-		if err := mustCompile(t, sb, "function () { return arguments.length }").Call(t.Context(), &none); err != nil {
+		if err := resolveInto(t.Context(), &none, mustExpression(t, sb, "function () { return arguments.length }")); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, none, float64(0))
@@ -110,10 +110,9 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 		args      []any
 		fragments []string
 	}{
-		"evaluated function":   {source: "x => x", fragments: []string{"$: x => x: result is a function, which is not YAML data"}},
-		"returned function":    {source: "() => () => 1", call: true, fragments: []string{"$: () => () => 1: result is a function, which is not YAML data"}},
+		"endless thunks":       {source: "(() => { const f = () => f; return f })()", fragments: []string{"still a function after 16 calls"}},
+		"function in a list":   {source: "() => [() => 1]", call: true, fragments: []string{"result[0] is a function, which is not YAML data"}},
 		"nested function":      {source: "() => ({f: () => 1})", call: true, fragments: []string{"result.f is a function"}},
-		"not a function":       {source: "1 + 1", call: true, fragments: []string{"$: 1 + 1: evaluates to a value of type number, not a function"}},
 		"argument not data":    {source: "x => x", call: true, args: []any{func() {}}, fragments: []string{"binding arguments: argument 1 is not JSON data"}},
 		"argument too deep":    {source: "x => 1", call: true, args: []any{1, nestedVar(4097)}, fragments: []string{"binding arguments: argument 2 nests deeper than 4096"}},
 		"thrown while calling": {source: "() => { throw new TypeError('no') }", call: true, fragments: []string{"$: () => { throw new TypeError('no') }: TypeError: no"}},
@@ -122,11 +121,11 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var both bothKinds
 			for _, kind := range sandboxKinds {
-				compiled := mustCompile(t, mustSandbox(t, kind), c.source)
+				compiled := mustExpression(t, mustSandbox(t, kind), c.source)
 				var out any
-				err := compiled.Eval(t.Context(), &out, nil)
+				err := resolveInto(t.Context(), &out, compiled)
 				if c.call {
-					err = compiled.Call(t.Context(), &out, c.args...)
+					err = resolveInto(t.Context(), &out, compiled, c.args...)
 				}
 				if kind.name == trustedKind.name {
 					both.trusted = err
@@ -142,36 +141,36 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 func TestAnExpressionFollowsTheTemplateDefaults(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var out any
-		expectError(t, mustCompile(t, sb, "x => undefined").Call(t.Context(), &out, 1), CoercionFailed, "$: x => undefined is undefined, which strict undefined coercion refuses")
-		loose, err := sb.Compile(t.Context(), "x => undefined", WithUndefinedCoercion(Loose))
+		expectError(t, resolveInto(t.Context(), &out, mustExpression(t, sb, "x => undefined"), 1), CoercionFailed, "$: x => undefined is undefined, which strict undefined coercion refuses")
+		loose, err := sb.MakeExpression(t.Context(), "x => undefined", WithUndefinedCoercion(Loose))
 		if err != nil {
 			t.Fatal(err)
 		}
 		out = "kept"
-		if err := loose.Call(t.Context(), &out, 1); err != nil {
+		if err := resolveInto(t.Context(), &out, loose, 1); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, out, nil)
-		strict, err := sb.Compile(t.Context(), "null", WithNullCoercion(Strict))
+		strict, err := sb.MakeExpression(t.Context(), "null", WithNullCoercion(Strict))
 		if err != nil {
 			t.Fatal(err)
 		}
-		expectError(t, strict.Eval(t.Context(), &out, nil), CoercionFailed, "strict null")
-		_, err = sb.Compile(t.Context(), "1", WithNullCoercion(Coercion(9)))
-		expectError(t, err, InvalidTemplate, "null coercion")
+		expectError(t, resolveInto(t.Context(), &out, strict), CoercionFailed, "strict null")
+		_, err = sb.MakeExpression(t.Context(), "1", WithNullCoercion(Coercion(9)))
+		expectError(t, err, InvalidExpression, "null coercion")
 		out = "kept"
-		if err := mustCompile(t, sb, "null").Eval(t.Context(), &out, nil); err != nil {
+		if err := resolveInto(t.Context(), &out, mustExpression(t, sb, "null")); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, out, nil)
-		_, err = sb.Compile(t.Context(), "1 +")
-		expectError(t, err, InvalidTemplate, "1 +: syntax error")
-		_, err = sb.Compile(t.Context(), "1; 2")
-		expectError(t, err, InvalidTemplate, "write a single JavaScript expression")
+		_, err = sb.MakeExpression(t.Context(), "1 +")
+		expectError(t, err, InvalidExpression, "1 +: syntax error")
+		_, err = sb.MakeExpression(t.Context(), "1; 2")
+		expectError(t, err, InvalidExpression, "write a single JavaScript expression")
 		var shaped struct {
 			A []int `json:"a"`
 		}
-		expectError(t, mustCompile(t, sb, "({a: [1, 'x']})").Eval(t.Context(), &shaped, nil), CoercionFailed, "$.a[1]: json: cannot unmarshal string")
+		expectError(t, resolveInto(t.Context(), &shaped, mustExpression(t, sb, "({a: [1, 'x']})")), CoercionFailed, "$.a[1]: json: cannot unmarshal string")
 	})
 }
 
@@ -181,10 +180,10 @@ func TestAFixedClockAndSeedAreDeterministicInBothKinds(t *testing.T) {
 	ctx := WithRandomSeed(WithFixedClock(t.Context(), at), 42)
 	results := map[string][]any{}
 	for _, kind := range sandboxKinds {
-		compiled := mustCompile(t, mustSandbox(t, kind), source)
+		compiled := mustExpression(t, mustSandbox(t, kind), source)
 		for range 3 {
 			var seen []any
-			if err := compiled.Eval(ctx, &seen, nil); err != nil {
+			if err := resolveInto(ctx, &seen, compiled); err != nil {
 				t.Fatal(err)
 			}
 			if earlier, found := results[kind.name]; found {
@@ -193,7 +192,7 @@ func TestAFixedClockAndSeedAreDeterministicInBothKinds(t *testing.T) {
 			results[kind.name] = seen
 		}
 		var reseeded []any
-		if err := compiled.Eval(WithRandomSeed(ctx, 43), &reseeded, nil); err != nil {
+		if err := resolveInto(WithRandomSeed(ctx, 43), &reseeded, compiled); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, reseeded[:2], results[kind.name][:2])
@@ -209,7 +208,7 @@ func TestAnUnsetClockStandsStillWithinOneEval(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		before := time.Now()
 		var seen []float64
-		if err := mustCompile(t, sb, "(() => { const first = Date.now(); for (let i = 0; i < 1e5; i++); return [first, Date.now()] })()").Eval(t.Context(), &seen, nil); err != nil {
+		if err := resolveInto(t.Context(), &seen, mustExpression(t, sb, "(() => { const first = Date.now(); for (let i = 0; i < 1e5; i++); return [first, Date.now()] })()")); err != nil {
 			t.Fatal(err)
 		}
 		expectEqual(t, seen[0], seen[1])
@@ -240,7 +239,7 @@ func TestThrownIsReachableWithItsMessageAndValueInBothKinds(t *testing.T) {
 			var both bothKinds
 			for _, kind := range sandboxKinds {
 				var out any
-				err := mustCompile(t, mustSandbox(t, kind), c.source).Eval(t.Context(), &out, nil)
+				err := resolveInto(t.Context(), &out, mustExpression(t, mustSandbox(t, kind), c.source))
 				var caught *Thrown
 				if !errors.As(err, &caught) {
 					t.Fatalf("%s: no Thrown in %v", kind.name, err)
@@ -292,12 +291,12 @@ func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
 }
 
 type keptByValue struct {
-	template   Template
+	document   Expression
 	expression Expression
 }
 
 func keepByValue(t *testing.T, sb *Sandbox) *keptByValue {
-	return &keptByValue{template: *mustTemplate(t, sb, "v: ${ 1 + 1 }\n"), expression: *mustCompile(t, sb, "x => x + 1")}
+	return &keptByValue{document: *mustJaml(t, sb, "v: ${ 1 + 1 }\n"), expression: *mustExpression(t, sb, "x => x + 1")}
 }
 
 func collectEverythingUnreachable(t *testing.T) {
@@ -325,15 +324,15 @@ func collectEverythingUnreachable(t *testing.T) {
 	}
 }
 
-func TestACopiedTemplateOrExpressionOutlivesTheDroppedOriginal(t *testing.T) {
+func TestACopiedExpressionOutlivesTheDroppedOriginal(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		kept := keepByValue(t, sb)
 		collectEverythingUnreachable(t)
 		var two, three int
-		if err := kept.template.Eval(t.Context(), &two, nil, "v"); err != nil {
-			t.Fatalf("the copied template: %v", err)
+		if err := resolveInto(t.Context(), &two, (&kept.document).At("v")); err != nil {
+			t.Fatalf("the copied document: %v", err)
 		}
-		if err := kept.expression.Call(t.Context(), &three, 2); err != nil {
+		if err := resolveInto(t.Context(), &three, &kept.expression, 2); err != nil {
 			t.Fatalf("the copied expression: %v", err)
 		}
 		expectEqual(t, [2]int{two, three}, [2]int{2, 3})

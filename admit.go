@@ -5,18 +5,18 @@ import (
 	"unicode/utf8"
 )
 
-func admitTemplateText(text string) error {
+func admitJamlText(text string) error {
 	if utf8.ValidString(text) {
 		return nil
 	}
-	return fail(InvalidTemplate, "yaml: %s", encodingProblem(text))
+	return fail(InvalidExpression, "yaml: %s", encodingProblem(text))
 }
 
 func admitSource(source string) error {
 	if utf8.ValidString(source) {
 		return nil
 	}
-	return fail(InvalidTemplate, "%s: %w", bare.around(source), syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character"))
+	return fail(InvalidExpression, "%s: %w", bare.around(source), syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character"))
 }
 
 func admitPath(path []string) error {

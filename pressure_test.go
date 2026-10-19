@@ -27,13 +27,13 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			sb := mustIsolated(t, WithMemoryLimit(64<<20))
-			holding := mustCompile(t, sb, "(() => { const keep = 'x'.repeat("+strconv.Itoa(c.heldMiB)+" << 20); let n = 0; for (let j = 0; ; j++) n += keep.length & j; })()")
+			holding := mustExpression(t, sb, "(() => { const keep = 'x'.repeat("+strconv.Itoa(c.heldMiB)+" << 20); let n = 0; for (let j = 0; ; j++) n += keep.length & j; })()")
 			first := childPID(t, sb)
 			busy := resident(t, first) + c.heldMiB<<20
 			verdict := make(chan error, 1)
 			go func() {
 				var out any
-				verdict <- holding.Eval(within(t, 60*time.Second), &out, nil)
+				verdict <- resolveInto(within(t, 60*time.Second), &out, holding)
 			}()
 			for pid := first; pid != 0; {
 				awaitResident(t, pid, busy)

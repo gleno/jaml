@@ -25,9 +25,9 @@ func TestThePinnedClockIsTheSameInstantInBothKinds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			seen := map[string][]any{}
 			for _, kind := range sandboxKinds {
-				compiled := mustCompile(t, sharedSandbox(t, kind), "[Date.now(), String(new Date())]")
+				compiled := mustExpression(t, sharedSandbox(t, kind), "[Date.now(), String(new Date())]")
 				var drawn []any
-				if err := compiled.Eval(WithFixedClock(t.Context(), at), &drawn, nil); err != nil {
+				if err := resolveInto(WithFixedClock(t.Context(), at), &drawn, compiled); err != nil {
 					t.Fatalf("%s: %v", kind.name, err)
 				}
 				seen[kind.name] = drawn

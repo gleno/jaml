@@ -8,7 +8,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 			source    string
 			fragments []string
 		}{
-			"function":       {"${ () => 1 }", []string{"result is a function, which is not YAML data"}},
+			"endless thunks": {"${ (() => { const f = () => f; return f })() }", []string{"still a function after 16 calls"}},
 			"nested func":    {"${ [1, {f() {}}] }", []string{"result[1].f is a function"}},
 			"symbol":         {"${ Symbol('s') }", []string{"result is a symbol"}},
 			"nested symbol":  {"${ {s: Symbol.iterator} }", []string{"result.s is a symbol"}},
@@ -32,9 +32,9 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 		}
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
-				template := mustTemplate(t, sb, "v: \""+c.source+"\"\n")
+				document := mustJaml(t, sb, "v: \""+c.source+"\"\n")
 				var out any
-				expectError(t, template.Eval(t.Context(), &out, nil, "v"), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
+				expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
 			})
 		}
 	})
@@ -42,7 +42,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 
 func TestPlainDataResultsAreAccepted(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, `
+		document := mustJaml(t, sb, `
 shared: "${ (() => { const x = {n: 1}; return [x, x] })() }"
 nullProto: "${ Object.assign(Object.create(null), {a: 1}) }"
 sparse: "${ [1, , 3] }"
@@ -52,7 +52,7 @@ getter: "${ ({ get g() { return 2 } }) }"
 symbolKeysIgnored: "${ ({a: 1, [Symbol('s')]: 2}) }"
 nonEnumerableIgnored: "${ Object.defineProperty({a: 1}, 'hidden', {value: 2}) }"
 `, WithUndefinedCoercion(Loose))
-		got := evalAs[map[string]any](t, template, nil)
+		got := evalAs[map[string]any](t, document, nil)
 		expectEqual(t, got, map[string]any{
 			"shared":               []any{map[string]any{"n": float64(1)}, map[string]any{"n": float64(1)}},
 			"nullProto":            map[string]any{"a": float64(1)},
@@ -68,26 +68,26 @@ nonEnumerableIgnored: "${ Object.defineProperty({a: 1}, 'hidden', {value: 2}) }"
 
 func TestObjectsInterpolateAsJSON(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "v: \"is ${{ ({z: 1, a: [2]}) }}\"\n")
-		expectEqual(t, evalAs[string](t, template, nil, "v"), `is {"a":[2],"z":1}`)
+		document := mustJaml(t, sb, "v: \"is ${{ ({z: 1, a: [2]}) }}\"\n")
+		expectEqual(t, mustResolve[string](t, t.Context(), document.At("v")), `is {"a":[2],"z":1}`)
 	})
 }
 
 func TestHugeResultsAreRefused(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 30; i++) a = [a, a]; return a })() }\"\n")
+		document := mustJaml(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 30; i++) a = [a, a]; return a })() }\"\n")
 		var out any
-		expectError(t, template.Eval(t.Context(), &out, nil, "v"), EvaluationFailed, "holds more than")
-		long := mustTemplate(t, sb, "v: \"${ (() => { const a = []; a.length = 1e9; return a })() }\"\n")
-		expectError(t, long.Eval(t.Context(), &out, nil, "v"), EvaluationFailed, "result holds more than")
+		expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, "holds more than")
+		long := mustJaml(t, sb, "v: \"${ (() => { const a = []; a.length = 1e9; return a })() }\"\n")
+		expectError(t, resolveInto(t.Context(), &out, long.At("v")), EvaluationFailed, "result holds more than")
 	})
 }
 
 func TestThrowingGettersFailTheEvaluation(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "v: \"${ ({ get g() { throw new TypeError('nope') } }) }\"\n")
+		document := mustJaml(t, sb, "v: \"${ ({ get g() { throw new TypeError('nope') } }) }\"\n")
 		var out any
-		expectError(t, template.Eval(t.Context(), &out, nil, "v"), EvaluationFailed, "TypeError: nope")
+		expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, "TypeError: nope")
 	})
 }
 
@@ -107,9 +107,9 @@ func TestRuntimeErrorsNameTheExpression(t *testing.T) {
 		}
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
-				template := mustTemplate(t, sb, "v: \""+c.source+"\"\n")
+				document := mustJaml(t, sb, "v: \""+c.source+"\"\n")
 				var out any
-				expectError(t, template.Eval(t.Context(), &out, nil, "v"), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
+				expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
 			})
 		}
 	})
@@ -121,7 +121,7 @@ func TestProxiesAreRefusedBeforeAnyTrapRuns(t *testing.T) {
 	}{
 		"over a list":     {"new Proxy([1], {})", "result is a proxy, which is not YAML data"},
 		"over an object":  {"new Proxy({a: 1}, {})", "result is a proxy, which is not YAML data"},
-		"over a function": {"new Proxy(() => 1, {})", "result is a proxy, which is not YAML data"},
+		"over a function": {"[new Proxy(() => 1, {})]", "result[0] is a proxy, which is not YAML data"},
 		"revoked":         {"(() => { const p = Proxy.revocable({}, {}); p.revoke(); return p.proxy })()", "result is a proxy"},
 		"nested":          {"({p: [new Proxy({}, {})]})", "result.p[0] is a proxy"},
 		"trapped":         {"new Proxy({}, {ownKeys() { throw new Error('trap ran') }, getPrototypeOf() { throw new Error('trap ran') }})", "result is a proxy"},
@@ -154,17 +154,17 @@ func TestPairedSurrogatesAndReplacementCharactersAreData(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		text := `v: "${ ({'😀': '😀', '\\uFFFD': 'a\\uFFFDb', s: '\\uD83D\\uDE00'}) }"` + "\n"
 		evalInBothKinds(t, text, nil).expectAccepted(t)
-		expectEqual(t, evalAs[map[string]string](t, mustTemplate(t, sb, text), nil, "v"), map[string]string{"😀": "😀", "\uFFFD": "a\uFFFDb", "s": "😀"})
+		expectEqual(t, evalAs[map[string]string](t, mustJaml(t, sb, text), nil, "v"), map[string]string{"😀": "😀", "\uFFFD": "a\uFFFDb", "s": "😀"})
 	})
 }
 
 func TestNestedSparseListsCannotFundTheirDeclaredLength(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		template := mustTemplate(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 400; i++) { const b = []; b.length = 1e6; b[0] = a; a = b } return a })() }\"\n")
+		document := mustJaml(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 400; i++) { const b = []; b.length = 1e6; b[0] = a; a = b } return a })() }\"\n")
 		var err error
 		allocated := allocatedBy(func() {
 			var out any
-			err = template.Eval(t.Context(), &out, nil)
+			err = resolveInto(t.Context(), &out, document)
 		})
 		expectError(t, err, EvaluationFailed, "$.v: ", ": result holds more than 1048576 values")
 		if allocated > 128<<20 {
@@ -198,7 +198,7 @@ func TestInterpolatedDataIsWrittenAsJSONStringifyWritesIt(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				text := "v: \"<${{ " + c.source + " }}>\"\n"
 				evalInBothKinds(t, text, nil).expectAccepted(t)
-				got := evalAs[string](t, mustTemplate(t, sb, text), nil, "v")
+				got := mustResolve[string](t, t.Context(), mustJaml(t, sb, text).At("v"))
 				if want := "<" + c.written + ">"; got != want {
 					t.Fatalf("got %s, want %s", got, want)
 				}
@@ -209,6 +209,6 @@ func TestInterpolatedDataIsWrittenAsJSONStringifyWritesIt(t *testing.T) {
 
 func TestInterpolatedStringsStayRaw(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		expectEqual(t, evalAs[string](t, mustTemplate(t, sb, "v: \"<${{ '\\u2028<&>' }}>\"\n"), nil, "v"), "<\u2028<&>>")
+		expectEqual(t, mustResolve[string](t, t.Context(), mustJaml(t, sb, "v: \"<${{ '\\u2028<&>' }}>\"\n").At("v")), "<\u2028<&>>")
 	})
 }
