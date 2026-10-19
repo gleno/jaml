@@ -64,7 +64,19 @@ const (
 	crashAtStartLimit    = 16<<20 + 6
 	panicAtStartLimit    = 16<<20 + 7
 	oversizedAnswerLimit = 16<<20 + 8
+	slowStartLimit       = 64<<20 + 9
+	slowStart            = time.Second
 )
+
+var _ = startSlowly()
+
+func startSlowly() bool {
+	if os.Getenv(evaluatorMarker) != "1" || os.Getenv(evaluatorMemoryLimit) != strconv.Itoa(slowStartLimit) {
+		return false
+	}
+	time.Sleep(slowStart)
+	return true
+}
 
 var _ = impersonateAnEvaluator()
 
@@ -141,15 +153,39 @@ func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 	}
 }
 
-func TestASilentExecutableEndsWithTheBuildTimeout(t *testing.T) {
+func TestASilentExecutableEndsWithItsStartDeadline(t *testing.T) {
 	var started = time.Now()
-	_, err := MakeSecureSandbox(t.Context(), WithMemoryLimit(silentLimit), WithBuildTimeout(200*time.Millisecond))
+	_, err := startLife(_ChildSpec{lifetime: t.Context(), limit: silentLimit, startDeadline: 200 * time.Millisecond, buildTimeout: defaultBuildTimeout})
 	expectError(t, err, EvaluationFailed, "starting the evaluator", "took longer than 200ms to start")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded in %v", err)
 	}
 	if waited := time.Since(started); waited > 3*time.Second {
 		t.Fatalf("a silent evaluator held construction for %s", waited)
+	}
+}
+
+func TestAShortBuildTimeoutDoesNotBoundStartingTheEvaluator(t *testing.T) {
+	var sb = mustIsolated(t, WithMemoryLimit(slowStartLimit), WithBuildTimeout(slowStart/4))
+	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 1 }\n"), nil, "v"), 1)
+}
+
+func TestAShortBuildTimeoutDoesNotBoundARespawn(t *testing.T) {
+	var sb = mustIsolated(t, WithMaxConcurrency(8))
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
+	respawnAs(t, sb, _ChildSpec{limit: slowStartLimit, startDeadline: evaluatorStartDeadline, buildTimeout: slowStart / 4})
+	killChild(t, sb)
+	var answers = make(chan error, 6)
+	for range 6 {
+		go func() {
+			var out int
+			answers <- resolveInto(within(t, 30*time.Second), &out, document.At("v"))
+		}()
+	}
+	for range 6 {
+		if err := <-answers; err != nil {
+			t.Fatalf("a job waiting behind a slow respawn was refused: %v", err)
+		}
 	}
 }
 
@@ -190,7 +226,7 @@ func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var document = mustJaml(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, _ChildSpec{limit: silentLimit, buildTimeout: defaultBuildTimeout})
+	respawnAs(t, sb, _ChildSpec{limit: silentLimit, startDeadline: evaluatorStartDeadline, buildTimeout: defaultBuildTimeout})
 	killChild(t, sb)
 	var evaluating = make(chan error, 1)
 	go func() {
@@ -249,7 +285,7 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 			var sb = mustIsolated(t)
 			var document = mustJaml(t, sb, "a: 1\n")
 			expectEqual(t, isolatedEvalAs[int](t, document, nil, "a"), 1)
-			respawnAs(t, sb, _ChildSpec{limit: _MemoryLimit(limit), buildTimeout: defaultBuildTimeout})
+			respawnAs(t, sb, _ChildSpec{limit: _MemoryLimit(limit), startDeadline: evaluatorStartDeadline, buildTimeout: defaultBuildTimeout})
 			killChild(t, sb)
 			var out any
 			var respawned = resolveInto(within(t, 10*time.Second), &out, document.At("a"))

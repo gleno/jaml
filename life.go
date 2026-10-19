@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	stderrHeadBytes    = 4096
-	runtimeOutOfMemory = "fatal error: runtime: out of memory"
-	pressureMarker     = "jaml evaluator: the live heap passed three quarters of its ceiling"
-	cancelGrace        = 250 * time.Millisecond
+	stderrHeadBytes        = 4096
+	runtimeOutOfMemory     = "fatal error: runtime: out of memory"
+	pressureMarker         = "jaml evaluator: the live heap passed three quarters of its ceiling"
+	cancelGrace            = 250 * time.Millisecond
+	evaluatorStartDeadline = 30 * time.Second
 )
 
 var (
@@ -40,9 +41,10 @@ type _EvaluatorWorld struct {
 }
 
 type _ChildSpec struct {
-	lifetime     context.Context
-	limit        _MemoryLimit
-	buildTimeout time.Duration
+	lifetime      context.Context
+	limit         _MemoryLimit
+	startDeadline time.Duration
+	buildTimeout  time.Duration
 }
 
 type _Life struct {
@@ -63,7 +65,7 @@ type _Exit struct {
 }
 
 func startLife(spec _ChildSpec) (*_Life, error) {
-	bounded, stop := context.WithTimeoutCause(spec.lifetime, spec.buildTimeout, fmt.Errorf("the evaluator took longer than %s to start: %w", spec.buildTimeout, context.DeadlineExceeded))
+	bounded, stop := context.WithTimeoutCause(spec.lifetime, spec.startDeadline, fmt.Errorf("the evaluator took longer than %s to start: %w", spec.startDeadline, context.DeadlineExceeded))
 	defer stop()
 	if bounded.Err() != nil {
 		return nil, startFailure(cancelled(bounded))

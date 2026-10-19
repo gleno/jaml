@@ -175,7 +175,7 @@ func TestACallCancelledWhileQueuedNamesItsPath(t *testing.T) {
 func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 	var sb = mustIsolated(t, WithMaxConcurrency(8))
 	var document = mustJaml(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, _ChildSpec{limit: silentLimit, buildTimeout: 300 * time.Millisecond})
+	respawnAs(t, sb, _ChildSpec{limit: silentLimit, startDeadline: 300 * time.Millisecond, buildTimeout: defaultBuildTimeout})
 	killChild(t, sb)
 	var started = time.Now()
 	var failures = make(chan error, 6)
