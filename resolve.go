@@ -34,20 +34,8 @@ func (e *Expression) resolve(ctx context.Context, destination any, args []any) e
 	if err != nil {
 		return err
 	}
-	values, err := admitValues(valuesOf(ctx))
-	if err != nil {
-		return fail(EvaluationFailed, "binding values: %w", err)
-	}
-	scripts, err := admitScripts(scriptsOf(ctx))
-	if err != nil {
-		return err
-	}
-	arguments, err := admitArguments(args)
-	if err != nil {
-		return fail(EvaluationFailed, "binding arguments: %w", err)
-	}
-	var request = _Work{Path: e.path, Values: values, Scripts: scripts, Args: arguments, Skips: skips}
-	return e.held.answer(ctx, request, func(settled _Answered) error {
+	var ask = _Ask{path: e.path, values: valuesOf(ctx), scripts: scriptsOf(ctx), args: args, skips: skips}
+	return e.held.answer(ctx, ask, func(settled _Answered) error {
 		if err := json.Unmarshal(settled.data, destination); err != nil {
 			return err
 		}

@@ -28,10 +28,7 @@ func TestAnUnreadValueTakesNoMemoryInTheChild(t *testing.T) {
 }
 
 func TestASessionPaysOnlyForTheValuesItReads(t *testing.T) {
-	values, err := admitValues(map[string]any{"big": manyObjects(100_000), "small": 1})
-	if err != nil {
-		t.Fatal(err)
-	}
+	var values = boundValues(t, map[string]any{"big": manyObjects(100_000), "small": 1})
 	var session = func(source string) time.Duration {
 		compiled, err := compileExpression(source, dollar.value)
 		if err != nil {

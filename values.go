@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"maps"
-	"slices"
 	"strconv"
 	"sync"
 	"unicode/utf16"
@@ -43,33 +41,6 @@ var refusedNames = sync.OnceValue(func() map[string]bool {
 	return names
 })
 
-func admitValues(values map[string]any) (_BoundValues, error) {
-	var admitted = make(_BoundValues, len(values))
-	for _, name := range slices.Sorted(maps.Keys(values)) {
-		if err := admitName(name); err != nil {
-			return nil, err
-		}
-		value, err := admitDatum(fmt.Sprintf("value %q", clip(name, keyExcerptLength)), values[name])
-		if err != nil {
-			return nil, err
-		}
-		admitted[name] = value
-	}
-	return admitted, nil
-}
-
-func admitArguments(args []any) ([]_Datum, error) {
-	var admitted = make([]_Datum, len(args))
-	for index, arg := range args {
-		value, err := admitDatum(fmt.Sprintf("argument %d", index+1), arg)
-		if err != nil {
-			return nil, err
-		}
-		admitted[index] = value
-	}
-	return admitted, nil
-}
-
 func admitName(name string) error {
 	var shown = clip(name, keyExcerptLength)
 	if !utf8.ValidString(name) {
@@ -79,17 +50,6 @@ func admitName(name string) error {
 		return fmt.Errorf("value %q collides with a JavaScript global", shown)
 	}
 	return nil
-}
-
-func admitDatum(named string, value any) (_Datum, error) {
-	encoded, err := wireJSON(value)
-	if err != nil {
-		return _Datum{}, fmt.Errorf("%s is not JSON data: %w", named, err)
-	}
-	if err := checkDatum(encoded); err != nil {
-		return _Datum{}, fmt.Errorf("%s %w", named, err)
-	}
-	return _Datum{encoded: encoded}, nil
 }
 
 func checkDatum(encoded []byte) error {
@@ -112,7 +72,7 @@ func (d *_Datum) UnmarshalJSON(written []byte) error {
 	if err := checkDatum(written); err != nil {
 		return fmt.Errorf("a datum %w", err)
 	}
-	d.encoded = bytes.Clone(written)
+	d.encoded = written[:len(written):len(written)]
 	return nil
 }
 

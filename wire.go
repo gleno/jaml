@@ -88,8 +88,13 @@ func (l *_Life) lodge(u *_RemoteUnit) (*_Residency, bool) {
 
 func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 	var race = raceBuild(context.Background(), l.buildTimeout)
-	var plan = r.unit.plan
-	asked, err := l.send(race.bound, _Request{Op: opBuild, Plan: &plan})
+	body, err := r.unit.request()
+	if err != nil {
+		race.finish(_Refused{err: err})
+		l.settle(r, race.await())
+		return
+	}
+	asked, err := l.send(race.bound, _Outgoing{body: body})
 	if err != nil {
 		race.finish(l.unsent(err))
 		l.settle(r, race.await())
@@ -176,8 +181,8 @@ func (w *_Wire) vacate() {
 	clear(w.residents)
 }
 
-func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
-	sent, err := l.send(ctx, _Request{Op: opServe, Unit: unit, Work: &asked})
+func (l *_Life) serve(ctx context.Context, asked _Outgoing) _Outcome {
+	sent, err := l.send(ctx, asked)
 	if err != nil {
 		return l.unsent(err)
 	}
@@ -212,7 +217,7 @@ func (l *_Life) unsent(err error) _Outcome {
 	return _Refused{err: err}
 }
 
-func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
+func (l *_Life) send(ctx context.Context, outgoing _Outgoing) (_Call, error) {
 	if ctx.Err() != nil {
 		return _Call{}, cancelled(ctx)
 	}
@@ -224,19 +229,15 @@ func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
 		return _Call{}, errLost
 	}
 	defer func() { <-l.wire.writer }()
-	outgoing.Job = l.wire.sent + 1
-	encoded, err := wireJSON(outgoing)
-	if err != nil {
-		return _Call{}, fmt.Errorf("writing the evaluator's request: %w", err)
-	}
-	l.wire.sent = outgoing.Job
-	var replies = l.board.expect(outgoing.Job, outgoing.Op)
+	var job = l.wire.sent + 1
+	l.wire.sent = job
+	var replies = l.board.expect(job, outgoing.body.op)
 	defer l.backstop(ctx.Done(), l.wire.stall)()
-	if err := l.wire.write(append(encoded, '\n')); err != nil {
+	if err := l.wire.write(outgoing.body.stamp(job, outgoing.unit)); err != nil {
 		l.end()
 		return _Call{}, errLost
 	}
-	return _Call{job: outgoing.Job, replies: replies}, nil
+	return _Call{job: job, replies: replies}, nil
 }
 
 func (w *_Wire) write(request []byte) error {
@@ -271,7 +272,7 @@ func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 			return
 		}
 		l.wire.control.Lock()
-		_, err = l.wire.controls.Write(append(encoded, '\n'))
+		_, err = l.wire.controls.Write(headed(encoded))
 		l.wire.control.Unlock()
 		if err == nil {
 			close(delivered)

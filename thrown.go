@@ -15,7 +15,7 @@ func (t *Thrown) Error() string {
 	return t.Message
 }
 
-func newThrown(message string, encoded json.RawMessage) *Thrown {
+func newThrown(message string, encoded []byte) *Thrown {
 	var value any
 	if err := json.Unmarshal(encoded, &value); err != nil {
 		value = nil

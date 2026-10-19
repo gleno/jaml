@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,10 +14,12 @@ import (
 )
 
 const (
-	scriptOpens       = "\"use strict\";\n"
-	wrappedOpens      = "\"use strict\";\n(() => {"
-	maxCachedScripts  = 128
-	scriptValueTarget = "value"
+	scriptOpens         = "\"use strict\";\n"
+	wrappedOpens        = "\"use strict\";\n(() => {"
+	scriptValueTarget   = "value"
+	trustedScriptBudget = 32 << 20
+	compiledPerSource   = 16
+	compiledPerName     = 768
 )
 
 type _Script struct {
@@ -25,30 +28,69 @@ type _Script struct {
 }
 
 type _ScriptCache struct {
-	mu       sync.Mutex
-	compiled map[string]_Script
+	mu      sync.Mutex
+	budget  int64
+	held    int64
+	recent  *list.List
+	entries map[string]*list.Element
 }
 
-var scripts = &_ScriptCache{compiled: map[string]_Script{}}
+type _CachedScript struct {
+	source string
+	script _Script
+	weight int64
+}
+
+var scripts = newScriptCache(trustedScriptBudget)
+
+func newScriptCache(budget int64) *_ScriptCache {
+	return &_ScriptCache{budget: budget, recent: list.New(), entries: map[string]*list.Element{}}
+}
 
 func (c *_ScriptCache) compile(source string) (_Script, error) {
-	c.mu.Lock()
-	cached, found := c.compiled[source]
-	c.mu.Unlock()
-	if found {
+	if cached, found := c.recall(source); found {
 		return cached, nil
 	}
 	compiled, err := compileScript(source)
 	if err != nil {
 		return _Script{}, err
 	}
+	c.keep(&_CachedScript{source: source, script: compiled, weight: weigh(source, compiled)})
+	return compiled, nil
+}
+
+func (c *_ScriptCache) recall(source string) (_Script, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.compiled) >= maxCachedScripts {
-		clear(c.compiled)
+	var entry = c.entries[source]
+	if entry == nil {
+		return _Script{}, false
 	}
-	c.compiled[source] = compiled
-	return compiled, nil
+	c.recent.MoveToFront(entry)
+	return entry.Value.(*_CachedScript).script, true
+}
+
+func (c *_ScriptCache) keep(cached *_CachedScript) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached.weight > c.budget || c.entries[cached.source] != nil {
+		return
+	}
+	for c.held+cached.weight > c.budget {
+		var oldest = c.recent.Remove(c.recent.Back()).(*_CachedScript)
+		delete(c.entries, oldest.source)
+		c.held -= oldest.weight
+	}
+	c.entries[cached.source] = c.recent.PushFront(cached)
+	c.held += cached.weight
+}
+
+func scriptBudget(limit _MemoryLimit) int64 {
+	return int64(limit) / 8
+}
+
+func weigh(source string, compiled _Script) int64 {
+	return int64(len(source))*compiledPerSource + int64(len(compiled.names))*compiledPerName
 }
 
 func compileScript(source string) (compiled _Script, err error) {

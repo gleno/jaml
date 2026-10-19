@@ -4,7 +4,6 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -103,13 +102,13 @@ func impersonateAnEvaluator() bool {
 		os.Exit(0)
 	case strconv.Itoa(futureProtocolLimit):
 		greeting.Version = 999
-		_ = json.NewEncoder(replies).Encode(greeting)
+		answerFramed(replies, greeting)
 	case strconv.Itoa(malformedAnswerLimit):
-		answerBadly(requests, replies, greeting, "{\"job\": %d, \"data\": nope}\n")
+		answerBadly(requests, replies, greeting, "{\"job\": %d, \"data\": nope}")
 	case strconv.Itoa(emptyAnswerLimit):
-		answerBadly(requests, replies, greeting, "{\"job\": %d}\n")
+		answerBadly(requests, replies, greeting, "{\"job\": %d}")
 	case strconv.Itoa(oversizedAnswerLimit):
-		var frame = `{"job": %d, "data": "` + strings.Repeat("x", (oversizedAnswerLimit/4)-len(`{"job": 2, "data": ""}`)+1) + "\"}\n"
+		var frame = `{"job": %d, "data": "` + strings.Repeat("x", (oversizedAnswerLimit/4)-len(`{"job": 2, "data": ""}`)+1) + "\"}"
 		answerBadly(requests, replies, greeting, frame)
 	}
 	_, _ = io.Copy(io.Discard, requests)
@@ -117,19 +116,25 @@ func impersonateAnEvaluator() bool {
 	return true
 }
 
+func answerFramed(replies *os.File, answer any) {
+	encoded, _ := wireJSON(answer)
+	_, _ = replies.Write(headed(encoded))
+}
+
 func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) {
-	_ = json.NewEncoder(replies).Encode(greeting)
-	var incoming = json.NewDecoder(requests)
+	answerFramed(replies, greeting)
+	var incoming = framesFor(defaultMemoryLimit).requests(requests)
 	for {
 		var asked _Request
-		if incoming.Decode(&asked) != nil {
+		size, err := incoming.size()
+		if err != nil || incoming.into(size, &asked) != nil {
 			return
 		}
 		switch asked.Op {
 		case opBuild:
-			fmt.Fprintf(replies, "{\"job\": %d, \"built\": true}\n", asked.Job)
+			_, _ = replies.Write(headed(fmt.Appendf(nil, "{\"job\": %d, \"built\": true}", asked.Job)))
 		case opServe:
-			fmt.Fprintf(replies, badAnswer, asked.Job)
+			_, _ = replies.Write(headed(fmt.Appendf(nil, badAnswer, asked.Job)))
 		}
 	}
 }
@@ -528,7 +533,7 @@ func TestADroppedTemplateIsForgottenByTheEvaluator(t *testing.T) {
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		var served = child.serve(within(t, 10*time.Second), build, _Work{})
+		var served = child.serve(within(t, 10*time.Second), askFor(t, build, _Ask{}))
 		if failed, isRefused := served.(_Refused); isRefused && errors.Is(failed.err, errMissing) {
 			return
 		}

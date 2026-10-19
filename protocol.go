@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 )
 
@@ -15,7 +16,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 10
+	protocolVersion      = 11
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -65,12 +66,12 @@ type _Work struct {
 }
 
 type _Reply struct {
-	Job     uint64          `json:"job"`
-	Built   bool            `json:"built,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Skipped [][]string      `json:"skipped,omitempty"`
-	Failure *_Failure       `json:"failure,omitempty"`
-	Missing bool            `json:"missing,omitempty"`
+	Job     uint64     `json:"job"`
+	Built   bool       `json:"built,omitempty"`
+	Data    _Borrowed  `json:"data,omitempty"`
+	Skipped [][]string `json:"skipped,omitempty"`
+	Failure *_Failure  `json:"failure,omitempty"`
+	Missing bool       `json:"missing,omitempty"`
 }
 
 type _Frames struct {
@@ -91,8 +92,13 @@ func wireJSON(value any) ([]byte, error) {
 	return bytes.TrimSuffix(encoded.Bytes(), []byte("\n")), nil
 }
 
-func (f _Frames) oversized() error {
-	return fmt.Errorf("the evaluator sent a reply larger than %d bytes", f.limit)
+func (f _Frames) replies(source io.Reader, quiet *_Quiet) *_FrameReader {
+	return &_FrameReader{source: source, limit: f.limit, refusal: fmt.Errorf("the evaluator sent a reply larger than %d bytes", f.limit), quiet: quiet}
+}
+
+func (f _Frames) requests(source io.Reader) *_FrameReader {
+	var limit = f.limit + requestEnvelope
+	return &_FrameReader{source: source, limit: limit, refusal: fmt.Errorf("a request larger than %d bytes", limit), quiet: &_Quiet{}}
 }
 
 type _Failure struct {
@@ -103,8 +109,8 @@ type _Failure struct {
 }
 
 type _ThrownOnWire struct {
-	Message string          `json:"message"`
-	Value   json.RawMessage `json:"value"`
+	Message string    `json:"message"`
+	Value   _Borrowed `json:"value"`
 }
 
 type _FailureKind struct {

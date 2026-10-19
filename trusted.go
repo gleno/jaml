@@ -55,12 +55,16 @@ func (e *_TrustedEngine) build(ctx context.Context, plan _Blueprint) (_Unit, err
 	return &_LocalUnit{engine: e, built: built}, nil
 }
 
-func (u *_LocalUnit) serve(ctx context.Context, request _Work) _Outcome {
+func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
+	written, err := writeWork(ask, unboundedAsk)
+	if err != nil {
+		return _Refused{err: err}
+	}
 	if err := u.engine.enter(ctx); err != nil {
 		return _Refused{err: err}
 	}
 	defer u.engine.leave()
-	run, err := u.built.prepare(request)
+	run, err := u.built.prepare(written.view())
 	if err != nil {
 		return _Refused{err: err}
 	}

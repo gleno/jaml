@@ -20,7 +20,7 @@ type _Engine interface {
 }
 
 type _Unit interface {
-	serve(ctx context.Context, request _Work) _Outcome
+	serve(ctx context.Context, ask _Ask) _Outcome
 }
 
 type _Outcome interface{ isOutcome() }
@@ -253,15 +253,15 @@ func (h *_Handle) admit(ctx context.Context, path string) error {
 	return nil
 }
 
-func (h *_Handle) answer(ctx context.Context, request _Work, decode func(settled _Answered) error) error {
+func (h *_Handle) answer(ctx context.Context, ask _Ask, decode func(settled _Answered) error) error {
 	defer goruntime.KeepAlive(h)
-	request.Pinned = pin(ctx)
+	ask.pinned = pin(ctx)
 	job, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
 	var unbind = context.AfterFunc(h.lifetime, func() { stop(errLifetimeOver) })
 	defer unbind()
-	var result = h.keep.unit.serve(job, request)
-	var path = selectedPath(request.Path).String()
+	var result = h.keep.unit.serve(job, ask)
+	var path = selectedPath(ask.path).String()
 	switch {
 	case h.ended():
 		return fail(Closed, "%s ended while it ran", h.endedContext()).within(path)

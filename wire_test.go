@@ -22,7 +22,7 @@ func endingUnitOn(t *testing.T, text string) (*_RemoteUnit, context.CancelFunc) 
 	t.Helper()
 	ctx, end := context.WithCancel(t.Context())
 	t.Cleanup(end)
-	return &_RemoteUnit{plan: _Blueprint{Written: text, Null: Loose, Undefined: Strict}, lifetime: ctx}, end
+	return &_RemoteUnit{frames: framesFor(defaultMemoryLimit), plan: _Blueprint{Written: text, Null: Loose, Undefined: Strict}, lifetime: ctx}, end
 }
 
 func ignoreEarly(_Outcome) {}
@@ -48,7 +48,7 @@ func residentBuild(t *testing.T, child *_Life, u *_RemoteUnit) uint64 {
 
 func expectMissing(t *testing.T, child *_Life, build uint64) {
 	t.Helper()
-	var served = child.serve(within(t, 10*time.Second), build, _Work{})
+	var served = child.serve(within(t, 10*time.Second), askFor(t, build, _Ask{}))
 	if failed, isRefused := served.(_Refused); !isRefused || !errors.Is(failed.err, errMissing) {
 		t.Fatalf("the evaluator still serves build %d: %v", build, served)
 	}
@@ -56,7 +56,7 @@ func expectMissing(t *testing.T, child *_Life, build uint64) {
 
 func expectServes(t *testing.T, child *_Life, build uint64, want string) {
 	t.Helper()
-	var served = child.serve(within(t, 10*time.Second), build, _Work{Path: []string{"v"}})
+	var served = child.serve(within(t, 10*time.Second), askFor(t, build, _Ask{path: []string{"v"}}))
 	data, isAnswered := served.(_Answered)
 	if !isAnswered || string(data.data) != want {
 		t.Fatalf("build %d served %v, want %s", build, served, want)

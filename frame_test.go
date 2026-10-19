@@ -59,7 +59,7 @@ func (f _EngineFunc) build(ctx context.Context, plan _Blueprint) (_Unit, error) 
 
 type _IdleUnit struct{}
 
-func (_IdleUnit) serve(context.Context, _Work) _Outcome { return _Answered{data: []byte("1")} }
+func (_IdleUnit) serve(context.Context, _Ask) _Outcome { return _Answered{data: []byte("1")} }
 
 func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())

@@ -4,7 +4,6 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -215,7 +214,7 @@ func TestAChildKilledMidRequestIsNamedByTheReaper(t *testing.T) {
 	}
 	var sent = make(chan error, 1)
 	go func() {
-		_, err := process.send(t.Context(), _Request{Op: opBuild, Plan: &_Blueprint{Written: strings.Repeat("x", 4<<20)}})
+		_, err := process.send(t.Context(), planFor(t, _Blueprint{Written: strings.Repeat("x", 4<<20)}))
 		sent <- err
 	}()
 	time.Sleep(100 * time.Millisecond)
@@ -330,11 +329,11 @@ func serveIntoAnEndingLife(t *testing.T) _Outcome {
 	fillPipe(t, writer)
 	var life = &_Life{reaped: make(chan struct{}), ended: make(chan struct{}), wire: newWire(writer, writer), board: &_Switchboard{pending: map[uint64]*_Expectation{}}}
 	var served = make(chan _Outcome, 1)
-	go func() { served <- life.serve(t.Context(), 1, _Work{}) }()
+	go func() { served <- life.serve(t.Context(), askFor(t, 1, _Ask{})) }()
 	for !life.board.awaits(1) {
 		time.Sleep(time.Millisecond)
 	}
-	if err := life.board.deliver(_Reply{Job: 1, Data: json.RawMessage("1")}); err != nil {
+	if err := life.board.deliver(_Reply{Job: 1, Data: []byte("1")}); err != nil {
 		t.Fatal(err)
 	}
 	life.bury(errors.New("the child died after answering"))

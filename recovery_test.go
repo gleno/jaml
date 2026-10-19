@@ -3,7 +3,6 @@
 package jaml
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -98,17 +97,17 @@ func tap(t *testing.T, child *_Life, log *_RequestLog) {
 	child.wire.requests = writer
 	<-child.wire.writer
 	go func() {
-		var lines = bufio.NewReader(reader)
+		var frames = _Frames{limit: 1 << 40}.requests(reader)
 		for {
-			line, err := lines.ReadBytes('\n')
+			frame, err := frames.next()
 			if err != nil {
 				return
 			}
 			var asked _Request
-			if json.Unmarshal(line, &asked) == nil {
+			if json.Unmarshal(frame, &asked) == nil {
 				log.note(_Logged{life: child.cmd.Process.Pid, asked: asked})
 			}
-			if _, err := forwarded.Write(line); err != nil {
+			if _, err := forwarded.Write(headed(frame)); err != nil {
 				return
 			}
 		}

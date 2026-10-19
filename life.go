@@ -1,14 +1,12 @@
 package jaml
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -199,7 +197,7 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, <-chan _Greeting, error
 	}
 	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	var greeted = make(chan _Greeting, 1)
-	go born.listen(&_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit), quiet: born.quiet}, greeted)
+	go born.listen(&_ReplyStream{frames: framesFor(w.limit).replies(replies.reader, born.quiet)}, greeted)
 	go func() {
 		var ending = endingOf(cmd, cmd.Wait())
 		born.reap()
@@ -379,9 +377,7 @@ func peakNote(state *os.ProcessState) string {
 }
 
 type _ReplyStream struct {
-	lines  *bufio.Reader
-	frames _Frames
-	quiet  *_Quiet
+	frames *_FrameReader
 }
 
 type _Quiet struct {
@@ -412,7 +408,7 @@ func (q *_Quiet) lasted() time.Duration {
 }
 
 func (s *_ReplyStream) read(target any) error {
-	frame, err := s.frame()
+	frame, err := s.frames.next()
 	if err != nil {
 		return err
 	}
@@ -420,28 +416,6 @@ func (s *_ReplyStream) read(target any) error {
 		return fmt.Errorf("reading the evaluator's answer: %w", err)
 	}
 	return nil
-}
-
-func (s *_ReplyStream) frame() ([]byte, error) {
-	var frame []byte
-	for {
-		s.quiet.waiting()
-		chunk, err := s.lines.ReadSlice('\n')
-		s.quiet.heard()
-		if len(frame)+len(chunk) > s.frames.limit+1 {
-			return nil, s.frames.oversized()
-		}
-		frame = append(frame, chunk...)
-		switch {
-		case err == nil:
-			return frame, nil
-		case errors.Is(err, bufio.ErrBufferFull):
-		case errors.Is(err, io.EOF), errors.Is(err, os.ErrClosed):
-			return nil, errHungUp
-		default:
-			return nil, fmt.Errorf("reading the evaluator's answer: %w", err)
-		}
-	}
 }
 
 func located(path string, err error) error {

@@ -146,10 +146,7 @@ func TestAGoPanicInsideABuiltInFailsTheEvalInBothKinds(t *testing.T) {
 }
 
 func TestAPanickedSessionRunsNothingMore(t *testing.T) {
-	vars, err := admitValues(map[string]any{"width": 1 << 52})
-	if err != nil {
-		t.Fatal(err)
-	}
+	var vars = boundValues(t, map[string]any{"width": 1 << 52})
 	opened, err := openSession(t.Context(), _SessionPlan{values: vars})
 	if err != nil {
 		t.Fatal(err)

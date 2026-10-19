@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,9 +45,10 @@ func serveEvaluations(answers io.Writer) int {
 	chartTheIntrinsics()
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
+	scripts = newScriptCache(scriptBudget(world.limit))
 	var serving = &_Evaluator{watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
-	go serving.obey(json.NewDecoder(os.NewFile(controlFD, "jaml-control")))
-	return serving.follow(json.NewDecoder(os.NewFile(requestsFD, "jaml-requests")))
+	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
+	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
 }
 
 func stuckAfterCancel(job uint64) {
@@ -62,13 +62,13 @@ type _Evaluator struct {
 	jobs    *_JobTable
 }
 
-func (e *_Evaluator) follow(requests *json.Decoder) int {
+func (e *_Evaluator) follow(requests *_FrameReader) int {
 	for {
-		var incoming _Request
-		if err := requests.Decode(&incoming); err != nil {
-			if errors.Is(err, io.EOF) {
-				return 0
-			}
+		incoming, err := e.receive(requests)
+		if errors.Is(err, errHungUp) {
+			return 0
+		}
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "jaml evaluator: reading request: %v\n", err)
 			return exitProtocolBroken
 		}
@@ -79,11 +79,25 @@ func (e *_Evaluator) follow(requests *json.Decoder) int {
 	}
 }
 
-func (e *_Evaluator) obey(control *json.Decoder) {
+func (e *_Evaluator) receive(requests *_FrameReader) (_Request, error) {
+	var incoming _Request
+	size, err := requests.size()
+	if err != nil {
+		return incoming, err
+	}
+	e.watch.during(func() { err = requests.into(size, &incoming) })
+	return incoming, err
+}
+
+func (e *_Evaluator) obey(control *_FrameReader) {
 	for {
 		var incoming _Request
-		if err := control.Decode(&incoming); err != nil {
-			if errors.Is(err, io.EOF) {
+		size, err := control.size()
+		if err == nil {
+			err = control.into(size, &incoming)
+		}
+		if err != nil {
+			if errors.Is(err, errHungUp) {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "jaml evaluator: reading control: %v\n", err)
@@ -184,11 +198,11 @@ func (w *_ReplyWriter) greet(greeting _Hello) {
 func (w *_ReplyWriter) write(frame []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if _, err := w.out.Write(frame); err != nil {
+	if _, err := w.out.Write(header(len(frame))); err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
 		os.Exit(exitProtocolBroken)
 	}
-	if _, err := w.out.Write([]byte{'\n'}); err != nil {
+	if _, err := w.out.Write(frame); err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing response: %v\n", err)
 		os.Exit(exitProtocolBroken)
 	}
