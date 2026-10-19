@@ -397,14 +397,26 @@ func listOfPlainServers(count int) string {
 }
 
 func TestABuildPastTheLimitFailsConstruction(t *testing.T) {
+	var text = listOfPlainServers(50000)
+	if len(text) >= 4<<20 {
+		t.Fatalf("the document is %d bytes, not under the 4 MiB request cap", len(text))
+	}
+	_, err := mustIsolated(t, WithMemoryLimit(16<<20), WithBuildTimeout(30*time.Second)).MakeExpressionFromJaml(within(t, 60*time.Second), text)
+	expectError(t, err, MemoryLimit, "exceeded the memory limit of 16777216 bytes")
+	expectError(t, err, EvaluationFailed)
+}
+
+func TestADocumentPastTheRequestCapIsRefusedBeforeItsBuild(t *testing.T) {
 	for name, text := range map[string]string{
 		"one huge value":     "v: " + strings.Repeat("x", 40<<20) + "\n",
 		"many plain servers": listOfPlainServers(100000),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := mustIsolated(t, WithMemoryLimit(16<<20), WithBuildTimeout(30*time.Second)).MakeExpressionFromJaml(within(t, 60*time.Second), text)
-			expectError(t, err, MemoryLimit, "exceeded the memory limit of 16777216 bytes")
-			expectError(t, err, EvaluationFailed)
+			var sb = mustIsolated(t, WithMemoryLimit(16<<20), WithBuildTimeout(30*time.Second))
+			var before = childPID(t, sb)
+			_, err := sb.MakeExpressionFromJaml(within(t, 60*time.Second), text)
+			expectError(t, err, EvaluationFailed, "the request is larger than 4194304 bytes, mostly the document")
+			expectEqual(t, childPID(t, sb), before)
 		})
 	}
 }
