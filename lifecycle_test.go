@@ -129,7 +129,7 @@ func TestAForeignExecutableIsUnsupported(t *testing.T) {
 
 func TestAReplacedExecutableIsUnsupported(t *testing.T) {
 	_, err := MakeSandbox(within(t, 10*time.Second), WithMemoryLimit(futureProtocolLimit))
-	expectError(t, err, Unsupported, "speaks jaml protocol v999, want v5")
+	expectError(t, err, Unsupported, fmt.Sprintf("speaks jaml protocol v999, want v%d", protocolVersion))
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {

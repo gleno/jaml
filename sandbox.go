@@ -92,6 +92,9 @@ func (s *Sandbox) MakeTemplate(ctx context.Context, text string, options ...Opti
 	if err != nil {
 		return nil, err
 	}
+	if configured.function {
+		return nil, fail(InvalidTemplate, "jaml.AsFunction applies to Compile, not to templates")
+	}
 	held, err := s.make(ctx, blueprint{Written: text, Null: configured.null, Undefined: configured.undefined})
 	if err != nil {
 		return nil, err
@@ -107,7 +110,7 @@ func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option)
 	if err != nil {
 		return nil, err
 	}
-	held, err := s.make(ctx, blueprint{Written: source, Null: configured.null, Undefined: configured.undefined, Expression: true})
+	held, err := s.make(ctx, blueprint{Written: source, Null: configured.null, Undefined: configured.undefined, Expression: true, Function: configured.function})
 	if err != nil {
 		return nil, err
 	}

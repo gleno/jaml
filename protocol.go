@@ -14,7 +14,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 5
+	protocolVersion      = 6
 	exitMemoryLimit      = 86
 	requestsFD           = 3
 	responsesFD          = 4
@@ -49,6 +49,7 @@ type blueprint struct {
 	Null       Coercion `json:"null"`
 	Undefined  Coercion `json:"undefined"`
 	Expression bool     `json:"expression,omitempty"`
+	Function   bool     `json:"function,omitempty"`
 }
 
 type work struct {
@@ -124,7 +125,7 @@ func (b blueprint) build(ctx context.Context) (built servable, err error) {
 			err = fail(InvalidTemplate, "%s: %w", (*dataPath)(nil), failure)
 		}
 	}()
-	configured, err := configure([]Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)})
+	configured, err := configure(b.options())
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +136,14 @@ func (b blueprint) build(ctx context.Context) (built servable, err error) {
 		return compileStandalone(b.Written, configured)
 	}
 	return makeTemplate(ctx, b.Written, configured)
+}
+
+func (b blueprint) options() []Option {
+	options := []Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)}
+	if b.Function {
+		options = append(options, AsFunction())
+	}
+	return options
 }
 
 func buildPanic(recovered any) error {
