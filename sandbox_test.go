@@ -290,3 +290,52 @@ func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
 	}
 	expectEqual(t, string(encoded), `{"kind":"EvaluationFailed","message":"plain"}`)
 }
+
+type keptByValue struct {
+	template   Template
+	expression Expression
+}
+
+func keepByValue(t *testing.T, sb *Sandbox) *keptByValue {
+	return &keptByValue{template: *mustTemplate(t, sb, "v: ${ 1 + 1 }\n"), expression: *mustCompile(t, sb, "x => x + 1")}
+}
+
+func collectEverythingUnreachable(t *testing.T) {
+	t.Helper()
+	collected := make(chan struct{})
+	decoy := new([64]byte)
+	goruntime.AddCleanup(decoy, func(done chan struct{}) { close(done) }, collected)
+	decoy = nil
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		goruntime.GC()
+		select {
+		case <-collected:
+			for range 3 {
+				goruntime.GC()
+				time.Sleep(10 * time.Millisecond)
+			}
+			return
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the decoy was never collected")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestACopiedTemplateOrExpressionOutlivesTheDroppedOriginal(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		kept := keepByValue(t, sb)
+		collectEverythingUnreachable(t)
+		var two, three int
+		if err := kept.template.Eval(t.Context(), &two, nil, "v"); err != nil {
+			t.Fatalf("the copied template: %v", err)
+		}
+		if err := kept.expression.Call(t.Context(), &three, 2); err != nil {
+			t.Fatalf("the copied expression: %v", err)
+		}
+		expectEqual(t, [2]int{two, three}, [2]int{2, 3})
+	})
+}

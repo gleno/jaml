@@ -80,9 +80,7 @@ func (s *Sandbox) MakeTemplate(ctx context.Context, text string, options ...Opti
 	if err != nil {
 		return nil, err
 	}
-	made := &Template{held: held}
-	endWhenUnreachable(made, held)
-	return made, nil
+	return &Template{held: held}, nil
 }
 
 func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option) (*Expression, error) {
@@ -97,9 +95,7 @@ func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option)
 	if err != nil {
 		return nil, err
 	}
-	compiled := &Expression{held: held}
-	endWhenUnreachable(compiled, held)
-	return compiled, nil
+	return &Expression{held: held}, nil
 }
 
 func (s *Sandbox) make(ctx context.Context, plan blueprint) (*handle, error) {
@@ -121,7 +117,9 @@ func (s *Sandbox) make(ctx context.Context, plan blueprint) (*handle, error) {
 		unfollow()
 		built.forget()
 	})
-	return &handle{lifetime: lifetime, end: end, unit: built}, nil
+	held := &handle{lifetime: lifetime, end: end, unit: built}
+	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
+	return held, nil
 }
 
 func (s *Sandbox) buildFailure(ctx context.Context, err error) error {
@@ -136,10 +134,6 @@ func (s *Sandbox) buildFailure(ctx context.Context, err error) error {
 	return nil
 }
 
-func endWhenUnreachable[T any](owner *T, held *handle) {
-	goruntime.AddCleanup(owner, func(end context.CancelCauseFunc) { end(errUnreachable) }, held.end)
-}
-
 func unmadeSandbox() error {
 	return fail(InvalidTemplate, "a sandbox not made by MakeSandbox or MakeTrustedSandbox")
 }
@@ -148,7 +142,6 @@ func (t *Template) Eval(ctx context.Context, into any, vars map[string]any, path
 	if t == nil || t.held == nil {
 		return fail(InvalidTemplate, "Eval on a template not made by Sandbox.MakeTemplate")
 	}
-	defer goruntime.KeepAlive(t)
 	if err := t.held.admit(ctx); err != nil {
 		return err
 	}
@@ -166,7 +159,6 @@ func (e *Expression) Eval(ctx context.Context, into any, vars map[string]any) er
 	if e == nil || e.held == nil {
 		return fail(InvalidTemplate, "Eval on an expression not made by Sandbox.Compile")
 	}
-	defer goruntime.KeepAlive(e)
 	if err := e.held.admit(ctx); err != nil {
 		return err
 	}
@@ -184,7 +176,6 @@ func (e *Expression) Call(ctx context.Context, into any, args ...any) error {
 	if e == nil || e.held == nil {
 		return fail(InvalidTemplate, "Call on an expression not made by Sandbox.Compile")
 	}
-	defer goruntime.KeepAlive(e)
 	if err := e.held.admit(ctx); err != nil {
 		return err
 	}
@@ -217,6 +208,7 @@ func (h *handle) admit(ctx context.Context) error {
 }
 
 func (h *handle) answer(ctx context.Context, into any, request work) error {
+	defer goruntime.KeepAlive(h)
 	request.Pinned = pin(ctx)
 	job, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
