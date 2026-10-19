@@ -345,7 +345,7 @@ func hostCPU(t *testing.T) time.Duration {
 }
 
 func hostileText() string {
-	return "v: '${" + strings.Repeat("a=>", 21000) + "1}'\n"
+	return "v: '${[" + strings.Repeat("("+strings.Repeat("-1+", 4095)+"0),", 5) + "]}'\n"
 }
 
 func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {
@@ -378,6 +378,8 @@ func TestAHostileBuildIsBoundedByTheBuildTimeout(t *testing.T) {
 		t.Fatalf("a hostile build held construction for %s past its 200ms build timeout", waited)
 	}
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 6 }\n"), nil, "v"), 6)
+	_, err = sb.MakeExpressionFromJaml(t.Context(), "v: '${"+strings.Repeat("a=>", 21000)+"1}'\n")
+	expectError(t, err, InvalidExpression, "$.v", "arrow functions nest more than 512 deep")
 }
 
 func listOfPlainServers(count int) string {
