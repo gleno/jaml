@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, MemoryLimit}
+var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, Unavailable, MemoryLimit}
 
 func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
@@ -43,6 +43,32 @@ func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 			t.Fatalf("expected the context's cause in %v", err)
 		}
 	})
+}
+
+func TestATrustedSandboxIsNeverUnavailable(t *testing.T) {
+	var sb = mustSandbox(t, trustedKind)
+	var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nthrown: ${ (() => { throw new Error('x') })() }\n")
+	done, cancel := context.WithCancel(t.Context())
+	cancel()
+	var out any
+	_, constructed := sb.MakeExpressionFromJaml(done, "v: 1\n")
+	var failures = []error{
+		resolveInto(within(t, 50*time.Millisecond), &out, document.At("spin")),
+		resolveInto(done, &out, document.At("thrown")),
+		resolveInto(t.Context(), &out, document.At("thrown")),
+		resolveInto(t.Context(), &out, document.At("absent")),
+		constructed,
+	}
+	for _, err := range failures {
+		expectError(t, err, ExpressionError)
+		if errors.Is(err, Unavailable) {
+			t.Fatalf("a trusted sandbox reported an unavailable evaluator: %v", err)
+		}
+	}
+	_, err := MakeTrustedSandbox(done)
+	if err != nil {
+		t.Fatalf("a trusted sandbox starts nothing, yet: %v", err)
+	}
 }
 
 func TestAMemoryBombIsAMemoryLimit(t *testing.T) {

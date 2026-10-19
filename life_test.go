@@ -25,7 +25,7 @@ func slowBuild(seconds float64) string {
 
 func TestAChildThatPanicsBeforeGreetingSaysWhy(t *testing.T) {
 	_, err := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(panicAtStartLimit))
-	expectError(t, err, EvaluationFailed, "starting the evaluator", "evaluator died (exit status 2): panic: an impostor's init")
+	expectUnavailable(t, err, "$: starting the evaluator", "evaluator died (exit status 2): panic: an impostor's init")
 	if errors.Is(err, Unsupported) {
 		t.Fatalf("a child that died before greeting is not a foreign executable: %v", err)
 	}
@@ -194,7 +194,10 @@ func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 	var first error
 	for range 6 {
 		var err = <-failures
-		expectError(t, err, EvaluationFailed, "starting the evaluator", "took longer than 300ms to start")
+		expectUnavailable(t, err, "$: starting the evaluator", "took longer than 300ms to start")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected context.DeadlineExceeded in %v", err)
+		}
 		if first == nil {
 			first = err
 		}
@@ -379,7 +382,7 @@ func TestAStartLeavingAStragglerKeepsItsDeadline(t *testing.T) {
 	reapStragglers(t)
 	var started = time.Now()
 	_, err := MakeSecureSandbox(within(t, 300*time.Millisecond), WithMemoryLimit(silentStragglerLimit))
-	expectError(t, err, EvaluationFailed, "starting the evaluator")
+	expectUnavailable(t, err, "starting the evaluator")
 	if waited := time.Since(started); waited > time.Second {
 		t.Fatalf("a start leaving a straggler held its caller for %s past a 300ms deadline", waited)
 	}

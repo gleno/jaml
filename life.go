@@ -109,7 +109,7 @@ func startFailure(err error) error {
 	if _, isOwn := err.(_ExpressionError); isOwn {
 		return err
 	}
-	return fail(EvaluationFailed, "starting the evaluator: %w", err)
+	return fail(Unavailable, "starting the evaluator: %w", err)
 }
 
 func currentWorld(limit _MemoryLimit) _EvaluatorWorld {
@@ -320,7 +320,7 @@ func (greeting _Hello) vouch(nonce string) error {
 	case greeting.Magic != evaluatorMagic || greeting.Nonce != nonce:
 		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): it answered with a foreign greeting")
 	case greeting.Version != protocolVersion:
-		return fail(Unsupported, "the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)
+		return fail(Unavailable, "the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)
 	}
 	return nil
 }

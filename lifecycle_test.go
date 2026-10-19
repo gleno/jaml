@@ -143,25 +143,38 @@ func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) 
 	}
 }
 
+func expectUnavailable(t *testing.T, err error, fragments ...string) {
+	t.Helper()
+	expectError(t, err, Unavailable, fragments...)
+	for _, other := range []error{EvaluationFailed, Unsupported, Closed} {
+		if errors.Is(err, other) {
+			t.Fatalf("an evaluator that could not start is %v too: %v", other, err)
+		}
+	}
+}
+
 func TestAForeignExecutableIsUnsupported(t *testing.T) {
 	_, err := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(foreignGreetingLimit))
 	expectError(t, err, Unsupported, "is not a jaml evaluator")
+	if errors.Is(err, Unavailable) {
+		t.Fatalf("a foreign executable is not a failed start: %v", err)
+	}
 }
 
-func TestAReplacedExecutableIsUnsupported(t *testing.T) {
+func TestAReplacedExecutableIsUnavailable(t *testing.T) {
 	_, err := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(futureProtocolLimit))
-	expectError(t, err, Unsupported, fmt.Sprintf("speaks jaml protocol v999, want v%d", protocolVersion))
+	expectUnavailable(t, err, fmt.Sprintf("speaks jaml protocol v999, want v%d", protocolVersion))
 }
 
 func TestAnOlderEvaluatorIsNamedByItsVersion(t *testing.T) {
 	_, err := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(olderProtocolLimit))
-	expectError(t, err, Unsupported, fmt.Sprintf("speaks jaml protocol v10, want v%d", protocolVersion))
+	expectUnavailable(t, err, fmt.Sprintf("speaks jaml protocol v10, want v%d", protocolVersion))
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 	var started = time.Now()
 	_, err := MakeSecureSandbox(within(t, 300*time.Millisecond), WithMemoryLimit(silentLimit))
-	expectError(t, err, EvaluationFailed, "starting the evaluator", "cancelled", "deadline exceeded")
+	expectUnavailable(t, err, "$: starting the evaluator", "cancelled", "deadline exceeded")
 	if waited := time.Since(started); waited > 3*time.Second {
 		t.Fatalf("a silent evaluator held construction for %s", waited)
 	}
@@ -170,7 +183,7 @@ func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 func TestASilentExecutableEndsWithItsStartDeadline(t *testing.T) {
 	var started = time.Now()
 	_, err := startLife(_ChildSpec{lifetime: t.Context(), limit: silentLimit, startDeadline: 200 * time.Millisecond, buildTimeout: defaultBuildTimeout})
-	expectError(t, err, EvaluationFailed, "starting the evaluator", "took longer than 200ms to start")
+	expectUnavailable(t, err, "$: starting the evaluator", "took longer than 200ms to start")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded in %v", err)
 	}
@@ -303,10 +316,10 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 			killChild(t, sb)
 			var out any
 			var respawned = resolveInto(within(t, 10*time.Second), &out, document.At("a"))
-			if name == "crash before greeting" {
-				expectError(t, respawned, EvaluationFailed, "evaluator died (exit status 3)")
-			} else {
+			if name == "foreign greeting" {
 				expectError(t, respawned, Unsupported)
+			} else {
+				expectUnavailable(t, respawned)
 			}
 			expectEqual(t, respawned.Error(), constructed.Error())
 			for _, kind := range everyKind {
