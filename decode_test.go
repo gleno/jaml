@@ -156,3 +156,24 @@ func TestBlameStillReachesEmbeddedFieldsAndMapValues(t *testing.T) {
 	_Agreement{text: "port: x\nlimits: {cpu: 1}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.port: json: cannot unmarshal string")
 	_Agreement{text: "port: 1\nlimits: {cpu: 1, mem: x}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.limits.mem: json: cannot unmarshal string")
 }
+
+func TestCoercionBlameFollowsEncodingJSONKeyMatching(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		type _Port struct {
+			Port int `json:"port"`
+		}
+		type _Servers struct {
+			Servers []_Port `json:"servers"`
+		}
+		_, err := Resolve[_Servers](t.Context(), mustJaml(t, sb, "servers: [{PORT: 1}, {PORT: x}]\n"))
+		expectError(t, err, CoercionFailed, "$.servers[1].PORT: json: cannot unmarshal string")
+		type _Both struct {
+			Port  int    `json:"port"`
+			Upper string `json:"PORT"`
+		}
+		_, err = Resolve[_Both](t.Context(), mustJaml(t, sb, "port: 1\nPORT: 2\n"))
+		expectError(t, err, CoercionFailed, "$.PORT: json: cannot unmarshal number")
+		_, err = Resolve[_Both](t.Context(), mustJaml(t, sb, "PORT: s\nport: s\n"))
+		expectError(t, err, CoercionFailed, "$.port: json: cannot unmarshal string")
+	})
+}

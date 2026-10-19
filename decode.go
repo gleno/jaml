@@ -36,9 +36,9 @@ func namesField(found *_DataPath, field string) bool {
 	if field == "" {
 		return true
 	}
-	var last = field[strings.LastIndexByte(field, '.')+1:]
+	var last = foldName(field[strings.LastIndexByte(field, '.')+1:])
 	for step := found; step != nil; step = step.parent {
-		if step.keyed && step.key == last {
+		if step.keyed && foldName(step.key) == last {
 			return true
 		}
 	}
