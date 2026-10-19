@@ -2,96 +2,232 @@ package jaml
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
+	"strconv"
 	"sync"
+	"unicode/utf16"
 	"unicode/utf8"
-
-	"github.com/dop251/goja"
 )
 
-var replacementEscape = []byte(`ufffd`)
+const loneLow = 0xDC00
 
-type encodedVars map[string]json.RawMessage
+type datum struct {
+	encoded json.RawMessage
+}
 
-var engineGlobals = sync.OnceValue(func() map[string]bool {
+type boundVars map[string]datum
+
+var refusedNames = sync.OnceValue(func() map[string]bool {
 	names := map[string]bool{}
-	for _, name := range goja.New().GlobalObject().GetOwnPropertyNames() {
-		names[name] = true
+	opened, err := openSession(context.Background(), sessionPlan{})
+	if err != nil {
+		panic(err)
+	}
+	defer opened.close()
+	err = opened.enter(func(r realm) error {
+		for object := r.vm.GlobalObject(); object != nil; object = object.Prototype() {
+			for _, name := range object.GetOwnPropertyNames() {
+				names[name] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		panic(err)
 	}
 	return names
 })
 
-func encodeVars(vars map[string]any) (encodedVars, error) {
-	encoded := make(encodedVars, len(vars))
+func admitVars(vars map[string]any) (boundVars, error) {
+	admitted := make(boundVars, len(vars))
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		shown := clip(name, keyExcerptLength)
-		if !utf8.ValidString(name) {
-			return nil, fmt.Errorf("var %q is not named in valid UTF-8", shown)
+		if err := admitName(name); err != nil {
+			return nil, err
 		}
-		if engineGlobals()[name] {
-			return nil, fmt.Errorf("var %q collides with a JavaScript global", shown)
-		}
-		value, err := encodeDatum(fmt.Sprintf("var %q", shown), vars[name])
+		value, err := admitDatum(fmt.Sprintf("var %q", clip(name, keyExcerptLength)), vars[name])
 		if err != nil {
 			return nil, err
 		}
-		encoded[name] = value
+		admitted[name] = value
 	}
-	return encoded, nil
+	return admitted, nil
 }
 
-func encodeArguments(args []any) ([]json.RawMessage, error) {
-	encoded := make([]json.RawMessage, len(args))
+func admitArguments(args []any) ([]datum, error) {
+	admitted := make([]datum, len(args))
 	for index, arg := range args {
-		value, err := encodeDatum(fmt.Sprintf("argument %d", index+1), arg)
+		value, err := admitDatum(fmt.Sprintf("argument %d", index+1), arg)
 		if err != nil {
 			return nil, err
 		}
-		encoded[index] = value
+		admitted[index] = value
 	}
-	return encoded, nil
+	return admitted, nil
 }
 
-func encodeDatum(named string, datum any) (json.RawMessage, error) {
-	value, err := json.Marshal(datum)
+func admitName(name string) error {
+	shown := clip(name, keyExcerptLength)
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("var %q is not named in valid UTF-8", shown)
+	}
+	if refusedNames()[name] {
+		return fmt.Errorf("var %q collides with a JavaScript global", shown)
+	}
+	return nil
+}
+
+func admitDatum(named string, value any) (datum, error) {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nil, fmt.Errorf("%s is not JSON data: %w", named, err)
+		return datum{}, fmt.Errorf("%s is not JSON data: %w", named, err)
 	}
-	deepest, replaced := measureJSON(value)
-	if deepest > maxDataDepth {
-		return nil, tooDeep(named)
+	if err := checkDatum(encoded); err != nil {
+		return datum{}, fmt.Errorf("%s %w", named, err)
 	}
-	if replaced {
-		return nil, fmt.Errorf("%s holds text that is not valid UTF-8", named)
+	return datum{encoded: encoded}, nil
+}
+
+func checkDatum(encoded []byte) error {
+	wellFormed := true
+	deepest := walkJSON(encoded, func(text []byte) { wellFormed = wellFormed && admissibleText(text) })
+	switch {
+	case deepest > maxDataDepth:
+		return fmt.Errorf("%s", nestsTooDeep)
+	case !wellFormed:
+		return fmt.Errorf("holds text that is not valid UTF-8")
 	}
-	return value, nil
+	return nil
+}
+
+func (d datum) MarshalJSON() ([]byte, error) {
+	return d.encoded, nil
+}
+
+func (d *datum) UnmarshalJSON(written []byte) error {
+	if err := checkDatum(written); err != nil {
+		return fmt.Errorf("a datum %w", err)
+	}
+	d.encoded = bytes.Clone(written)
+	return nil
+}
+
+func (v *boundVars) UnmarshalJSON(written []byte) error {
+	var decoded map[string]datum
+	if err := json.Unmarshal(written, &decoded); err != nil {
+		return err
+	}
+	for name := range decoded {
+		if err := admitName(name); err != nil {
+			return err
+		}
+	}
+	*v = decoded
+	return nil
 }
 
 func jsonDepth(encoded []byte) int {
-	deepest, _ := measureJSON(encoded)
-	return deepest
+	return walkJSON(encoded, nil)
 }
 
-func measureJSON(encoded []byte) (deepest int, replaced bool) {
-	depth, inString := 0, false
+func walkJSON(encoded []byte, onText func(text []byte)) int {
+	depth, deepest := 0, 0
 	for i := 0; i < len(encoded); i++ {
-		switch b := encoded[i]; {
-		case inString && b == '\\':
-			replaced = replaced || bytes.HasPrefix(encoded[i+1:], replacementEscape)
-			i++
-		case inString:
-			inString = b != '"'
-		case b == '"':
-			inString = true
-		case b == '[' || b == '{':
+		switch encoded[i] {
+		case '"':
+			end := textEnd(encoded, i+1)
+			if onText != nil {
+				onText(encoded[i+1 : end])
+			}
+			i = end
+		case '[', '{':
 			depth++
 			deepest = max(deepest, depth)
-		case b == ']' || b == '}':
+		case ']', '}':
 			depth--
 		}
 	}
-	return deepest, replaced
+	return deepest
+}
+
+func textEnd(encoded []byte, from int) int {
+	for i := from; i < len(encoded); i++ {
+		switch encoded[i] {
+		case '\\':
+			i++
+		case '"':
+			return i
+		}
+	}
+	return len(encoded)
+}
+
+func admissibleText(text []byte) bool {
+	if !utf8.Valid(text) {
+		return false
+	}
+	if bytes.IndexByte(text, '\\') < 0 {
+		return true
+	}
+	replaced := false
+	units := func(yield func(uint16) bool) {
+		for i := 0; i < len(text); {
+			unit, size := nextUnit(text[i:])
+			replaced = replaced || size == len(`\ufffd`) && unit == utf8.RuneError
+			if !yield(unit) {
+				return
+			}
+			if written, _ := utf8.DecodeRune(text[i:]); written > 0xFFFF {
+				_, low := utf16.EncodeRune(written)
+				if !yield(uint16(low)) {
+					return
+				}
+			}
+			i += size
+		}
+	}
+	return wellFormedUnits(units) && !replaced
+}
+
+func nextUnit(text []byte) (uint16, int) {
+	switch {
+	case text[0] != '\\':
+		written, size := utf8.DecodeRune(text)
+		if written > 0xFFFF {
+			high, _ := utf16.EncodeRune(written)
+			return uint16(high), size
+		}
+		return uint16(written), size
+	case len(text) >= len(`\u0000`) && text[1] == 'u':
+		unit, err := strconv.ParseUint(string(text[2:6]), 16, 16)
+		if err != nil {
+			return loneLow, len(text)
+		}
+		return uint16(unit), len(`\u0000`)
+	case len(text) >= 2:
+		return uint16(text[1]), 2
+	}
+	return loneLow, len(text)
+}
+
+func wellFormedUnits(units iter.Seq[uint16]) bool {
+	awaitingLow := false
+	for unit := range units {
+		low := unit >= loneLow && unit <= 0xDFFF
+		switch {
+		case awaitingLow && !low:
+			return false
+		case awaitingLow:
+			awaitingLow = false
+		case low:
+			return false
+		default:
+			awaitingLow = unit >= 0xD800 && unit < loneLow
+		}
+	}
+	return !awaitingLow
 }

@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/dop251/goja"
@@ -330,19 +329,15 @@ func wellFormedText(written goja.String) (string, bool) {
 	if !strings.ContainsRune(text, utf8.RuneError) {
 		return text, true
 	}
-	for i := 0; i < written.Length(); i++ {
-		unit := rune(written.CharAt(i))
-		if !utf16.IsSurrogate(unit) {
-			continue
+	units := func(yield func(uint16) bool) {
+		for i := range written.Length() {
+			if !yield(written.CharAt(i)) {
+				return
+			}
 		}
-		if unit >= 0xDC00 || i+1 == written.Length() {
-			return "", false
-		}
-		next := rune(written.CharAt(i + 1))
-		if next < 0xDC00 || next > 0xDFFF {
-			return "", false
-		}
-		i++
+	}
+	if !wellFormedUnits(units) {
+		return "", false
 	}
 	return text, true
 }

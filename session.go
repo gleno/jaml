@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -16,7 +15,7 @@ const maxCallStackSize = 4096
 var errInterrupted = errors.New("interrupted")
 
 type sessionPlan struct {
-	vars   encodedVars
+	vars   boundVars
 	pinned pinned
 }
 
@@ -99,7 +98,7 @@ func (s *session) halted() error {
 	return nil
 }
 
-func (s *session) bind(vars encodedVars) error {
+func (s *session) bind(vars boundVars) error {
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		if err := s.enter(func(r realm) error { return r.bindVar(name, vars[name]) }); err != nil {
 			return err
@@ -108,8 +107,8 @@ func (s *session) bind(vars encodedVars) error {
 	return nil
 }
 
-func (r realm) bindVar(name string, value json.RawMessage) error {
-	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(value)))
+func (r realm) bindVar(name string, value datum) error {
+	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(value.encoded)))
 	if err != nil {
 		return fmt.Errorf("var %q: %w", clip(name, keyExcerptLength), r.explain(err))
 	}
@@ -154,7 +153,7 @@ func (s *session) evaluate(compiled expression) (any, error) {
 	return s.attempt(func(r realm) (goja.Value, error) { return r.vm.RunProgram(compiled.program) })
 }
 
-func (s *session) call(compiled expression, args []json.RawMessage) (any, error) {
+func (s *session) call(compiled expression, args []datum) (any, error) {
 	return s.attempt(func(r realm) (goja.Value, error) { return r.invoke(compiled, args) })
 }
 
@@ -171,7 +170,7 @@ func (s *session) attempt(produce func(realm) (goja.Value, error)) (any, error) 
 	return result, err
 }
 
-func (r realm) invoke(compiled expression, args []json.RawMessage) (goja.Value, error) {
+func (r realm) invoke(compiled expression, args []datum) (goja.Value, error) {
 	returned, err := r.vm.RunProgram(compiled.program)
 	if err != nil {
 		return nil, err
@@ -182,7 +181,7 @@ func (r realm) invoke(compiled expression, args []json.RawMessage) (goja.Value, 
 	}
 	values := make([]goja.Value, len(args))
 	for index, arg := range args {
-		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(arg)))
+		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(arg.encoded)))
 		if err != nil {
 			return nil, fmt.Errorf("argument %d: %w", index+1, r.explain(err))
 		}

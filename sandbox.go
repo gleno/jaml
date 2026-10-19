@@ -148,7 +148,7 @@ func (t *Template) Eval(ctx context.Context, into any, vars map[string]any, path
 	if err := checkTarget("Eval", into); err != nil {
 		return err
 	}
-	encoded, err := encodeVars(vars)
+	encoded, err := admitVars(vars)
 	if err != nil {
 		return fail(EvaluationFailed, "binding vars: %w", err)
 	}
@@ -165,7 +165,7 @@ func (e *Expression) Eval(ctx context.Context, into any, vars map[string]any) er
 	if err := checkTarget("Eval", into); err != nil {
 		return err
 	}
-	encoded, err := encodeVars(vars)
+	encoded, err := admitVars(vars)
 	if err != nil {
 		return fail(EvaluationFailed, "binding vars: %w", err)
 	}
@@ -182,7 +182,7 @@ func (e *Expression) Call(ctx context.Context, into any, args ...any) error {
 	if err := checkTarget("Call", into); err != nil {
 		return err
 	}
-	encoded, err := encodeArguments(args)
+	encoded, err := admitArguments(args)
 	if err != nil {
 		return fail(EvaluationFailed, "binding arguments: %w", err)
 	}

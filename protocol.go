@@ -54,14 +54,14 @@ type blueprint struct {
 }
 
 type work struct {
-	Path   []string    `json:"path,omitempty"`
-	Vars   encodedVars `json:"vars,omitempty"`
-	Call   *callArgs   `json:"call,omitempty"`
-	Pinned pinned      `json:"pinned"`
+	Path   []string  `json:"path,omitempty"`
+	Vars   boundVars `json:"vars,omitempty"`
+	Call   *callArgs `json:"call,omitempty"`
+	Pinned pinned    `json:"pinned"`
 }
 
 type callArgs struct {
-	Args []json.RawMessage `json:"args"`
+	Args []datum `json:"args"`
 }
 
 type reply struct {

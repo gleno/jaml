@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
@@ -105,7 +104,7 @@ func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
 	return result, nil
 }
 
-func (r *renderer) call(compiled expression, args []json.RawMessage) (any, error) {
+func (r *renderer) call(compiled expression, args []datum) (any, error) {
 	session, err := r.engine.open()
 	if err != nil {
 		return nil, err
