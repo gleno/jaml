@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -243,7 +242,7 @@ func (l *life) send(ctx context.Context, outgoing request) (call, error) {
 	}
 	defer func() { <-l.wire.writer }()
 	outgoing.Job = l.wire.sent + 1
-	encoded, err := json.Marshal(outgoing)
+	encoded, err := wireJSON(outgoing)
 	if err != nil {
 		return call{}, fmt.Errorf("writing the evaluator's request: %w", err)
 	}
@@ -259,7 +258,7 @@ func (l *life) send(ctx context.Context, outgoing request) (call, error) {
 func (l *life) tell(outgoing request) <-chan struct{} {
 	delivered := make(chan struct{})
 	go func() {
-		encoded, err := json.Marshal(outgoing)
+		encoded, err := wireJSON(outgoing)
 		if err != nil {
 			l.kill(fmt.Errorf("writing the evaluator's control message: %w", err))
 			return

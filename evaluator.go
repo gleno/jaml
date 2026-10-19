@@ -218,7 +218,7 @@ type replyWriter struct {
 }
 
 func (w *replyWriter) greet(greeting hello) {
-	encoded, err := json.Marshal(greeting)
+	encoded, err := wireJSON(greeting)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing the greeting: %v\n", err)
 		os.Exit(exitProtocolBroken)

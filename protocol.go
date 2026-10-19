@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -79,12 +80,22 @@ func framesFor(limit memoryLimit) frames {
 }
 
 func (f frames) seal(at string, outgoing reply) ([]byte, error) {
-	encoded, err := json.Marshal(outgoing)
+	encoded, err := wireJSON(outgoing)
 	if err != nil || len(encoded) <= f.limit {
 		return encoded, err
 	}
 	refusal := describeFailure(located(at, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
-	return json.Marshal(reply{Job: outgoing.Job, Failure: &refusal})
+	return wireJSON(reply{Job: outgoing.Job, Failure: &refusal})
+}
+
+func wireJSON(value any) ([]byte, error) {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(encoded.Bytes(), []byte("\n")), nil
 }
 
 func (f frames) oversized() error {
@@ -163,7 +174,7 @@ func thrownOnWireFrom(err error) *thrownOnWire {
 	if !errors.As(err, &caught) {
 		return nil
 	}
-	value, marshalErr := json.Marshal(caught.Value)
+	value, marshalErr := wireJSON(caught.Value)
 	if marshalErr != nil {
 		value = json.RawMessage("null")
 	}

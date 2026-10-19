@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 )
 
@@ -58,7 +57,7 @@ func (t *template) renderSubtree(chosen subtree, engine *lazySession) ([]byte, e
 }
 
 func encodeResult(tree any, at *dataPath) ([]byte, error) {
-	encoded, err := json.Marshal(tree)
+	encoded, err := wireJSON(tree)
 	if err != nil {
 		return nil, fail(CoercionFailed, "%s: %w", at, err)
 	}

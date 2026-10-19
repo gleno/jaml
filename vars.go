@@ -82,7 +82,7 @@ func admitName(name string) error {
 }
 
 func admitDatum(named string, value any) (datum, error) {
-	encoded, err := json.Marshal(value)
+	encoded, err := wireJSON(value)
 	if err != nil {
 		return datum{}, fmt.Errorf("%s is not JSON data: %w", named, err)
 	}

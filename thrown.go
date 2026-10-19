@@ -45,7 +45,7 @@ func (r realm) snapshot(thrown goja.Value) json.RawMessage {
 	if _, isUndefined := taken.(undefined); isUndefined {
 		return json.RawMessage("null")
 	}
-	encoded, err := json.Marshal(taken)
+	encoded, err := wireJSON(taken)
 	if err != nil {
 		return json.RawMessage("null")
 	}

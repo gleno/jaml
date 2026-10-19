@@ -3,6 +3,8 @@
 package jaml
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,4 +34,26 @@ func TestAReplyPastTheCapKillsTheChildAsAProtocolBreak(t *testing.T) {
 	process := currentChild(t, sb)
 	expectError(t, evalBounded(t, template, within(t, 30*time.Second), "v"), EvaluationFailed, "the evaluator sent a reply larger than 4194306 bytes")
 	expectDeath(t, process)
+}
+
+func TestHTMLCharactersCountAsTheyAreAtTheReplyCap(t *testing.T) {
+	for _, kind := range sandboxKinds {
+		t.Run(kind.name, func(t *testing.T) {
+			sb := sharedSandbox(t, kind)
+			if kind.name == isolatedKind.name {
+				sb = mustIsolated(t, WithMemoryLimit(32<<20))
+			}
+			for _, text := range []string{"'<'", "'>'", "'&'"} {
+				var answer string
+				thrown := mustCompile(t, sb, "x => { throw "+text+".repeat(x) }")
+				if err := mustCompile(t, sb, "x => "+text+".repeat(x)").Call(within(t, 30*time.Second), &answer, 2<<20); err != nil || len(answer) != 2<<20 {
+					t.Fatalf("%s.repeat(2 MiB) under an 8 MiB cap: %d bytes, %v", text, len(answer), err)
+				}
+				var caught *Thrown
+				if err := thrown.Call(within(t, 30*time.Second), &answer, 2<<20); !errors.As(err, &caught) || caught.Value != strings.Repeat(text[1:2], 2<<20) {
+					t.Fatalf("throwing %s.repeat(2 MiB) under an 8 MiB cap: %v", text, err)
+				}
+			}
+		})
+	}
 }
