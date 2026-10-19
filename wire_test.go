@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -163,21 +164,26 @@ func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 	_, _ = panicked.Write([]byte(pressureMarker + "\npanic: boom\n\ngoroutine 1 [running]:\n"))
 	var silent = &_HeadBuffer{limit: stderrHeadBytes}
 	var cases = map[string]struct {
-		ending _Exit
-		memory bool
-		want   string
+		ending  _Ending
+		remains _Remains
+		memory  bool
+		want    string
 	}{
-		"an exit 86 beats our kill":         {_Exit{state: exited(t, "exit 86").ProcessState, stderr: silent, killCause: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
-		"a panic beats our kill":            {_Exit{state: exited(t, "exit 2").ProcessState, stderr: panicked, killCause: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
-		"our kill names its reason":         {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
-		"a foreign kill under pressure":     {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
-		"a foreign kill without pressure":   {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
-		"a plain exit names its status":     {_Exit{state: exited(t, "exit 3").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},
-		"a pressure marker is not a reason": {_Exit{state: exited(t, "exit 5").ProcessState, stderr: marked, limit: 64 << 20}, false, "evaluator died (exit status 5)"},
+		"an exit 86 beats our kill":           {_Collected{state: exited(t, "exit 86").ProcessState}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
+		"a panic beats our kill":              {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: panicked, killCause: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
+		"our kill names its reason":           {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
+		"a foreign kill under pressure":       {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
+		"a foreign kill without pressure":     {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
+		"a plain exit names its status":       {_Collected{state: exited(t, "exit 3").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},
+		"a pressure marker is not a reason":   {_Collected{state: exited(t, "exit 5").ProcessState}, _Remains{stderr: marked, limit: 64 << 20}, false, "evaluator died (exit status 5)"},
+		"an uncollected exit names its wait":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator ended but its exit could not be collected: no child processes"},
+		"an uncollected exit after our kill":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
+		"an uncollected exit keeps its panic": {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: panicked, limit: 64 << 20}, false, "could not be collected (no child processes): panic: boom"},
+		"an uncollected exit under pressure":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			var verdict = c.ending.verdict()
+			var verdict = c.ending.verdict(c.remains)
 			if errors.Is(verdict, MemoryLimit) != c.memory || !strings.Contains(verdict.Error(), c.want) {
 				t.Fatalf("got %v (memory %v), want %q (memory %v)", verdict, errors.Is(verdict, MemoryLimit), c.want, c.memory)
 			}

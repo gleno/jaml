@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
@@ -219,5 +222,31 @@ func TestAChildKilledMidRequestIsNamedByTheReaper(t *testing.T) {
 	expectDeath(t, process)
 	if !strings.Contains(process.verdict.Error(), "killed from outside jaml") {
 		t.Fatalf("the verdict: %v", process.verdict)
+	}
+}
+
+func TestAHostThatReapsItsOwnChildrenOutlivesThem(t *testing.T) {
+	if os.Getenv("JAML_REAPING_HOST") == "1" {
+		signal.Ignore(syscall.SIGCHLD)
+		var foreign = currentChild(t, mustIsolated(t))
+		_ = syscall.Kill(foreign.cmd.Process.Pid, syscall.SIGKILL)
+		expectDeath(t, foreign)
+		var ours = currentChild(t, mustIsolated(t))
+		ours.kill(errors.New("ours to end"))
+		expectDeath(t, ours)
+		os.Stdout.WriteString("FOREIGN " + foreign.verdict.Error() + "\nOURS " + ours.verdict.Error() + "\n")
+		return
+	}
+	self, _ := os.Executable()
+	var cmd = exec.Command(self, "-test.run", "^TestAHostThatReapsItsOwnChildrenOutlivesThem$")
+	cmd.Env = append(os.Environ(), "JAML_REAPING_HOST=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the reaping host died: %v\n%s", err, output)
+	}
+	for _, want := range []string{"FOREIGN evaluator ended but its exit could not be collected", "OURS ours to end"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("want %q in\n%s", want, output)
+		}
 	}
 }

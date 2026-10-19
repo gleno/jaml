@@ -49,6 +49,8 @@ type _ChildSpec struct {
 
 type _Life struct {
 	cmd          *exec.Cmd
+	signals      sync.Mutex
+	reaped       chan struct{}
 	ended        chan struct{}
 	verdict      error
 	killCause    atomic.Pointer[error]
@@ -57,11 +59,29 @@ type _Life struct {
 	board        *_Switchboard
 }
 
-type _Exit struct {
-	state     *os.ProcessState
+type _Ending interface {
+	verdict(remains _Remains) error
+}
+
+type _Collected struct {
+	state *os.ProcessState
+}
+
+type _Uncollected struct {
+	waited error
+}
+
+type _Remains struct {
 	stderr    *_HeadBuffer
 	killCause error
 	limit     _MemoryLimit
+}
+
+func endingOf(cmd *exec.Cmd, waited error) _Ending {
+	if cmd.ProcessState == nil {
+		return _Uncollected{waited: waited}
+	}
+	return _Collected{state: cmd.ProcessState}
 }
 
 func startLife(spec _ChildSpec) (*_Life, error) {
@@ -159,6 +179,7 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 	}
 	var born = &_Life{
 		cmd:          cmd,
+		reaped:       make(chan struct{}),
 		ended:        make(chan struct{}),
 		buildTimeout: spec.buildTimeout,
 		wire:         newWire(requests.writer, control.writer),
@@ -166,11 +187,12 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 	}
 	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	go func() {
-		_ = cmd.Wait()
-		var killCause = born.killReason()
+		var ending = endingOf(cmd, cmd.Wait())
+		born.reap()
+		var remains = _Remains{stderr: stderr, killCause: born.killReason(), limit: w.limit}
 		closeAll(requests.writer, replies.reader, control.writer)
 		unbind()
-		born.bury(_Exit{state: cmd.ProcessState, stderr: stderr, killCause: killCause, limit: w.limit})
+		born.bury(ending.verdict(remains))
 	}()
 	return born, &_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit)}, nil
 }
@@ -195,8 +217,8 @@ func openPipes(count int) ([]_Pipe, error) {
 	return opened, nil
 }
 
-func (l *_Life) bury(ending _Exit) {
-	l.verdict = ending.verdict()
+func (l *_Life) bury(verdict error) {
+	l.verdict = verdict
 	close(l.ended)
 	l.wire.vacate()
 }
@@ -207,7 +229,19 @@ func (l *_Life) kill(reason error) {
 }
 
 func (l *_Life) end() {
-	_ = l.cmd.Process.Kill()
+	l.signals.Lock()
+	defer l.signals.Unlock()
+	select {
+	case <-l.reaped:
+	default:
+		_ = l.cmd.Process.Kill()
+	}
+}
+
+func (l *_Life) reap() {
+	l.signals.Lock()
+	defer l.signals.Unlock()
+	close(l.reaped)
 }
 
 func (l *_Life) killReason() error {
@@ -274,23 +308,38 @@ func (greeting _Hello) vouch(nonce string) error {
 	return nil
 }
 
-func (x _Exit) verdict() error {
-	var reason = x.stderr.reason()
+func (c _Collected) verdict(r _Remains) error {
+	var reason = r.stderr.reason()
 	switch {
-	case x.state.ExitCode() == exitMemoryLimit:
-		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", x.limit))
+	case c.state.ExitCode() == exitMemoryLimit:
+		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", r.limit))
 	case reason == runtimeOutOfMemory:
-		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s): %s", x.state, reason))
-	case killedOutright(x.state) && x.killCause != nil:
-		return x.killCause
-	case killedOutright(x.state) && x.stderr.holds(pressureMarker):
-		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", x.state, x.limit))
-	case killedOutright(x.state):
-		return fmt.Errorf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", x.state, peakNote(x.state))
+		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s): %s", c.state, reason))
+	case killedOutright(c.state) && r.killCause != nil:
+		return r.killCause
+	case killedOutright(c.state) && r.stderr.holds(pressureMarker):
+		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", c.state, r.limit))
+	case killedOutright(c.state):
+		return fmt.Errorf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", c.state, peakNote(c.state))
 	case reason != "":
-		return fmt.Errorf("evaluator died (%s): %s", x.state, reason)
+		return fmt.Errorf("evaluator died (%s): %s", c.state, reason)
 	}
-	return fmt.Errorf("evaluator died (%s)", x.state)
+	return fmt.Errorf("evaluator died (%s)", c.state)
+}
+
+func (u _Uncollected) verdict(r _Remains) error {
+	var reason = r.stderr.reason()
+	switch {
+	case reason == runtimeOutOfMemory:
+		return _MemoryExhausted(fmt.Sprintf("evaluator ended but its exit could not be collected (%v): %s", u.waited, reason))
+	case r.killCause != nil:
+		return r.killCause
+	case reason != "":
+		return fmt.Errorf("evaluator ended but its exit could not be collected (%w): %s", u.waited, reason)
+	case r.stderr.holds(pressureMarker):
+		return _MemoryExhausted(fmt.Sprintf("evaluator ended near the memory limit of %d bytes but its exit could not be collected: %v", r.limit, u.waited))
+	}
+	return fmt.Errorf("evaluator ended but its exit could not be collected: %w", u.waited)
 }
 
 func peakNote(state *os.ProcessState) string {
