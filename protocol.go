@@ -15,7 +15,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 7
+	protocolVersion      = 8
 	exitMemoryLimit      = 86
 	requestsFD           = 3
 	responsesFD          = 4
@@ -105,6 +105,7 @@ func (f frames) oversized() error {
 
 type failure struct {
 	Kind    string        `json:"kind"`
+	At      string        `json:"at,omitempty"`
 	Message string        `json:"message"`
 	Thrown  *thrownOnWire `json:"thrown,omitempty"`
 }
@@ -132,7 +133,7 @@ var failureKinds = []failureKind{
 func (b blueprint) build(ctx context.Context) (built servable, err error) {
 	defer func() {
 		if failure := buildPanic(recover()); failure != nil {
-			err = fail(InvalidExpression, "%s: %w", (*dataPath)(nil), failure)
+			err = fail(InvalidExpression, "%w", failure)
 		}
 	}()
 	configured, err := configure(b.options())
@@ -172,10 +173,10 @@ func describeFailure(err error) failure {
 	if !isOwn {
 		failed = expressionError{kind: EvaluationFailed, cause: err}
 	}
-	described := failure{Kind: "EvaluationFailed", Message: failed.Error(), Thrown: thrownOnWireFrom(err)}
+	described := failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error(), Thrown: thrownOnWireFrom(err)}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
-			described.Kind, described.Message = kind.name, failed.cause.Error()
+			described.Kind = kind.name
 		}
 	}
 	return described
@@ -235,7 +236,7 @@ func (f failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return expressionError{kind: kind, cause: carriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+	return expressionError{kind: kind, at: f.At, cause: carriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
 }
 
 func (t *thrownOnWire) rebuild() *Thrown {

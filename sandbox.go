@@ -124,9 +124,9 @@ func (s *Sandbox) make(ctx context.Context, plan blueprint) (*Expression, error)
 		return nil, failure
 	}
 	var keep = keepWithin(s.lifetime)
-	held, err := keep.hold(ctx)
-	if err != nil {
-		return nil, err
+	held, holding := keep.hold(ctx)
+	if !holding {
+		return nil, keep.closed()
 	}
 	built, err := s.engine.build(keep.lifetime, plan)
 	if failure := s.framed(ctx, err); failure != nil {
@@ -144,11 +144,11 @@ func keepWithin(sandbox context.Context) *_Keep {
 	return &_Keep{sandbox: sandbox, lifetime: lifetime, end: end}
 }
 
-func (k *_Keep) hold(ctx context.Context) (*handle, error) {
+func (k *_Keep) hold(ctx context.Context) (*handle, bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.ended() {
-		return nil, fail(Closed, "its context or its sandbox's context has ended")
+		return nil, false
 	}
 	k.holders++
 	lifetime, end := context.WithCancelCause(ctx)
@@ -159,7 +159,7 @@ func (k *_Keep) hold(ctx context.Context) (*handle, error) {
 	})
 	held := &handle{lifetime: lifetime, keep: k}
 	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
-	return held, nil
+	return held, true
 }
 
 func (k *_Keep) ended() bool {
@@ -168,6 +168,28 @@ func (k *_Keep) ended() bool {
 
 func (h *handle) ended() bool {
 	return h.lifetime.Err() != nil || h.keep.ended()
+}
+
+func (k *_Keep) sandboxEnded() bool {
+	return k.sandbox.Err() != nil || errors.Is(context.Cause(k.lifetime), errSandboxEnded)
+}
+
+func (k *_Keep) closed() expressionError {
+	return fail(Closed, "%s has ended", k.endedContext())
+}
+
+func (k *_Keep) endedContext() string {
+	if k.sandboxEnded() {
+		return "the sandbox's context"
+	}
+	return "every context it was made or copied with"
+}
+
+func (h *handle) endedContext() string {
+	if h.lifetime.Err() != nil && !h.keep.sandboxEnded() {
+		return "its own context, the one it was made or copied with,"
+	}
+	return h.keep.endedContext()
 }
 
 func (k *_Keep) release() {
@@ -206,12 +228,13 @@ func (e *Expression) Copy(ctx context.Context) (*Expression, error) {
 	if e == nil || e.held == nil {
 		return nil, unmadeExpression("Copy")
 	}
-	if err := e.held.admit(ctx); err != nil {
+	var at = selectedPath(e.path).String()
+	if err := e.held.admit(ctx, at); err != nil {
 		return nil, err
 	}
-	held, err := e.held.keep.hold(ctx)
-	if err != nil {
-		return nil, err
+	held, holding := e.held.keep.hold(ctx)
+	if !holding {
+		return nil, e.held.keep.closed().within(at)
 	}
 	return &Expression{held: held, path: e.path}, nil
 }
@@ -220,12 +243,12 @@ func unmadeExpression(method string) error {
 	return fail(InvalidExpression, "%s on an expression not made by a Sandbox", method)
 }
 
-func (h *handle) admit(ctx context.Context) error {
+func (h *handle) admit(ctx context.Context, at string) error {
 	if h.ended() {
-		return fail(Closed, "its context or its sandbox's context has ended")
+		return fail(Closed, "%s has ended", h.endedContext()).within(at)
 	}
 	if ctx.Err() != nil {
-		return fail(EvaluationFailed, "%w", cancelled(ctx))
+		return fail(EvaluationFailed, "%w", cancelled(ctx)).within(at)
 	}
 	return nil
 }
@@ -241,14 +264,14 @@ func (h *handle) answer(ctx context.Context, request work, decode func(settled a
 	at := selectedPath(request.Path).String()
 	switch {
 	case h.ended():
-		return fail(Closed, "its context or its sandbox's context ended while it ran")
+		return fail(Closed, "%s ended while it ran", h.endedContext()).within(at)
 	case ctx.Err() != nil:
 		return located(at, cancelled(ctx))
 	}
 	switch settled := result.(type) {
 	case answered:
 		if err := decode(settled); err != nil {
-			return fail(CoercionFailed, "%s: %w", blame(at, settled.data, err), err)
+			return fail(CoercionFailed, "%w", err).within(blame(at, settled.data, err))
 		}
 		return nil
 	case refused:

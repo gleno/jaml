@@ -336,13 +336,10 @@ func (s *replyStream) frame() ([]byte, error) {
 }
 
 func located(at string, err error) error {
-	if _, isLocated := err.(expressionError); isLocated {
-		return err
+	if own, isOwn := err.(expressionError); isOwn {
+		return own
 	}
-	if at == "" {
-		return fail(EvaluationFailed, "%w", err)
-	}
-	return fail(EvaluationFailed, "%s: %w", at, err)
+	return fail(EvaluationFailed, "%w", err).within(at)
 }
 
 func cancelled(ctx context.Context) error {

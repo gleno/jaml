@@ -23,7 +23,7 @@ func (e *Expression) resolve(ctx context.Context, into any, args []any) error {
 	if err := admitPath(e.path); err != nil {
 		return err
 	}
-	if err := e.held.admit(ctx); err != nil {
+	if err := e.held.admit(ctx, selectedPath(e.path).String()); err != nil {
 		return err
 	}
 	var target = reflect.TypeOf(into).Elem()

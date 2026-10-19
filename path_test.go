@@ -52,9 +52,9 @@ func TestAMissingPathIsAnErrorInBothKinds(t *testing.T) {
 		"index not a number": {[]string{"config", "servers", "first"}, []string{`no item "first"`}},
 		"negative index":     {[]string{"config", "servers", "-1"}, []string{`no item "-1"`}},
 		"into a scalar":      {[]string{"config", "servers", "1", "name", "x"}, []string{"$.config.servers[1].name", `is a string, which has no key "x"`}},
-		"into an expression": {[]string{"config", "computed", "inner"}, []string{"$.config.computed", "is an expression, unevaluated until Resolve"}},
-		"into interpolation": {[]string{"config", "label", "x"}, []string{"is an expression"}},
-		"into an evaluated":  {[]string{"config", "servers", "0", "port", "x"}, []string{"is an expression"}},
+		"into an expression": {[]string{"config", "computed", "inner"}, []string{"$.config.computed is code; At cannot look inside what it produces: resolve $.config.computed and index the result"}},
+		"into interpolation": {[]string{"config", "label", "x"}, []string{"$.config.label is code; At cannot look inside"}},
+		"into an evaluated":  {[]string{"config", "servers", "0", "port", "x"}, []string{"$.config.servers[0].port is code; At cannot look inside"}},
 		"into a null":        {[]string{"config", "empty", "x"}, []string{"$.config.empty", "is a null"}},
 	}
 	for name, c := range cases {

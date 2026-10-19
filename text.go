@@ -68,7 +68,7 @@ func (c *compiler) visit(node any, at *dataPath) error {
 	}
 	compiled, err := c.compileText(written)
 	if err != nil {
-		return fail(InvalidExpression, "%s: %w", at, err)
+		return fail(InvalidExpression, "%w", err).within(at.String())
 	}
 	if compiled.holdsCode() {
 		c.texts[written] = compiled

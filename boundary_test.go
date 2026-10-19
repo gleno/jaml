@@ -3,7 +3,6 @@ package jaml
 import (
 	"errors"
 	"math"
-	"strings"
 	"testing"
 )
 
@@ -58,9 +57,7 @@ func TestBadVarsAreRefusedBeforeRendering(t *testing.T) {
 				for _, path := range [][]string{{"plain"}, nil} {
 					err := resolveInto(valued(t.Context(), vars), &out, document.At(path...))
 					expectError(t, err, EvaluationFailed, c.fragment)
-					if strings.Contains(err.Error(), "$") {
-						t.Fatalf("a var error blames a document path: %q", err)
-					}
+					expectNoTemplatePath(t, err)
 				}
 			})
 		}

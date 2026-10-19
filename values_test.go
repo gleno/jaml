@@ -10,8 +10,8 @@ import (
 
 func expectNoTemplatePath(t *testing.T, err error) {
 	t.Helper()
-	if err != nil && strings.Contains(err.Error(), "$") {
-		t.Fatalf("a var error blames a document path: %q", err)
+	if err != nil && (!strings.HasPrefix(err.Error(), "$: ") || strings.Count(err.Error(), "$") != 1) {
+		t.Fatalf("a var error blames a document path rather than the root: %q", err)
 	}
 }
 

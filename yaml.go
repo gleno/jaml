@@ -138,7 +138,7 @@ func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
 		return resolveScalar(node, at.path)
 	}
 	if at.path.depth() >= maxDataDepth {
-		return nil, fail(InvalidExpression, "%w", tooDeep(at.path.String()))
+		return nil, fail(InvalidExpression, "%s", nestsTooDeep).within(at.path.String())
 	}
 	if node.Anchor != "" {
 		r.expanding[node] = true
@@ -479,5 +479,5 @@ func (n numeral) float() (any, error) {
 }
 
 func refuse(at *dataPath, message string) error {
-	return fail(InvalidExpression, "%s: %s", at, message)
+	return fail(InvalidExpression, "%s", message).within(at.String())
 }

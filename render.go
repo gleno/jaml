@@ -110,7 +110,7 @@ func (r *renderer) renderText(compiled text, at *dataPath) (any, error) {
 		}
 		written, err := stringify(admitted)
 		if err != nil {
-			return nil, fail(EvaluationFailed, "%s: %s: %w", at, piece.code.written(), err)
+			return nil, fail(EvaluationFailed, "%s: %w", piece.code.written(), err).within(at.String())
 		}
 		rendered.WriteString(written)
 	}
@@ -128,7 +128,7 @@ func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, er
 		return result, nil
 	}
 	if coercion == Strict {
-		return nil, fail(CoercionFailed, "%s: %s is %s, which strict %s coercion refuses", at, compiled.written(), absent, absent)
+		return nil, fail(CoercionFailed, "%s is %s, which strict %s coercion refuses", compiled.written(), absent, absent).within(at.String())
 	}
 	return nil, nil
 }
@@ -140,7 +140,7 @@ func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
 	}
 	result, err := session.evaluate(compiled, r.args)
 	if err != nil {
-		return nil, fail(EvaluationFailed, "%s: %s: %w", at, compiled.written(), err)
+		return nil, fail(EvaluationFailed, "%s: %w", compiled.written(), err).within(at.String())
 	}
 	return result, nil
 }

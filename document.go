@@ -82,7 +82,7 @@ func (d *_Document) prepare(request work) (prepared, error) {
 func encodeResult(tree any, at *dataPath) ([]byte, error) {
 	var encoded bytes.Buffer
 	if err := writeTree(&encoded, tree); err != nil {
-		return nil, fail(CoercionFailed, "%s: %w", at, err)
+		return nil, fail(CoercionFailed, "%w", err).within(at.String())
 	}
 	return encoded.Bytes(), nil
 }
@@ -142,20 +142,24 @@ func (d *_Document) selectPath(path []string) (subtree, error) {
 			}
 			current, at = typed[index], at.atStep(step)
 		default:
-			return subtree{}, missingPath(at, fmt.Sprintf("is %s, which has no key %q", d.describe(current), step))
+			return subtree{}, d.missingInside(subtree{node: current, at: at}, step)
 		}
 	}
 	return subtree{node: current, at: at}, nil
 }
 
-func (d *_Document) describe(node any) string {
-	switch typed := node.(type) {
+func (d *_Document) missingInside(leaf subtree, step string) error {
+	if written, isString := leaf.node.(string); isString && d.texts[written].holdsCode() {
+		return missingPath(leaf.at, fmt.Sprintf("is code; At cannot look inside what it produces: resolve %s and index the result", leaf.at))
+	}
+	return missingPath(leaf.at, fmt.Sprintf("is %s, which has no key %q", describeLeaf(leaf.node), step))
+}
+
+func describeLeaf(node any) string {
+	switch node.(type) {
 	case nil:
 		return "a null"
 	case string:
-		if _, hasCode := d.texts[typed]; hasCode {
-			return "an expression, unevaluated until Resolve, so it"
-		}
 		return "a string"
 	case bool:
 		return "a bool"
@@ -165,7 +169,7 @@ func (d *_Document) describe(node any) string {
 }
 
 func missingPath(at *dataPath, message string) error {
-	return fail(MissingPath, "%s %s", at, message)
+	return fail(MissingPath, "%s", message).within(at.String())
 }
 
 func eachChild(node any, at *dataPath, visit func(child any, at *dataPath) error) error {
