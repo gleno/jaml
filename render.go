@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,7 +40,7 @@ func (p _Place) item(index int) _Place {
 func (r *_Renderer) render(node any, place _Place) (any, error) {
 	if place.skips.skips() {
 		r.skipped = append(r.skipped, r.relative(place.path))
-		return map[string]any{}, nil
+		return nil, nil
 	}
 	switch typed := node.(type) {
 	case *_Mapping:
@@ -67,10 +68,41 @@ func (r *_Renderer) render(node any, place _Place) (any, error) {
 		if !hasCode {
 			return typed, nil
 		}
-		return r.renderText(compiled, place.path)
+		produced, err := r.renderText(compiled, place.path)
+		if err != nil {
+			return nil, err
+		}
+		return produced, place.refuseCodeAtSkips(produced)
 	default:
 		return node, nil
 	}
+}
+
+func (p _Place) refuseCodeAtSkips(produced any) error {
+	switch {
+	case p.skips == nil:
+		return nil
+	case p.skips.skips():
+		if produced == nil {
+			return nil
+		}
+		return fail(CoercionFailed, "code produced a value where Resolve expects a *jaml.Expression, which binds only to a document node").within(p.path.String())
+	}
+	switch typed := produced.(type) {
+	case map[string]any:
+		for _, key := range slices.Sorted(maps.Keys(typed)) {
+			if err := p.key(key).refuseCodeAtSkips(typed[key]); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, item := range typed {
+			if err := p.item(index).refuseCodeAtSkips(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *_Renderer) relative(path *_DataPath) []string {

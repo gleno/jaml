@@ -145,7 +145,7 @@ config, err := jaml.Resolve[Config](ctx, document.At("config"), user)
 names, err := jaml.Resolve[[]string](ctx, config.Names, other)
 ```
 
-Fields are matched to the document the way `encoding/json` matches them: tags, embedded structs, `-`, and case-insensitive names. Where the document holds that path, the field gets a view, even when the value there is null: a literal is a constant expression, so that view resolves to null. Where the document lacks the path, the field stays nil. A type that decodes itself (`json.Unmarshaler`, `encoding.TextUnmarshaler`) and `any` never skip anything. `T` never sees the skipped part. A `jaml.Expression` held by value rather than by pointer is an `InvalidTarget` error.
+Fields are matched to the document the way `encoding/json` matches them: tags, embedded structs, `-`, and case-insensitive names. Where the document holds that path, the field gets a view, even when the value there is null: a literal is a constant expression, so that view resolves to null. Where the document lacks the path, the field stays nil. Code never fills such a field: where code produces null there, the field stays nil, and any other value is a `CoercionFailed` error at that path. A type that decodes itself (`json.Unmarshaler`, `encoding.TextUnmarshaler`) and `any` never skip anything. `T` never sees the skipped part. A `jaml.Expression` held by value rather than by pointer is an `InvalidTarget` error.
 
 ### Copies
 

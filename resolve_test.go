@@ -3,6 +3,8 @@ package jaml
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -225,5 +227,97 @@ m:
 		var ctx = WithScript(t.Context(), "const order = []; function tick(name) { order.push(name); return order.length } var seen = () => order")
 		var got = mustResolve[map[string]any](t, ctx, document.At("m"))
 		expectEqual(t, got["z"], []any{"own a", "base b", "other d", "own c"})
+	})
+}
+
+type _LazyHeld struct {
+	Limit *Expression `json:"limit"`
+}
+
+type _LazyTarget struct {
+	Root  _LazyHeld              `json:"root"`
+	Named map[string]*Expression `json:"named"`
+	Each  []*Expression          `json:"each"`
+	Deep  []map[string]_LazyHeld `json:"deep"`
+	Whole *_LazyTarget           `json:"whole"`
+}
+
+func unmadeExpressions(value reflect.Value, path string) []string {
+	switch value.Kind() {
+	case reflect.Pointer:
+		if value.IsNil() {
+			return nil
+		}
+		if held, isExpression := value.Interface().(*Expression); isExpression {
+			if held.held == nil {
+				return []string{path}
+			}
+			return nil
+		}
+		return unmadeExpressions(value.Elem(), path)
+	case reflect.Struct:
+		var found []string
+		for i := range value.NumField() {
+			found = append(found, unmadeExpressions(value.Field(i), path+"."+value.Type().Field(i).Name)...)
+		}
+		return found
+	case reflect.Map:
+		var found []string
+		for _, key := range value.MapKeys() {
+			found = append(found, unmadeExpressions(value.MapIndex(key), fmt.Sprintf("%s[%v]", path, key))...)
+		}
+		return found
+	case reflect.Slice, reflect.Array:
+		var found []string
+		for i := range value.Len() {
+			found = append(found, unmadeExpressions(value.Index(i), fmt.Sprintf("%s[%d]", path, i))...)
+		}
+		return found
+	}
+	return nil
+}
+
+func TestCodeNeverFillsALazyField(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var refused = map[string]string{
+			"root.limit: object":      "root: \"${ {limit: {}} }\"\n",
+			"root.LIMIT: folded key":  "root: \"${ {LIMIT: 5} }\"\n",
+			"named.a: map value":      "named: \"${ {a: {}} }\"\n",
+			"each[1]: slice item":     "each: \"${ [null, 'x'] }\"\n",
+			"deep[0].k.limit: nested": "deep:\n  - \"${ {k: {limit: []}} }\"\n",
+			"whole.named.a: whole":    "\"${ {whole: {named: {a: false}}} }\"\n",
+			"whole.root.limit: zero":  "whole: \"${ {root: {limit: 0}} }\"\n",
+		}
+		for name, text := range refused {
+			t.Run(name, func(t *testing.T) {
+				var place, _, _ = strings.Cut(name, ":")
+				_, err := Resolve[_LazyTarget](t.Context(), mustJaml(t, sb, text))
+				expectError(t, err, CoercionFailed, "$."+place+": code produced a value where Resolve expects a *jaml.Expression")
+			})
+		}
+		var accepted = []string{
+			"root: \"${ {limit: null} }\"\n",
+			"root: \"${ {} }\"\n",
+			"named: \"${ {a: null} }\"\n",
+			"each: \"${ [null] }\"\n",
+			"deep:\n  - \"${ {k: {limit: null}} }\"\n",
+			"whole: \"${ {root: {}, named: {}, each: []} }\"\n",
+			"root: {limit: ~}\nnamed: {a: ~}\neach: [~]\ndeep: [{k: {limit: ~}}]\nwhole: {whole: {root: {limit: \"${ 1 }\"}}}\n",
+		}
+		for _, text := range accepted {
+			got, err := Resolve[_LazyTarget](t.Context(), mustJaml(t, sb, text))
+			if err != nil {
+				t.Fatalf("%q: %v", text, err)
+			}
+			if unmade := unmadeExpressions(reflect.ValueOf(got), "T"); len(unmade) > 0 {
+				t.Fatalf("%q: T observes unmade expressions at %v", text, unmade)
+			}
+		}
+		var codeNull = mustResolve[_LazyTarget](t, t.Context(), mustJaml(t, sb, "root: \"${ {limit: null} }\"\n"))
+		if codeNull.Root.Limit != nil {
+			t.Fatalf("code null bound %v", codeNull.Root.Limit)
+		}
+		var documentNull = mustResolve[_LazyTarget](t, t.Context(), mustJaml(t, sb, "root: {limit: ~}\n"))
+		expectEqual(t, mustResolve[any](t, t.Context(), documentNull.Root.Limit), nil)
 	})
 }
