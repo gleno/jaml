@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -235,27 +237,109 @@ func (c *_Compiled) codedChildren(node any) []_Child {
 	return coded
 }
 
+type _OutlineWriting struct {
+	steps map[string]*_CodeOutline
+	keys  []string
+}
+
 func (o *_CodeOutline) MarshalJSON() ([]byte, error) {
-	if o.steps == nil {
-		return []byte("true"), nil
+	var w = unboundedWriter()
+	var open []*_OutlineWriting
+	var pending = o
+	for {
+		if next := writeOutlineValue(w, pending); next != nil {
+			open = append(open, next)
+		}
+		for len(open) > 0 && len(open[len(open)-1].keys) == 0 {
+			w.mark('}')
+			open = open[:len(open)-1]
+		}
+		if len(open) == 0 {
+			return w.written, nil
+		}
+		var top = open[len(open)-1]
+		if len(top.keys) < len(top.steps) {
+			w.mark(',')
+		}
+		var key = top.keys[0]
+		top.keys = top.keys[1:]
+		if err := w.quoted(key); err != nil {
+			return nil, err
+		}
+		w.mark(':')
+		pending = top.steps[key]
 	}
-	return json.Marshal(o.steps)
+}
+
+func writeOutlineValue(w *_WireWriter, o *_CodeOutline) *_OutlineWriting {
+	switch {
+	case o == nil:
+		w.written = append(w.written, "null"...)
+	case o.steps == nil:
+		w.written = append(w.written, "true"...)
+	default:
+		w.mark('{')
+		return &_OutlineWriting{steps: o.steps, keys: slices.Sorted(maps.Keys(o.steps))}
+	}
+	return nil
 }
 
 func (o *_CodeOutline) UnmarshalJSON(written []byte) error {
-	if bytes.Equal(written, []byte("true")) {
-		o.steps = nil
-		return nil
-	}
-	var steps map[string]*_CodeOutline
-	if err := json.Unmarshal(written, &steps); err != nil {
+	var tokens = json.NewDecoder(bytes.NewReader(written))
+	first, err := readOutlineValue(tokens)
+	if err != nil {
 		return err
 	}
-	if len(steps) == 0 {
-		return errors.New("a code outline step holds nothing")
+	if first == nil {
+		return errors.New("a code outline holds a null step")
 	}
-	o.steps = steps
+	*o = *first
+	if o.steps == nil {
+		return nil
+	}
+	var open = []*_CodeOutline{o}
+	for len(open) > 0 {
+		var top = open[len(open)-1]
+		if !tokens.More() {
+			if _, err := tokens.Token(); err != nil {
+				return err
+			}
+			if len(top.steps) == 0 {
+				return errors.New("a code outline step holds nothing")
+			}
+			open = open[:len(open)-1]
+			continue
+		}
+		key, err := tokens.Token()
+		if err != nil {
+			return err
+		}
+		child, err := readOutlineValue(tokens)
+		if err != nil {
+			return err
+		}
+		top.steps[key.(string)] = child
+		if child != nil && child.steps != nil {
+			open = append(open, child)
+		}
+	}
 	return nil
+}
+
+func readOutlineValue(tokens *json.Decoder) (*_CodeOutline, error) {
+	token, err := tokens.Token()
+	if err != nil {
+		return nil, err
+	}
+	switch token {
+	case true:
+		return &_CodeOutline{}, nil
+	case nil:
+		return nil, nil
+	case json.Delim('{'):
+		return &_CodeOutline{steps: map[string]*_CodeOutline{}}, nil
+	}
+	return nil, fmt.Errorf("a code outline step is %v, neither true nor an object", token)
 }
 
 func (o *_CodeOutline) checked() error {

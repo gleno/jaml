@@ -3,6 +3,7 @@ package jaml
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -123,5 +124,46 @@ func TestTheHostRefusesABadlyOutlinedReply(t *testing.T) {
 	var empty _Reply
 	if err := json.Unmarshal([]byte(`{"job":1,"built":true,"code":{}}`), &empty); err == nil {
 		t.Errorf("the host decoded an outline step that holds nothing")
+	}
+}
+
+func TestShippingAnOutlineCostsInProportionToItsDepth(t *testing.T) {
+	var shallow, deep = outlineShippingCost(t, 1024), outlineShippingCost(t, 2048)
+	if deep > 3*shallow {
+		t.Fatalf("shipping an outline twice as deep allocated %d bytes against %d", deep, shallow)
+	}
+}
+
+func outlineShippingCost(t *testing.T, depth int) uint64 {
+	t.Helper()
+	configured, err := configure(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := makeDocument(t.Context(), deepTemplate(depth, `"${ 1 }"`), configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outline = document.outline()
+	expectEqual(t, outline.checked(), nil)
+	var cheapest uint64 = math.MaxUint64
+	for range 3 {
+		cheapest = min(cheapest, allocatedIn(func() { shipOutline(t, outline) }))
+	}
+	return cheapest
+}
+
+func shipOutline(t *testing.T, outline *_CodeOutline) {
+	t.Helper()
+	sent, err := _Frames{limit: 1 << 30}.built(1, outline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received _Reply
+	if err := json.Unmarshal(sent, &received); err != nil {
+		t.Fatal(err)
+	}
+	if err := received.fits(opBuild); err != nil {
+		t.Fatal(err)
 	}
 }
