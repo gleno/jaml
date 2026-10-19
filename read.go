@@ -43,11 +43,27 @@ func captureRealm(vm *goja.Runtime) _Realm {
 	return _Realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), arrayPrototype: arrayPrototype, ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
 }
 
+type _Native struct {
+	name   string
+	length int
+	call   func(goja.FunctionCall) goja.Value
+}
+
+func (n _Native) on(vm *goja.Runtime) *goja.Object {
+	var function = vm.ToValue(n.call).ToObject(vm)
+	for key, value := range map[string]any{"name": n.name, "length": n.length} {
+		if err := function.DefineDataProperty(key, vm.ToValue(value), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE); err != nil {
+			panic(err)
+		}
+	}
+	return function
+}
+
 func (r _Realm) native(run func()) error {
-	native, _ := goja.AssertFunction(r.vm.ToValue(func(goja.FunctionCall) goja.Value {
+	native, _ := goja.AssertFunction(_Native{call: func(goja.FunctionCall) goja.Value {
 		run()
 		return goja.Undefined()
-	}))
+	}}.on(r.vm))
 	_, err := native(goja.Undefined())
 	return err
 }

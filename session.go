@@ -138,15 +138,15 @@ func (s *_Session) bind(values _BoundValues) error {
 func (r _Realm) bindValue(name string, value _Datum) error {
 	var shown = clip(name, keyExcerptLength)
 	var bound goja.Value
-	var read = r.vm.ToValue(func(goja.FunctionCall) goja.Value {
+	var read = _Native{name: "get " + name, call: func(goja.FunctionCall) goja.Value {
 		if bound == nil {
 			bound = r.thaw(shown, value)
 		}
 		return bound
-	})
-	var refuse = r.vm.ToValue(func(goja.FunctionCall) goja.Value {
+	}}.on(r.vm)
+	var refuse = _Native{name: "set " + name, length: 1, call: func(goja.FunctionCall) goja.Value {
 		panic(r.vm.NewTypeError(readOnlyRefusal))
-	})
+	}}.on(r.vm)
 	for _, accessor := range []goja.Value{read, refuse} {
 		if _, err := r.freeze(goja.Undefined(), accessor); err != nil {
 			return fmt.Errorf("value %q cannot be bound: %w", shown, r.explain(err))
@@ -197,7 +197,7 @@ func guardJSONParse(vm *goja.Runtime) (intrinsic goja.Callable) {
 	var json = vm.Get("JSON").ToObject(vm)
 	parse, _ := goja.AssertFunction(json.Get("parse"))
 	var rangeError = vm.Get("RangeError")
-	var guarded = vm.ToValue(func(call goja.FunctionCall) goja.Value {
+	var guarded = _Native{name: "parse", length: 2, call: func(call goja.FunctionCall) goja.Value {
 		var text = call.Argument(0).ToString()
 		if jsonDepth(text.String()) > maxDataDepth {
 			refusal, err := vm.New(rangeError, vm.ToValue(fmt.Sprintf("JSON text nests deeper than %d", maxDataDepth)))
@@ -211,12 +211,7 @@ func guardJSONParse(vm *goja.Runtime) (intrinsic goja.Callable) {
 			panic(err)
 		}
 		return parsed
-	})
-	for key, value := range map[string]any{"name": "parse", "length": 2} {
-		if err := guarded.ToObject(vm).DefineDataProperty(key, vm.ToValue(value), goja.FLAG_FALSE, goja.FLAG_TRUE, goja.FLAG_FALSE); err != nil {
-			panic(err)
-		}
-	}
+	}}.on(vm)
 	if err := json.Set("parse", guarded); err != nil {
 		panic(err)
 	}

@@ -116,6 +116,13 @@ func TestAValueCannotBeDeletedOrRedefinedBeforeOrAfterItIsRead(t *testing.T) {
 	})
 }
 
+func TestAValueAccessorIsNamedLikeAJavaScriptAccessor(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var named = "(d => [d.get.name, d.get.length, d.set.name, d.set.length, String(d.get), (() => { try { d.set(1) } catch (e) { return e.stack.includes('github.com') || e.stack.includes('.func') } })()])(Object.getOwnPropertyDescriptor(globalThis, 'user'))"
+		expectEqual(t, mustResolve[[]any](t, withValues(t, map[string]any{"user": 1}), mustExpression(t, sb, named)), []any{"get user", float64(0), "set user", float64(1), "function get user() { [native code] }", false})
+	})
+}
+
 func TestAValueDescriptorShowsItsAccessors(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var described = "(d => [typeof d.get, typeof d.set, d.enumerable, d.configurable, 'value' in d, Object.isFrozen(d.get), Object.isFrozen(d.set)])(Object.getOwnPropertyDescriptor(globalThis, 'user'))"

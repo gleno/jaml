@@ -13,6 +13,12 @@ const censusMaker = `(() => {
 	const has = bound(Function.prototype.call, Set.prototype.has);
 	const add = bound(Function.prototype.call, Set.prototype.add);
 	const sort = bound(Function.prototype.call, Array.prototype.sort);
+	const includes = bound(Function.prototype.call, String.prototype.includes);
+	const goNamed = (object) => {
+		const described = typeof object === "function" ? getOwnPropertyDescriptor(object, "name") : undefined;
+		const name = described !== undefined && hasOwn(described, "value") ? described.value : "";
+		return typeof name === "string" && (includes(name, "github.com") || includes(name, "/") || includes(name, ".func"));
+	};
 	const Seen = Set;
 	const named = String;
 	const self = globalThis;
@@ -65,6 +71,9 @@ const censusMaker = `(() => {
 			add(seen, object);
 			if (isExtensible(object)) {
 				loose[found++] = path;
+			}
+			if (goNamed(object)) {
+				loose[found++] = path + "<go name>";
 			}
 			const keys = ownKeys(object);
 			for (let i = 0; i < keys.length; i++) {
@@ -145,8 +154,8 @@ func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var getter = realm.vm.ToValue(func(goja.FunctionCall) goja.Value { return goja.Undefined() })
-	var setter = realm.vm.ToValue(func(goja.FunctionCall) goja.Value { return goja.Undefined() })
+	var getter = _Native{name: "get bound", call: func(goja.FunctionCall) goja.Value { return goja.Undefined() }}.on(realm.vm)
+	var setter = _Native{name: "set bound", length: 1, call: func(goja.FunctionCall) goja.Value { return goja.Undefined() }}.on(realm.vm)
 	if err := realm.vm.GlobalObject().DefineAccessorProperty("bound", getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
 		t.Fatal(err)
 	}
