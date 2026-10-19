@@ -231,3 +231,121 @@ func TestAStrictUndefinedArrowChainResolvesQuicklyAndHonorsItsContext(t *testing
 		expectError(t, err, CoercionFailed, objectLiteralHint)
 	})
 }
+
+var regexPayloads = []string{"/}/", "/'/g", "/[/}]+/", "/\\/}/i", "/\"}\"/", "/\\d+/"}
+
+var regexContexts = []string{
+	"R.test('}')", "(R)", "[R]", "[1, R]", "f(R)", "f(1, R)", "a ? R : 1", "a ? 1 : R", "!R", "typeof R", "void R",
+	"x => R", "async x => R", "(x) => R", "async (x) => R", "(x = R)", "a && R", "a || R", "a ?? R", "a + R", "a == R",
+	"a !== R", "a in R", "({a: R})", "`${R}`", "`a${R}b${R}c`", "a[R]", "new RegExp(R)", "[...R]", "f(...R)",
+	"(() => { return R })()", "(() => { if (a) R; })()", "(() => { if (a) {} R; })()", "(() => { while (a) R; })()",
+	"(() => { for (const m of R.exec('}')) return m })()", "(() => { for (const [m] of R) ; })()", "(() => { for (m of R) ; })()",
+	"(() => { for (const {m} of R) ; })()", "(() => { for (let i = 0; i < R; i++) ; })()", "(() => { for (const k in R) ; })()",
+	"(async () => { await R })()", "(async () => { for await (const m of R) ; })()", "(async function () { return await R })()",
+	"async () => await R", "(async x => await R)", "(function* () { yield R })()", "(function* () { yield* R })()",
+	"(() => { switch (a) { case R: break; default: R } })()", "(() => { do R; while (a) })()", "(() => { throw R })()",
+	"(() => { l: R })()", "(() => { a;\nR })()", "(() => { {} R })()", "(() => { function f() {} R })()",
+	"(() => { class A {} R })()", "(() => { const f = () => {}\nR })()", "(() => { try {} catch (e) {} R })()",
+	"(() => { try {} finally {} R })()", "(() => { if (a) {} else R })()", "(() => { if (a) 1; else R })()",
+	"(() => { return\nR })()", "({ m() { return R } })", "({ get x() { return R } })", "({ async m() { await R } })",
+	"({ *g() { yield R } })", "({ async *g() { yield await R } })", "(class { m() { return R } static s = R })",
+	"(class { static { R } })", "(class extends Object { m() { return super.m(R) } })", "a?.[R]", "a?.(R)",
+	"tag`${R}`", "(() => { const o = { of: R }; return o.of })()", "(() => { let x = 1; x\n++x; return R })()",
+	"(() => { var await = 1; return [await, R] })()", "(async () => { const x = () => R; await x })()",
+	"(() => { async function g() { await R } return g })()", "(() => { label: for (;;) { break label } R })()",
+	"(() => { if (a) for (;;) R; })()", "(() => { async () => {}\nR })()",
+}
+
+var divisionContexts = []string{
+	"a / 2 / b", "a.of / 2 / 1", "a.await / 2 / 1", "a.yield / 2 / 1", "a.return / 2 / 1", "(a) / 2 / 1", "[a] / 2 / 1",
+	"a[0] / 2 / 1", "f() / 2 / 1", "1 / 2 / 1", "'s' / 2 / 1", "`t` / 2 / 1", "x++ / 2 / 1", "this / 2 / 1",
+	"null / 2 / 1", "true / 2 / 1", "(function () {}) / 2 / 1", "function () {} / 2 / 1", "({}) / 2 / 1",
+	"(() => { var await = 6; return await / 2 / 1 })()", "(() => { var of = 6; return of / 2 / 1 })()",
+	"(() => { var async = 6; return async / 2 / 1 })()", "(() => { let of = [4]; for (const x of of) return x / 2 / 1 })()",
+	"(function () { var await = 4; return await / 2 / 1 })()", "(async () => (function () { var await = 1; return await / 1 / 1 })())()",
+	"(() => { var get = 2, set = 4, of = 6; return get / set / of })()", "a\n/ 2 / 1", "a /= 2", "a.b.c / 2 / 1",
+	"(class {}) / 2 / 1", "0x10 / 2 / 1", "1e3 / 2 / 1", ".5 / 2 / 1", "a?.b / 2 / 1", "a.#b", "(x => x) / 2 / 1",
+	"(async () => { var f = function () { var await = 2; return await / 2 / 1 }; return f() })()",
+	"(async () => { function g() { var await = 1; return await / 2 / 1 } return g })()", "(() => { var async = 1; return async / 2 / 1 })()",
+	"(async () => { const o = { await: 1 }; return o.await / 2 / 1 })()", "(() => { var of = 2; for (const x of [of / 2 / 1]) ; return of / 2 / 1 })()",
+	"(() => { var await = 2; const f = x => await / 2 / 1; return f })()", "(() => { var await = 2; return { m() { return await / 2 / 1 } } })()",
+	"(async function () { return class { m() { var await = 1; return await / 2 / 1 } } })()",
+}
+
+var templateCorpus = []string{
+	"`${ `${ '}' }` }`", "`a${ {b: '}'}.b }c`", "`${ (() => { return `}` })() }`", "`\\${ }`", "`$`", "`${1}${2}`",
+	"tag`x${ '}' }y`", "`${ /}/.source }`", "`${ `${ `${ '}}' }` }` }`", "`}` + '}' + \"}\"", "`${ {} }`",
+	"`${ x => { return { a: '}' } } }`", "`\n}\n`", "`${'`'}`",
+}
+
+var scriptCorpus = []string{
+	"let a = 1\nif (a) a++\nelse a--\n", "function f() { return 1 }\n/}/.test('}')\n", "class A {}\n/}/.test('}')\n",
+	"const f = () => {}\n/}/.test('}')\n", "for (const m of /\\d+/.exec('12')) m\n", "var await = 6\nconst x = await / 2 / 1\n",
+	"async function g() { for await (const x of y) {} return await /}/ }\n", "function* g() { yield /}/; yield* [] }\n",
+	"label: for (;;) { break label }\n", "a: b: c: 1\n", "switch (1) { case /}/.source: break; default: }\n",
+	"try { throw /}/ } catch (e) { e } finally { /}/ }\n", "if (1) { } /}/.test('}')\n", "do x++; while (0)\n",
+	"x = 1\n++x\n", "x = y\n(1)\n", "const o = { get a() { return /}/ }, set a(v) {}, async b() { await /}/ }, *c() { yield /}/ } }\n",
+	"class B { static s = /}/; #p = /}/; m() { return this.#p } static { /}/ } }\n", "x = a\n? b : c\n",
+	"const t = `${ `}` }`\n", "let y = 1;; /}/.test('}')\n", "if (a) /}/.test(a); else /}/.test(b)\n", "while (0) /}/\n",
+	"for (;;) break\n/}/\n", "{ /}/ }\n", "a\n++b\n", "async () => {}\n/}/.test('}')\n", "var of = 1\nof / 2 / 1\n",
+	"async function h() { const r = await /}/; return r }\nh\n", "function k() {}\nk()\n/}/\n", "for (const x of [1]) { }\n/}/\n",
+	"const v = 1\n/* } */\n// }\nv\n", "x = { a: 1 }\n/}/.test('}')\n", "if (a) {\n} else {\n}\n/}/\n",
+	"function* q() { const x = yield; yield /}/ }\n", "export_ = 1\n", "let z = a\n/ 2 / 1\n", "x\n++\ny\n",
+	"class C extends Object { constructor() { super(); this.r = /}/ } }\n", "async function* w() { for await (const v of x) yield /}/ }\n",
+}
+
+func differentialExpressions() []string {
+	var corpus []string
+	for _, context := range regexContexts {
+		for _, payload := range regexPayloads {
+			corpus = append(corpus, strings.ReplaceAll(context, "R", payload))
+		}
+	}
+	for _, context := range divisionContexts {
+		corpus = append(corpus, context, strings.ReplaceAll(context, " / 2 / 1", " / '}'.length"))
+	}
+	return append(corpus, templateCorpus...)
+}
+
+func TestTheScannerNeverRefusesWhatGojaAccepts(t *testing.T) {
+	var accepted int
+	for _, expression := range differentialExpressions() {
+		if _, err := parseExpression(expression); err != nil {
+			continue
+		}
+		accepted++
+		if err := refuseDeepExpression(expression); err != nil {
+			t.Errorf("%q: goja parses it, the scanner refuses: %v", expression, err)
+		}
+		var code = " " + expression + " "
+		if end, err := codeEnd(code+"}} '}}' }}", dollar.interpolation); err != nil || end != len(code) {
+			t.Errorf("%q: interpolation ends at %d %v, not %d", expression, end, err, len(code))
+		}
+		if end, err := codeEnd(code+"}", dollar.value); err != nil || end != len(code) {
+			t.Errorf("%q: value ends at %d %v, not %d", expression, end, err, len(code))
+		}
+	}
+	for _, script := range scriptCorpus {
+		if _, err := parser.ParseFile(nil, "", scriptOpens+script, 0, parser.WithDisableSourceMaps); err != nil {
+			continue
+		}
+		accepted++
+		if err := refuseDeepScript(script); err != nil {
+			t.Errorf("script %q: goja parses it, the scanner refuses: %v", script, err)
+		}
+	}
+	if accepted < 600 {
+		t.Fatalf("only %d corpus entries parse in goja", accepted)
+	}
+}
+
+func TestCodeThatBuiltBeforeTheScannerStillBuilds(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		expectEqual(t, mustResolve[[]string](t, t.Context(), mustExpression(t, sb, `(() => { const out = []; for (const m of /\d+/.exec('12')) out.push(m); return out })()`)), []string{"12"})
+		expectEqual(t, mustResolve[string](t, t.Context(), mustExpression(t, sb, `(() => { for (const m of /'/g.exec("'")) return m })()`)), "'")
+		expectEqual(t, mustResolve[map[string]string](t, t.Context(), mustJaml(t, sb, "v: ${ (() => { for (const m of /x}/.exec('x}')) return m })() }\n")), map[string]string{"v": "x}"})
+		expectEqual(t, mustResolve[int](t, t.Context(), mustExpression(t, sb, "(() => { var await = 6; return await / 2 })()")), 3)
+		var document = mustJaml(t, sb, "v: ${ half }\n")
+		expectEqual(t, mustResolve[int](t, WithScript(t.Context(), "var await = 6\nconst half = await / 2\n"), document.At("v")), 3)
+	})
+}

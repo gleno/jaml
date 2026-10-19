@@ -82,13 +82,23 @@ const (
 	settledByStatement
 )
 
+type _Header struct {
+	async       bool
+	declaration bool
+}
+
 type _Frame struct {
 	kind      _FrameKind
 	base      _Counts
 	local     _Counts
 	questions int
-	classes   int
+	classes   []bool
 	settling  _Settling
+	async     bool
+	concise   bool
+	header    _Header
+	closing   _Token
+	ends      bool
 }
 
 func (f *_Frame) depth(shape _CodeShape) int {
@@ -98,6 +108,11 @@ func (f *_Frame) depth(shape _CodeShape) int {
 func (f *_Frame) endExpression() {
 	f.local[arrowShape], f.local[rightShape], f.local[binaryShape], f.local[prefixShape], f.local[postfixShape] = 0, 0, 0, 0, 0
 	f.questions = 0
+	f.concise = false
+}
+
+func (f *_Frame) awaits() bool {
+	return f.async || f.concise
 }
 
 func (f *_Frame) beginOperand() {
@@ -127,6 +142,8 @@ type _CodeScan struct {
 	keyword  string
 	property bool
 	control  bool
+	header   _Header
+	boundary bool
 }
 
 type _CodeLimit struct {
@@ -206,6 +223,10 @@ func (s *_CodeScan) expectsOperand() bool {
 		return s.keyword != "class" && s.keyword != "function"
 	}
 	return true
+}
+
+func (s *_CodeScan) statementStart() bool {
+	return s.top().kind.holdsStatements() && (s.last == startToken || s.last == blockCloseToken || s.boundary)
 }
 
 func (s *_CodeScan) run() (int, error) {
@@ -288,6 +309,7 @@ func (s *_CodeScan) settle() {
 	var frame = s.top()
 	var settling = frame.settling
 	frame.settling = unsettled
+	s.boundary = settling == settledByStatement || settling == settledByLine && s.startsStatement()
 	switch {
 	case settling == unsettled || s.startsWord("else"):
 	case settling == settledByStatement:
@@ -315,6 +337,8 @@ func (s *_CodeScan) startsStatement() bool {
 
 func (s *_CodeScan) token() (int, bool, error) {
 	var c = s.text[s.at]
+	var header = s.header
+	s.header = _Header{}
 	switch {
 	case c == '"' || c == '\'':
 		return 0, false, s.quoted(c)
@@ -325,9 +349,9 @@ func (s *_CodeScan) token() (int, bool, error) {
 		s.fresh()
 		return 0, false, nil
 	case c == '#' || isWordByte(c):
-		return 0, false, s.word()
+		return 0, false, s.word(header)
 	case c == '(' || c == '[' || c == '{':
-		return 0, false, s.open(c)
+		return 0, false, s.open(c, header)
 	case c == ')' || c == ']':
 		return 0, false, s.close(c)
 	case c == '}':
@@ -335,7 +359,7 @@ func (s *_CodeScan) token() (int, bool, error) {
 	case c == '/' && s.expectsOperand():
 		return 0, false, s.regex()
 	}
-	return 0, false, s.punctuator()
+	return 0, false, s.punctuator(header)
 }
 
 func (s *_CodeScan) byteAt(offset int) byte {
@@ -442,7 +466,7 @@ func (s *_CodeScan) number() {
 	}
 }
 
-func (s *_CodeScan) word() error {
+func (s *_CodeScan) word(header _Header) error {
 	var start = s.at
 	if s.text[s.at] == '#' {
 		s.at++
@@ -459,19 +483,19 @@ func (s *_CodeScan) word() error {
 		case c >= utf8.RuneSelf:
 			r, size := utf8.DecodeRuneInString(s.text[s.at:])
 			if isSpace(r) {
-				return s.named(s.text[start:s.at])
+				return s.named(s.text[start:s.at], header)
 			}
 			s.at += size
 		case isWordByte(c):
 			s.at++
 		default:
-			return s.named(s.text[start:s.at])
+			return s.named(s.text[start:s.at], header)
 		}
 	}
-	return s.named(s.text[start:s.at])
+	return s.named(s.text[start:s.at], header)
 }
 
-func (s *_CodeScan) named(name string) error {
+func (s *_CodeScan) named(name string, header _Header) error {
 	if s.property {
 		s.operand()
 		return nil
@@ -484,10 +508,31 @@ func (s *_CodeScan) named(name string) error {
 	case "this", "super", "null", "true", "false":
 		s.fresh()
 		return nil
+	case "async":
+		var declaration = s.statementStart()
+		s.fresh()
+		s.header = _Header{async: true, declaration: declaration}
+		return nil
+	case "function":
+		s.header = _Header{async: header.async, declaration: header.declaration || s.statementStart()}
+		frame.endExpression()
+	case "await":
+		if !frame.awaits() {
+			s.fresh()
+			return nil
+		}
+		err = s.count(prefixShape)
+	case "of":
+		if frame.kind != controlFrame || s.expectsOperand() {
+			s.fresh()
+			return nil
+		}
 	case "if", "while", "for", "with":
 		if statements {
 			err = s.count(statementShape)
 		}
+		control = true
+	case "catch", "switch":
 		control = true
 	case "do":
 		if statements {
@@ -497,17 +542,18 @@ func (s *_CodeScan) named(name string) error {
 		if statements {
 			frame.local[statementShape] = 0
 		}
-	case "typeof", "void", "delete", "new", "await", "yield", "extends":
+	case "typeof", "void", "delete", "new", "yield", "extends":
 		err = s.count(prefixShape)
 	case "in", "instanceof":
 		err = s.binary()
 	case "class":
-		frame.classes++
+		frame.classes = append(frame.classes, s.statementStart())
 		err = s.count(nestingShape)
-	case "return", "throw", "try", "finally", "function", "else":
+	case "return", "throw", "try", "finally", "else", "break", "continue", "debugger":
 		frame.endExpression()
 	default:
 		s.fresh()
+		s.header = header
 		return nil
 	}
 	s.last, s.keyword, s.control = keywordToken, name, control
@@ -556,7 +602,7 @@ func (s *_CodeScan) template() error {
 
 func (s *_CodeScan) push(kind _FrameKind) {
 	var parent = s.top()
-	s.frames = append(s.frames, _Frame{kind: kind, base: parent.base.plus(parent.local)})
+	s.frames = append(s.frames, _Frame{kind: kind, base: parent.base.plus(parent.local), async: parent.awaits(), closing: groupCloseToken})
 }
 
 func (s *_CodeScan) nest() error {
@@ -568,8 +614,9 @@ func (s *_CodeScan) nest() error {
 	return nil
 }
 
-func (s *_CodeScan) open(c byte) error {
+func (s *_CodeScan) open(c byte, header _Header) error {
 	var kind = s.openedKind(c)
+	var arrow = s.last == arrowToken
 	var parent = s.top()
 	switch {
 	case kind == objectFrame || kind == classFrame || kind.holdsStatements():
@@ -583,12 +630,28 @@ func (s *_CodeScan) open(c byte) error {
 	s.at++
 	s.last, s.control, s.property = operatorToken, false, false
 	s.push(kind)
+	var frame = s.top()
 	if kind.holdsStatements() {
 		s.last = startToken
 	}
-	if kind == classFrame {
+	switch {
+	case kind == groupFrame:
+		frame.header = header
+	case kind == blockFrame:
+		frame.closing, frame.ends = blockCloseToken, true
+	case kind == bodyFrame && arrow:
+		frame.async, frame.closing = header.async, blockCloseToken
+	case kind == bodyFrame:
+		frame.async = header.async
+		if header.declaration {
+			frame.closing, frame.ends = blockCloseToken, true
+		}
+	case kind == classFrame:
 		parent = &s.frames[len(s.frames)-2]
-		parent.classes--
+		if parent.classes[len(parent.classes)-1] {
+			frame.closing, frame.ends = blockCloseToken, true
+		}
+		parent.classes = parent.classes[:len(parent.classes)-1]
 		parent.local[nestingShape]--
 		return nil
 	}
@@ -606,13 +669,13 @@ func (s *_CodeScan) openedKind(c byte) _FrameKind {
 		return indexFrame
 	case s.last == arrowToken:
 		return bodyFrame
-	case frame.classes > 0 && !s.expectsOperand():
+	case len(frame.classes) > 0 && !s.expectsOperand():
 		return classFrame
 	case s.last == controlCloseToken:
 		return blockFrame
 	case s.last == groupCloseToken:
 		return bodyFrame
-	case s.last == keywordToken && (s.keyword == "else" || s.keyword == "do" || s.keyword == "try" || s.keyword == "finally"):
+	case s.last == keywordToken && (s.keyword == "else" || s.keyword == "do" || s.keyword == "try" || s.keyword == "finally" || s.keyword == "catch"):
 		return blockFrame
 	case frame.kind.holdsStatements() && (s.last == startToken || s.last == blockCloseToken):
 		return blockFrame
@@ -629,6 +692,7 @@ func (s *_CodeScan) close(c byte) error {
 	s.frames = s.frames[:len(s.frames)-1]
 	s.top().local[prefixShape] = 0
 	s.last, s.property, s.control = groupCloseToken, false, false
+	s.header = frame.header
 	if frame.kind == controlFrame {
 		s.last = controlCloseToken
 	}
@@ -651,17 +715,14 @@ func (s *_CodeScan) closeBrace() (int, bool, error) {
 	s.frames = s.frames[:len(s.frames)-1]
 	var parent = s.top()
 	s.property, s.control = false, false
-	switch frame.kind {
-	case substitutionFrame:
-	case blockFrame:
-		s.last = blockCloseToken
-		if parent.kind.holdsStatements() {
-			parent.endExpression()
-			parent.settling = settledByStatement
-		}
-	default:
-		parent.local[prefixShape] = 0
-		s.last = groupCloseToken
+	if frame.kind == substitutionFrame {
+		return 0, false, nil
+	}
+	s.last = frame.closing
+	parent.local[prefixShape] = 0
+	if frame.ends && parent.kind.holdsStatements() {
+		parent.endExpression()
+		parent.settling = settledByStatement
 	}
 	return 0, false, nil
 }
@@ -674,7 +735,7 @@ var punctuators = []string{
 
 var assignments = map[string]bool{"=": true, "+=": true, "-=": true, "*=": true, "/=": true, "%=": true, "**=": true, "<<=": true, ">>=": true, ">>>=": true, "&=": true, "|=": true, "^=": true, "&&=": true, "||=": true, "??=": true}
 
-func (s *_CodeScan) punctuator() error {
+func (s *_CodeScan) punctuator(header _Header) error {
 	var rest = s.text[s.at:]
 	var written = rest[:1]
 	for _, candidate := range punctuators {
@@ -684,14 +745,21 @@ func (s *_CodeScan) punctuator() error {
 		}
 	}
 	var expected = s.expectsOperand()
+	var after = s.last == keywordToken
 	var frame = s.top()
 	s.at += len(written)
 	s.last, s.property, s.control = operatorToken, false, false
 	switch {
 	case written == "=>":
 		frame.beginOperand()
-		s.last = arrowToken
+		frame.concise = frame.concise || header.async
+		s.last, s.header = arrowToken, _Header{async: header.async}
 		return s.count(arrowShape)
+	case written == "*" && after && s.keyword == "yield":
+		return nil
+	case written == "*" && (expected || after && s.keyword == "function"):
+		s.last, s.keyword, s.header = keywordToken, "function", header
+		return nil
 	case assignments[written] || written == "**":
 		frame.beginOperand()
 		return s.count(rightShape)
