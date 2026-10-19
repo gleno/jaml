@@ -168,7 +168,7 @@ func TestValuesAreFrozenCopiesAnExpressionCannotMutate(t *testing.T) {
 		expectEqual(t, mustResolve[int](t, ctx, document.At("copied")), 4)
 		expectEqual(t, mustResolve[[]int](t, ctx, document.At("sorted")), []int{3, 2, 1})
 		_, err := Resolve[int](ctx, document.At("pushed"))
-		expectError(t, err, EvaluationFailed, "$.pushed", "TypeError", "not extensible")
+		expectError(t, err, EvaluationFailed, "$.pushed", "TypeError: cannot change a read-only value")
 		expectEqual(t, values["list"], []int{1, 2, 3})
 	})
 }

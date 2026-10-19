@@ -125,7 +125,7 @@ func parseExpression(source string) (*ast.Program, error) {
 }
 
 func parseAfterOpens(code string) (*ast.Program, error) {
-	return parser.ParseFile(nil, "", expressionOpens+code, 0, parser.WithDisableSourceMaps)
+	return parser.ParseFile(nil, expressionFile, expressionOpens+code, 0, parser.WithDisableSourceMaps)
 }
 
 func holdsNoCode(source string) bool {

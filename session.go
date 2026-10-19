@@ -194,7 +194,10 @@ func guardJSONParse(vm *goja.Runtime) goja.Callable {
 }
 
 func (s *session) evaluate(compiled expression, args []datum) (any, error) {
-	return s.attempt(func(r realm) (goja.Value, error) { return r.settle(compiled, args) })
+	return s.attempt(func(r realm) (goja.Value, error) {
+		settled, err := r.settle(compiled, args)
+		return settled, r.explainWrite(compiled, err)
+	})
 }
 
 func (s *session) attempt(produce func(realm) (goja.Value, error)) (any, error) {

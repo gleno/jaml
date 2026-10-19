@@ -10,7 +10,7 @@ import (
 const intrinsicsFreezer = `(() => {
 	"use strict";
 	const { freeze, isFrozen, getOwnPropertyDescriptor, getPrototypeOf, defineProperty } = Object;
-	const ownKeys = Reflect.ownKeys;
+	const { ownKeys, apply } = Reflect;
 	const global = globalThis;
 	const Refusal = TypeError;
 	const typedArray = getPrototypeOf(Uint8Array).prototype;
@@ -29,6 +29,43 @@ const intrinsicsFreezer = `(() => {
 		[typeof Promise === "function" ? Promise.prototype : null, ["constructor"]],
 		[typeof Symbol === "function" ? Symbol.prototype : null, ["constructor"]],
 	];
+	const guardedMethods = [
+		[Array.prototype, ["sort", "reverse", "fill", "copyWithin", "splice", "push", "pop", "shift", "unshift"], (self) => self],
+		[Object, ["defineProperty", "defineProperties", "assign", "setPrototypeOf"], (self, args) => args[0]],
+	];
+	const isReadOnly = (target) => target !== null && (typeof target === "object" || typeof target === "function") && isFrozen(target);
+	const guardedAt = (home, key, targetOf, refusal) => {
+		const original = home[key];
+		if (typeof original !== "function") {
+			return;
+		}
+		const guarded = {
+			[key](...args) {
+				let fromCallback = false;
+				const callback = args[0];
+				if (key === "sort" && typeof callback === "function") {
+					args[0] = (a, b) => {
+						try {
+							return callback(a, b);
+						} catch (failure) {
+							fromCallback = true;
+							throw failure;
+						}
+					};
+				}
+				try {
+					return apply(original, this, args);
+				} catch (failure) {
+					if (!fromCallback && failure instanceof Refusal && isReadOnly(targetOf(this, args))) {
+						throw new Refusal(refusal);
+					}
+					throw failure;
+				}
+			},
+		}[key];
+		defineProperty(guarded, "length", { value: original.length });
+		defineProperty(home, key, { value: guarded });
+	};
 	const overridableAt = (home, key) => {
 		const described = getOwnPropertyDescriptor(home, key);
 		if (described === undefined || !("value" in described) || !described.configurable) {
@@ -70,7 +107,13 @@ const intrinsicsFreezer = `(() => {
 	roots[count++] = getPrototypeOf(""[Symbol.iterator]());
 	roots[count++] = getPrototypeOf("a".matchAll(/a/g));
 	roots[count++] = getPrototypeOf(Uint8Array);
-	return () => {
+	return (refusal) => {
+		for (let i = 0; i < guardedMethods.length; i++) {
+			const keys = guardedMethods[i][1];
+			for (let j = 0; j < keys.length; j++) {
+				guardedAt(guardedMethods[i][0], keys[j], guardedMethods[i][2], refusal);
+			}
+		}
 		for (let i = 0; i < overridable.length; i++) {
 			const home = overridable[i][0];
 			const keys = overridable[i][1];
@@ -108,7 +151,7 @@ const intrinsicsFreezer = `(() => {
 })()`
 
 var freezerProgram = sync.OnceValue(func() *goja.Program {
-	return goja.MustCompile("", intrinsicsFreezer, true)
+	return goja.MustCompile(freezerFile, intrinsicsFreezer, true)
 })
 
 func (r realm) intrinsicsFreezer() (goja.Callable, error) {
@@ -122,7 +165,7 @@ func (r realm) intrinsicsFreezer() (goja.Callable, error) {
 
 func (s *session) freezeIntrinsics(freezer goja.Callable) error {
 	return s.enter(func(r realm) error {
-		if _, err := freezer(goja.Undefined()); err != nil {
+		if _, err := freezer(goja.Undefined(), r.vm.ToValue(readOnlyRefusal)); err != nil {
 			return fmt.Errorf("freezing the built-ins: %w", r.explain(err))
 		}
 		return nil
