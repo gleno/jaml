@@ -32,6 +32,18 @@ func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
 		"delete items[0]",
 		"[items[0]] = [9]",
 		"({ name: user.name } = { name: 'b' })",
+		"user.toString = () => 'x'",
+		"user.constructor = 1",
+		"user.valueOf = 1",
+		"items.push = 1",
+		"Reflect.set(user, 'toString', 1)",
+		"Object.freeze({}).valueOf = 1",
+		"Array.prototype.push = 1",
+		"Object.prototype.toString = 1",
+		"Error.prototype.name = 'x'",
+		"Math = {}",
+		"user = 1",
+		"user.name.toString = 1",
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for _, write := range writes {

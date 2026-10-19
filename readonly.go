@@ -17,6 +17,7 @@ const readOnlyRefusal = "cannot change a read-only value: values from WithValues
 const (
 	expressionFile = "jaml:expression"
 	freezerFile    = "jaml:freezer"
+	chartFile      = "jaml:chart"
 )
 
 var engineWriteRefusal = regexp.MustCompile(`^(|Cannot assign to read only property '.*'|Cannot add property .*, object is not extensible|Cannot set property .*, object is not extensible|Cannot delete property '.*' of .*|length is not writable|.* is not extensible)$`)
@@ -58,12 +59,17 @@ func (e _Expression) writesWhere(exception *goja.Exception) bool {
 	return anyNode(reflect.ValueOf(parsed.program), func(node any) bool {
 		switch typed := node.(type) {
 		case *ast.AssignExpression:
-			return targetAt(typed.Left, offset)
+			return targetAt(typed.Left, offset) || bindingAt(typed, offset)
 		case *ast.UnaryExpression:
 			return changesOperand(typed.Operator) && targetAt(typed.Operand, offset)
 		}
 		return false
 	})
+}
+
+func bindingAt(assignment *ast.AssignExpression, offset file.Idx) bool {
+	var _, named = assignment.Left.(*ast.Identifier)
+	return named && assignment.Idx0() <= offset && offset < assignment.Idx1()
 }
 
 func changesOperand(operator token.Token) bool {

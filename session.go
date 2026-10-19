@@ -69,8 +69,8 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	vm.SetRandSource(plan.pinned.random())
 	var opened = &_Session{ctx: ctx, realm: captureRealm(vm)}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
-	var freezer goja.Callable
-	if err := opened.enter(func(r _Realm) (err error) { freezer, err = r.intrinsicsFreezer(); return err }); err != nil {
+	var freezer _Freezer
+	if err := opened.enter(func(r _Realm) (err error) { freezer, err = r.intrinsicsFreezer(plan.scripts); return err }); err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "%w", err)
 	}
