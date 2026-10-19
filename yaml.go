@@ -41,8 +41,12 @@ func parseYAML(ctx context.Context, source string) (any, error) {
 	if document.Kind == 0 || len(document.Content) == 0 {
 		return nil, nil
 	}
+	return convertDocument(ctx, document.Content[0])
+}
+
+func convertDocument(ctx context.Context, root *yaml.Node) (any, error) {
 	var reader = &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}, converted: map[*yaml.Node]_Converted{}, deepest: -1}
-	return reader.data(document.Content[0], _DataPlace{})
+	return reader.data(root, _DataPlace{})
 }
 
 func readOneDocument(source string) (*yaml.Node, error) {
@@ -75,16 +79,24 @@ func isEmptyDocument(document *yaml.Node) bool {
 }
 
 type _DataPlace struct {
-	path    *_DataPath
-	aliased bool
+	path     *_DataPath
+	aliased  bool
+	retained bool
 }
 
 func (a _DataPlace) atKey(key string) _DataPlace {
-	return _DataPlace{path: a.path.atKey(key), aliased: a.aliased}
+	return _DataPlace{path: a.path.atKey(key), aliased: a.aliased, retained: a.retained}
 }
 
 func (a _DataPlace) atIndex(index int) _DataPlace {
-	return _DataPlace{path: a.path.atIndex(index), aliased: a.aliased}
+	return _DataPlace{path: a.path.atIndex(index), aliased: a.aliased, retained: a.retained}
+}
+
+func (a _DataPlace) release(read []*yaml.Node) {
+	if a.retained {
+		return
+	}
+	clear(read)
 }
 
 type _YamlReader struct {
@@ -165,6 +177,7 @@ func (r *_YamlReader) alias(node *yaml.Node, place _DataPlace) (any, error) {
 }
 
 func (r *_YamlReader) anchored(node *yaml.Node, place _DataPlace) (any, error) {
+	place.retained = true
 	known, seen := r.converted[node]
 	switch {
 	case !seen:
@@ -240,6 +253,7 @@ func (r *_YamlReader) sequence(node *yaml.Node, place _DataPlace) ([]any, error)
 			return nil, err
 		}
 		data[index] = converted
+		place.release(node.Content[index : index+1])
 	}
 	return data, nil
 }
@@ -274,6 +288,7 @@ func (r *_YamlReader) mapping(node *yaml.Node, place _DataPlace) (*_Mapping, err
 				return nil, err
 			}
 			written = append(written, sources)
+			place.release(node.Content[i : i+2])
 			continue
 		}
 		key, err := mappingKey(keyNode, place.path)
@@ -290,6 +305,7 @@ func (r *_YamlReader) mapping(node *yaml.Node, place _DataPlace) (*_Mapping, err
 		}
 		own[key] = value
 		written = append(written, key)
+		place.release(node.Content[i : i+2])
 	}
 	var data = &_Mapping{values: make(map[string]any, len(own))}
 	for _, entry := range written {

@@ -549,3 +549,39 @@ func TestANullKeyIsNamedAsNull(t *testing.T) {
 		}
 	})
 }
+
+func TestReadingReleasesTheYAMLItHasConvertedExceptAnchors(t *testing.T) {
+	document, err := readOneDocument("a: &a [1, [2], {k: v}]\nb: [x, [y], {k: v}]\nc: *a\nd: {<<: {m: 1}}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root = document.Content[0]
+	var anchored = root.Content[1]
+	if _, err := convertDocument(t.Context(), root); err != nil {
+		t.Fatal(err)
+	}
+	for index, read := range root.Content {
+		if read != nil {
+			t.Fatalf("the document still holds its YAML node %d", index)
+		}
+	}
+	if len(anchored.Content) != 3 || anchored.Content[1].Content[0] == nil || anchored.Content[2].Content[1] == nil {
+		t.Fatal("an anchored node lost the YAML its aliases may read again")
+	}
+}
+
+func TestPathsAndExpressionFieldsReachIntoSharedAliases(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "base: &b {run: \"${ (u) => u + 1 }\", list: [\"${ 7 }\"]}\ncopy: *b\nmerged: {<<: *b, own: 2}\n")
+		expectEqual(t, mustResolve[int](t, t.Context(), document.At("copy", "list", "0")), 7)
+		expectEqual(t, mustResolve[int](t, t.Context(), document.At("merged", "list", "0")), 7)
+		expectError(t, resolveInto(t.Context(), new(any), document.At("copy", "missing")), MissingPath, "$.copy", `has no key "missing"`)
+		type _Runs struct {
+			Run *Expression `json:"run"`
+		}
+		var got = mustResolve[map[string]_Runs](t, t.Context(), document)
+		for _, name := range []string{"base", "copy", "merged"} {
+			expectEqual(t, mustResolve[int](t, t.Context(), got[name].Run, 41), 42)
+		}
+	})
+}
