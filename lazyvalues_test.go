@@ -16,28 +16,15 @@ func manyObjects(count int) []map[string]any {
 	return objects
 }
 
-func fastestResolve(t *testing.T, sb *Sandbox, values map[string]any, expression string) time.Duration {
-	t.Helper()
-	var compiled = mustExpression(t, sb, expression)
-	var fastest = time.Duration(1 << 62)
-	for range 3 {
-		var started = time.Now()
-		mustResolve[float64](t, withValues(t, values), compiled)
-		fastest = min(fastest, time.Since(started))
+func TestAnUnreadValueTakesNoMemoryInTheChild(t *testing.T) {
+	sb, err := MakeSecureSandbox(t.Context(), WithMemoryLimit(smallestMemoryLimit))
+	if err != nil {
+		t.Fatal(err)
 	}
-	return fastest
-}
-
-func TestAnUnreadValueCostsNextToNothing(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var values = map[string]any{"big": manyObjects(100_000), "small": 1}
-		var unread = fastestResolve(t, sb, values, "small + 1")
-		var read = fastestResolve(t, sb, values, "big.length")
-		t.Logf("unread %v, read %v", unread, read)
-		if unread*2 > read {
-			t.Fatalf("an unread value cost %v against %v read: it was bound anyway", unread, read)
-		}
-	})
+	var values = map[string]any{"big": manyObjects(40_000), "small": 1}
+	expectEqual(t, mustResolve[float64](t, withValues(t, values), mustExpression(t, sb, "small + 1")), float64(2))
+	var _, read = Resolve[float64](withValues(t, values), mustExpression(t, sb, "big.length"))
+	expectError(t, read, MemoryLimit)
 }
 
 func TestASessionPaysOnlyForTheValuesItReads(t *testing.T) {
