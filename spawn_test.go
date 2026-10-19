@@ -3,6 +3,7 @@
 package jaml
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"syscall"
@@ -28,12 +29,7 @@ func TestSecureAndTrustedShareTheLocalZone(t *testing.T) {
 		if err != nil {
 			t.Skipf("no zone data for %s: %v", zone, err)
 		}
-		var previous = time.Local
-		time.Local = location
-		var text = "h: ${ new Date(0).getHours() }\n"
-		var trusted = evalAs[int](t, mustJaml(t, mustSandbox(t, trustedKind), text), nil, "h")
-		var secure = isolatedEvalAs[int](t, mustJaml(t, mustIsolated(t), text), nil, "h")
-		time.Local = previous
+		var trusted, secure = hoursAtEpochInBothKinds(t, location)
 		expectEqual(t, trusted, hour)
 		expectEqual(t, secure, trusted)
 	}
@@ -71,7 +67,21 @@ func hoursAtEpochInBothKinds(t *testing.T, local *time.Location) (int, int) {
 	time.Local = local
 	defer func() { time.Local = previous }()
 	var text = "h: ${ new Date(0).getHours() }\n"
-	return evalAs[int](t, mustJaml(t, mustSandbox(t, trustedKind), text), nil, "h"), isolatedEvalAs[int](t, mustJaml(t, mustIsolated(t), text), nil, "h")
+	var trusted = evalAs[int](t, mustJaml(t, mustSandbox(t, trustedKind), text), nil, "h")
+	if err := isolationSupported(); err != nil {
+		t.Skip(err)
+	}
+	ctx, end := context.WithCancel(t.Context())
+	defer end()
+	secure, err := isolatedKind.make(ctx)
+	if err != nil {
+		t.Fatalf("making a secure sandbox: %v", err)
+	}
+	var isolated = isolatedEvalAs[int](t, mustJaml(t, secure, text), nil, "h")
+	var child = currentChild(t, secure)
+	end()
+	expectDeath(t, child)
+	return trusted, isolated
 }
 
 func tokyoZoneData(t *testing.T) []byte {

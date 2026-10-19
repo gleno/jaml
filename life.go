@@ -389,8 +389,14 @@ type _Quiet struct {
 	meaning error
 }
 
+var monotonicOrigin = time.Now()
+
+func monotonicNow() time.Duration {
+	return time.Since(monotonicOrigin)
+}
+
 func (q *_Quiet) waiting() {
-	q.since.Store(time.Now().UnixNano())
+	q.since.Store(int64(monotonicNow()) + 1)
 }
 
 func (q *_Quiet) heard() {
@@ -402,7 +408,7 @@ func (q *_Quiet) lasted() time.Duration {
 	if since == 0 {
 		return 0
 	}
-	return time.Since(time.Unix(0, since))
+	return monotonicNow() - time.Duration(since-1)
 }
 
 func (s *_ReplyStream) read(target any) error {
