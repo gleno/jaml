@@ -130,11 +130,13 @@ func (v *_BoundValues) UnmarshalJSON(written []byte) error {
 	return nil
 }
 
-func jsonDepth(encoded []byte) int {
+type _JSONText interface{ ~string | ~[]byte }
+
+func jsonDepth[T _JSONText](encoded T) int {
 	return walkJSON(encoded, nil)
 }
 
-func walkJSON(encoded []byte, onText func(text []byte)) int {
+func walkJSON[T _JSONText](encoded T, onText func(text T)) int {
 	depth, deepest := 0, 0
 	for i := 0; i < len(encoded); i++ {
 		switch encoded[i] {
@@ -154,7 +156,7 @@ func walkJSON(encoded []byte, onText func(text []byte)) int {
 	return deepest
 }
 
-func textEnd(encoded []byte, start int) int {
+func textEnd[T _JSONText](encoded T, start int) int {
 	for i := start; i < len(encoded); i++ {
 		switch encoded[i] {
 		case '\\':

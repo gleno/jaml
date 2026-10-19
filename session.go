@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"unsafe"
 
 	"github.com/dop251/goja"
 )
@@ -124,26 +125,56 @@ func (s *_Session) halted() error {
 }
 
 func (s *_Session) bind(values _BoundValues) error {
-	for _, name := range slices.Sorted(maps.Keys(values)) {
-		if err := s.enter(func(r _Realm) error { return r.bindValue(name, values[name]) }); err != nil {
-			return err
+	return s.enter(func(r _Realm) error {
+		for _, name := range slices.Sorted(maps.Keys(values)) {
+			if err := r.bindValue(name, values[name]); err != nil {
+				return err
+			}
 		}
+		return nil
+	})
+}
+
+func (r _Realm) bindValue(name string, value _Datum) error {
+	var shown = clip(name, keyExcerptLength)
+	var bound goja.Value
+	var read = r.vm.ToValue(func(goja.FunctionCall) goja.Value {
+		if bound == nil {
+			bound = r.thaw(shown, value)
+		}
+		return bound
+	})
+	var refuse = r.vm.ToValue(func(goja.FunctionCall) goja.Value {
+		panic(r.vm.NewTypeError(readOnlyRefusal))
+	})
+	for _, accessor := range []goja.Value{read, refuse} {
+		if _, err := r.freeze(goja.Undefined(), accessor); err != nil {
+			return fmt.Errorf("value %q cannot be bound: %w", shown, r.explain(err))
+		}
+	}
+	if err := r.vm.GlobalObject().DefineAccessorProperty(name, read, refuse, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
+		return fmt.Errorf("value %q cannot be bound: %w", shown, r.explain(err))
 	}
 	return nil
 }
 
-func (r _Realm) bindValue(name string, value _Datum) error {
-	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(value.encoded)))
-	if err != nil {
-		return fmt.Errorf("value %q: %w", clip(name, keyExcerptLength), r.explain(err))
+func (r _Realm) thaw(shown string, value _Datum) goja.Value {
+	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(value.text()))
+	if err == nil {
+		err = r.deepFreeze(parsed)
 	}
-	if err := r.deepFreeze(parsed); err != nil {
-		return fmt.Errorf("value %q: %w", clip(name, keyExcerptLength), r.explain(err))
+	var exception *goja.Exception
+	switch {
+	case errors.As(err, &exception):
+		panic(fmt.Errorf("value %q cannot be bound: %w", shown, r.explain(err)))
+	case err != nil:
+		panic(err)
 	}
-	if err := r.vm.GlobalObject().DefineDataProperty(name, parsed, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
-		return fmt.Errorf("value %q cannot be bound: %w", clip(name, keyExcerptLength), r.explain(err))
-	}
-	return nil
+	return parsed
+}
+
+func (d _Datum) text() string {
+	return unsafe.String(unsafe.SliceData(d.encoded), len(d.encoded))
 }
 
 func (r _Realm) deepFreeze(value goja.Value) error {
@@ -162,13 +193,13 @@ func (r _Realm) deepFreeze(value goja.Value) error {
 	return nil
 }
 
-func guardJSONParse(vm *goja.Runtime) goja.Callable {
+func guardJSONParse(vm *goja.Runtime) (intrinsic goja.Callable) {
 	var json = vm.Get("JSON").ToObject(vm)
 	parse, _ := goja.AssertFunction(json.Get("parse"))
 	var rangeError = vm.Get("RangeError")
 	var guarded = vm.ToValue(func(call goja.FunctionCall) goja.Value {
 		var text = call.Argument(0).ToString()
-		if jsonDepth([]byte(text.String())) > maxDataDepth {
+		if jsonDepth(text.String()) > maxDataDepth {
 			refusal, err := vm.New(rangeError, vm.ToValue(fmt.Sprintf("JSON text nests deeper than %d", maxDataDepth)))
 			if err != nil {
 				panic(err)
@@ -189,8 +220,7 @@ func guardJSONParse(vm *goja.Runtime) goja.Callable {
 	if err := json.Set("parse", guarded); err != nil {
 		panic(err)
 	}
-	callable, _ := goja.AssertFunction(guarded)
-	return callable
+	return parse
 }
 
 func (s *_Session) evaluate(compiled _Expression, args []_Datum) (any, error) {
@@ -238,7 +268,7 @@ func (r _Realm) settle(compiled _Expression, args []_Datum) (goja.Value, error) 
 func (r _Realm) arguments(args []_Datum) ([]goja.Value, error) {
 	var values = make([]goja.Value, len(args))
 	for index, arg := range args {
-		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(arg.encoded)))
+		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(arg.text()))
 		if err != nil {
 			return nil, fmt.Errorf("argument %d: %w", index+1, r.explain(err))
 		}

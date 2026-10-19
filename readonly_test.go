@@ -43,6 +43,10 @@ func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
 		"Error.prototype.name = 'x'",
 		"Math = {}",
 		"user = 1",
+		"globalThis.user = 1",
+		"this.user = 1",
+		"Reflect.set(globalThis, 'user', 1)",
+		"Function('user = 1')()",
 		"user.name.toString = 1",
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
