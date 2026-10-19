@@ -1,0 +1,118 @@
+//go:build unix && !ios
+
+package jaml
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
+	cases := map[string]struct {
+		heldMiB int
+		memory  bool
+		want    string
+	}{
+		"under half live":          {28, false, "killed from outside jaml"},
+		"past three quarters live": {60, true, "near the memory limit"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			sb := mustIsolated(t, WithMemoryLimit(64<<20))
+			holding := mustCompile(t, sb, "(() => { const keep = 'x'.repeat("+strconv.Itoa(c.heldMiB)+" << 20); let n = 0; for (let j = 0; ; j++) n += keep.length & j; })()")
+			first := childPID(t, sb)
+			busy := resident(t, first) + c.heldMiB<<20
+			verdict := make(chan error, 1)
+			go func() {
+				var out any
+				verdict <- holding.Eval(within(t, 60*time.Second), &out, nil)
+			}()
+			for pid := first; pid != 0; {
+				awaitResident(t, pid, busy)
+				time.Sleep(time.Second)
+				known := ourChildren(t)
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				pid = awaitNewChild(t, known, verdict)
+			}
+			err := <-verdict
+			if errors.Is(err, MemoryLimit) != c.memory || err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("got %v (memory %v), want %q (memory %v)", err, errors.Is(err, MemoryLimit), c.want, c.memory)
+			}
+		})
+	}
+}
+
+func awaitNewChild(t *testing.T, known []int, verdict chan error) int {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-verdict:
+			verdict <- err
+			return 0
+		default:
+		}
+		for _, pid := range ourChildren(t) {
+			if !slices.Contains(known, pid) {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("no evaluator replaced the killed one")
+	return 0
+}
+
+func ourChildren(t *testing.T) []int {
+	t.Helper()
+	listing := exec.Command("ps", "-axo", "pid=,ppid=")
+	out, err := listing.Output()
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var pid, parent int
+		if _, err := fmt.Sscan(line, &pid, &parent); err != nil {
+			t.Fatalf("ps said %q", line)
+		}
+		if parent == os.Getpid() && pid != listing.Process.Pid {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+func awaitResident(t *testing.T, pid int, bytes int) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if resident(t, pid) >= bytes {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("evaluator %d never held %d bytes", pid, bytes)
+}
+
+func resident(t *testing.T, pid int) int {
+	t.Helper()
+	out, err := exec.Command("ps", "-o", "rss=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Fatalf("ps %d: %v", pid, err)
+	}
+	kib, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("ps %d said %q", pid, out)
+	}
+	return kib << 10
+}

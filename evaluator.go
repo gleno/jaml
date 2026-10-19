@@ -19,6 +19,7 @@ import (
 
 const (
 	heapObjectsMetric  = "/memory/classes/heap/objects:bytes"
+	gcCyclesMetric     = "/gc/cycles/total:gc-cycles"
 	memoryCheckEvery   = time.Millisecond
 	exitProtocolBroken = 87
 	exitOrphaned       = 88
@@ -274,12 +275,12 @@ func worldFromEnv() (evaluatorWorld, error) {
 }
 
 type heapWatch struct {
-	ceiling   uint64
-	parent    int
-	wake      chan struct{}
-	pressured sync.Once
-	mu        sync.Mutex
-	busy      int
+	ceiling    uint64
+	parent     int
+	wake       chan struct{}
+	quietUntil uint64
+	mu         sync.Mutex
+	busy       int
 }
 
 func watchTheHeap(world evaluatorWorld) *heapWatch {
@@ -292,7 +293,15 @@ func watchTheHeap(world evaluatorWorld) *heapWatch {
 }
 
 func heapHeld() uint64 {
-	samples := []metrics.Sample{{Name: heapObjectsMetric}}
+	return metric(heapObjectsMetric)
+}
+
+func gcCycles() uint64 {
+	return metric(gcCyclesMetric)
+}
+
+func metric(name string) uint64 {
+	samples := []metrics.Sample{{Name: name}}
 	metrics.Read(samples)
 	return samples[0].Value.Uint64()
 }
@@ -323,9 +332,13 @@ func (w *heapWatch) patrol() {
 	}
 }
 
-func (w *heapWatch) confirmOverflow() {
+func liveHeap() uint64 {
 	goruntime.GC()
-	if held := heapHeld(); held > w.ceiling {
+	return heapHeld()
+}
+
+func (w *heapWatch) confirmOverflow() {
+	if held := liveHeap(); held > w.ceiling {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: live heap reached %d bytes, over its starting heap plus the limit, %d\n", held, w.ceiling)
 		os.Exit(exitMemoryLimit)
 	}
@@ -339,15 +352,26 @@ func (w *heapWatch) working() bool {
 
 func (w *heapWatch) inspect() {
 	held := heapHeld()
-	if held > w.ceiling/4*3 {
-		w.pressured.Do(func() { fmt.Fprintln(os.Stderr, pressureMarker) })
-	}
+	w.notePressure(held)
 	if held > w.ceiling {
 		w.confirmOverflow()
 	}
 	if w.orphaned() {
 		os.Exit(exitOrphaned)
 	}
+}
+
+func (w *heapWatch) notePressure(held uint64) {
+	line := w.ceiling / 4 * 3
+	if held <= line || gcCycles() <= w.quietUntil {
+		return
+	}
+	if liveHeap() > line {
+		fmt.Fprintln(os.Stderr, pressureMarker)
+		w.quietUntil = math.MaxUint64
+		return
+	}
+	w.quietUntil = gcCycles()
 }
 
 func (w *heapWatch) orphaned() bool {
