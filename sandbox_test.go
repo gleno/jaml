@@ -53,16 +53,16 @@ func watchPeak(sb *Sandbox) func() int {
 
 func callSlowly(t *testing.T, compiled *Expression, jobs int, scale float64) {
 	t.Helper()
-	var wait sync.WaitGroup
+	var group sync.WaitGroup
 	for job := range jobs {
-		wait.Go(func() {
+		group.Go(func() {
 			var tag int
 			if err := resolveInto(within(t, 60*time.Second), &tag, compiled, map[string]any{"loops": slowLoops(scale), "tag": job}); err != nil || tag != job {
 				t.Errorf("job %d: got %d, %v", job, tag, err)
 			}
 		})
 	}
-	wait.Wait()
+	group.Wait()
 }
 
 func TestMaxConcurrencyIsHonoured(t *testing.T) {
@@ -176,8 +176,8 @@ func TestAnExpressionFollowsTheTemplateDefaults(t *testing.T) {
 
 func TestAFixedClockAndSeedAreDeterministicInBothKinds(t *testing.T) {
 	var source = "[Date.now(), new Date().toISOString(), Math.random(), Math.random()]"
-	var at = time.Date(2026, 1, 2, 3, 4, 5, 6_000_000, time.UTC)
-	var ctx = WithRandomSeed(WithFixedClock(t.Context(), at), 42)
+	var timestamp = time.Date(2026, 1, 2, 3, 4, 5, 6_000_000, time.UTC)
+	var ctx = WithRandomSeed(WithFixedClock(t.Context(), timestamp), 42)
 	var results = map[string][]any{}
 	for _, kind := range sandboxKinds {
 		var compiled = mustExpression(t, mustSandbox(t, kind), source)
@@ -201,7 +201,7 @@ func TestAFixedClockAndSeedAreDeterministicInBothKinds(t *testing.T) {
 		}
 	}
 	expectEqual(t, results["isolated"], results["trusted"])
-	expectEqual(t, results["trusted"][:2], []any{float64(at.UnixMilli()), "2026-01-02T03:04:05.006Z"})
+	expectEqual(t, results["trusted"][:2], []any{float64(timestamp.UnixMilli()), "2026-01-02T03:04:05.006Z"})
 }
 
 func TestAnUnsetClockStandsStillWithinOneEval(t *testing.T) {

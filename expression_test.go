@@ -94,8 +94,8 @@ func TestManyClosingCandidatesStayCheap(t *testing.T) {
 		for name, text := range map[string]string{"in string": inString, "repeated": repeated, "unclosed": unclosed} {
 			var started = time.Now()
 			_, _ = sb.MakeExpressionFromJaml(t.Context(), text)
-			if took := time.Since(started); took > 10*time.Second {
-				t.Fatalf("%s took %v", name, took)
+			if elapsed := time.Since(started); elapsed > 10*time.Second {
+				t.Fatalf("%s took %v", name, elapsed)
 			}
 		}
 	})
@@ -173,8 +173,8 @@ func TestDistinctValuesFullOfInterpolationsMakeQuickly(t *testing.T) {
 		}
 		var started = time.Now()
 		var document = mustJaml(t, sb, written.String())
-		if took := time.Since(started); took > raceSlowdown*time.Second {
-			t.Fatalf("making %d bytes took %v", written.Len(), took)
+		if elapsed := time.Since(started); elapsed > raceSlowdown*time.Second {
+			t.Fatalf("making %d bytes took %v", written.Len(), elapsed)
 		}
 		expectEqual(t, mustResolve[string](t, valued(t.Context(), map[string]any{"a": 1}), document.At("v3")), "3"+strings.Repeat("1", 10_900))
 	}, WithBuildTimeout(30*time.Second))

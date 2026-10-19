@@ -170,17 +170,17 @@ func TestBindingVarsEndsWithItsContext(t *testing.T) {
 	for i := range 192 {
 		vars["v"+strconv.Itoa(i)] = long
 	}
-	var cancelAt = 600 * time.Millisecond * raceSlowdown
+	var cancelDelay = 600 * time.Millisecond * raceSlowdown
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "v: ${ 1 }\n")
 		expectTheSameChildAfter(t, sb, func() {
 			ctx, cancel := context.WithCancel(t.Context())
 			var started = time.Now()
-			time.AfterFunc(cancelAt, cancel)
+			time.AfterFunc(cancelDelay, cancel)
 			var err = evalOrHang(t, document, ctx, vars)
 			expectError(t, err, EvaluationFailed, "cancelled")
-			if took := time.Since(started); took > cancelAt+cancelAt/2 {
-				t.Fatalf("binding ran %v past its context", took-cancelAt)
+			if elapsed := time.Since(started); elapsed > cancelDelay+cancelDelay/2 {
+				t.Fatalf("binding ran %v past its context", elapsed-cancelDelay)
 			}
 		})
 	})

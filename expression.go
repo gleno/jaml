@@ -202,9 +202,9 @@ func escapesInLegacyOctal(literal *ast.StringLiteral) *ast.StringLiteral {
 }
 
 type _ParseStop struct {
-	offset  int
-	at      file.Position
-	message string
+	offset   int
+	position file.Position
+	message  string
 }
 
 func (s _ParseStop) closes(after string, opened _Delimiter) bool {
@@ -250,20 +250,20 @@ func finalEnd(after string, opened _Delimiter) (int, error) {
 	case !failed || strings.HasPrefix(opened.closes, after[stop.offset:]):
 		return 0, fmt.Errorf("unclosed %s", opened.opens)
 	}
-	return 0, placeSyntaxError(after, stop.at, stop.message)
+	return 0, placeSyntaxError(after, stop.position, stop.message)
 }
 
 func truncatedWindows(after, closer string) iter.Seq[int] {
 	return func(yield func(int) bool) {
 		seen, pending := 0, 0
-		for at := range occurrences(after, closer) {
+		for offset := range occurrences(after, closer) {
 			if pending > 0 && !yield(pending) {
 				return
 			}
 			seen++
 			pending = 0
 			if seen&(seen-1) == 0 {
-				pending = at + len(closer)
+				pending = offset + len(closer)
 			}
 		}
 	}
@@ -271,15 +271,15 @@ func truncatedWindows(after, closer string) iter.Seq[int] {
 
 func occurrences(text, closer string) iter.Seq[int] {
 	return func(yield func(int) bool) {
-		for at := strings.Index(text, closer); at >= 0; {
-			if !yield(at) {
+		for offset := strings.Index(text, closer); offset >= 0; {
+			if !yield(offset) {
 				return
 			}
-			var next = strings.Index(text[at+1:], closer)
+			var next = strings.Index(text[offset+1:], closer)
 			if next < 0 {
 				return
 			}
-			at += 1 + next
+			offset += 1 + next
 		}
 	}
 }
@@ -292,14 +292,14 @@ func firstParseError(code string) (_ParseStop, bool) {
 	}
 	var first = parseErrors[0]
 	var offset = offsetOf(expressionOpens+code, first.Position) - len(expressionOpens)
-	return _ParseStop{offset: max(offset, 0), at: first.Position, message: first.Message}, true
+	return _ParseStop{offset: max(offset, 0), position: first.Position, message: first.Message}, true
 }
 
-func offsetOf(program string, at file.Position) int {
+func offsetOf(program string, position file.Position) int {
 	var located = file.NewFile("", program, 1)
 	return sort.Search(len(program)+1, func(offset int) bool {
 		var here = located.Position(offset)
-		return here.Line > at.Line || here.Line == at.Line && here.Column >= at.Column
+		return here.Line > position.Line || here.Line == position.Line && here.Column >= position.Column
 	})
 }
 
@@ -315,8 +315,8 @@ func describeSyntaxError(source string, err error) error {
 	return err
 }
 
-func placeSyntaxError(source string, at file.Position, message string) error {
-	return syntaxErrorAt(source, offsetOf(expressionOpens+source, at)-len(expressionOpens), message)
+func placeSyntaxError(source string, position file.Position, message string) error {
+	return syntaxErrorAt(source, offsetOf(expressionOpens+source, position)-len(expressionOpens), message)
 }
 
 func syntaxErrorAt(source string, offset int, message string) error {

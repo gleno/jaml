@@ -14,7 +14,7 @@ type _Prepared func(ctx context.Context) (_Rendered, error)
 
 type _Rendered struct {
 	tree    any
-	at      *_DataPath
+	path    *_DataPath
 	skipped [][]string
 }
 
@@ -26,7 +26,7 @@ type _Document struct {
 
 type _Subtree struct {
 	node any
-	at   *_DataPath
+	path *_DataPath
 }
 
 func makeDocument(ctx context.Context, written string, configured _ExpressionSettings) (*_Document, error) {
@@ -74,51 +74,51 @@ func (d *_Document) prepare(request _Work) (_Prepared, error) {
 		if err := engine.warm(); err != nil {
 			return _Rendered{}, err
 		}
-		var walk = &_Renderer{texts: d.texts, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.at.depth()}
-		tree, err := walk.render(chosen.node, walk.place(chosen.at))
+		var renderer = &_Renderer{texts: d.texts, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
+		tree, err := renderer.render(chosen.node, renderer.place(chosen.path))
 		if err != nil {
 			return _Rendered{}, err
 		}
-		return _Rendered{tree: tree, at: chosen.at, skipped: walk.skipped}, nil
+		return _Rendered{tree: tree, path: chosen.path, skipped: renderer.skipped}, nil
 	}, nil
 }
 
 func encodeResult(result _Rendered) ([]byte, error) {
 	var encoded = unboundedWriter()
 	if err := encoded.data(result.tree); err != nil {
-		return nil, fail(CoercionFailed, "%w", err).within(result.at.String())
+		return nil, fail(CoercionFailed, "%w", err).within(result.path.String())
 	}
 	return encoded.written, nil
 }
 
 func (d *_Document) selectPath(path []string) (_Subtree, error) {
-	current, at := d.root, (*_DataPath)(nil)
+	current, location := d.root, (*_DataPath)(nil)
 	for _, step := range path {
 		switch typed := current.(type) {
 		case *_Mapping:
 			found, ok := typed.values[step]
 			if !ok {
-				return _Subtree{}, missingPath(at, fmt.Sprintf("has no key %q", step))
+				return _Subtree{}, missingPath(location, fmt.Sprintf("has no key %q", step))
 			}
-			current, at = found, at.atStep(step)
+			current, location = found, location.atStep(step)
 		case []any:
 			index, err := strconv.Atoi(step)
 			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
-				return _Subtree{}, missingPath(at, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
+				return _Subtree{}, missingPath(location, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
-			current, at = typed[index], at.atStep(step)
+			current, location = typed[index], location.atStep(step)
 		default:
-			return _Subtree{}, d.missingInside(_Subtree{node: current, at: at}, step)
+			return _Subtree{}, d.missingInside(_Subtree{node: current, path: location}, step)
 		}
 	}
-	return _Subtree{node: current, at: at}, nil
+	return _Subtree{node: current, path: location}, nil
 }
 
 func (d *_Document) missingInside(leaf _Subtree, step string) error {
 	if written, isString := leaf.node.(string); isString && d.texts[written].holdsCode() {
-		return missingPath(leaf.at, fmt.Sprintf("is code; At cannot look inside what it produces: resolve %s and index the result", leaf.at))
+		return missingPath(leaf.path, fmt.Sprintf("is code; At cannot look inside what it produces: resolve %s and index the result", leaf.path))
 	}
-	return missingPath(leaf.at, fmt.Sprintf("is %s, which has no key %q", describeLeaf(leaf.node), step))
+	return missingPath(leaf.path, fmt.Sprintf("is %s, which has no key %q", describeLeaf(leaf.node), step))
 }
 
 func describeLeaf(node any) string {
@@ -134,21 +134,21 @@ func describeLeaf(node any) string {
 	}
 }
 
-func missingPath(at *_DataPath, message string) error {
-	return fail(MissingPath, "%s", message).within(at.String())
+func missingPath(path *_DataPath, message string) error {
+	return fail(MissingPath, "%s", message).within(path.String())
 }
 
-func eachChild(node any, at *_DataPath, visit func(child any, at *_DataPath) error) error {
+func eachChild(node any, path *_DataPath, visit func(child any, path *_DataPath) error) error {
 	switch typed := node.(type) {
 	case *_Mapping:
 		for _, key := range typed.keys {
-			if err := visit(typed.values[key], at.atKey(key)); err != nil {
+			if err := visit(typed.values[key], path.atKey(key)); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for index, item := range typed {
-			if err := visit(item, at.atIndex(index)); err != nil {
+			if err := visit(item, path.atIndex(index)); err != nil {
 				return err
 			}
 		}

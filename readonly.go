@@ -54,13 +54,13 @@ func (e _Expression) writesWhere(exception *goja.Exception) bool {
 	if err != nil {
 		return false
 	}
-	var at = file.Idx(offsetOf(expressionOpens+e.source+"\n", stack[0].Position()) + 1)
+	var offset = file.Idx(offsetOf(expressionOpens+e.source+"\n", stack[0].Position()) + 1)
 	return anyNode(reflect.ValueOf(parsed.program), func(node any) bool {
 		switch typed := node.(type) {
 		case *ast.AssignExpression:
-			return targetAt(typed.Left, at)
+			return targetAt(typed.Left, offset)
 		case *ast.UnaryExpression:
-			return changesOperand(typed.Operator) && targetAt(typed.Operand, at)
+			return changesOperand(typed.Operator) && targetAt(typed.Operand, offset)
 		}
 		return false
 	})
@@ -70,25 +70,25 @@ func changesOperand(operator token.Token) bool {
 	return operator == token.DELETE || operator == token.INCREMENT || operator == token.DECREMENT
 }
 
-func targetAt(target ast.Expression, at file.Idx) bool {
+func targetAt(target ast.Expression, offset file.Idx) bool {
 	switch typed := target.(type) {
 	case *ast.DotExpression:
-		return typed.Identifier.Idx == at
+		return typed.Identifier.Idx == offset
 	case *ast.BracketExpression:
-		return typed.LeftBracket == at
+		return typed.LeftBracket == offset
 	case *ast.ArrayPattern, *ast.ObjectPattern:
 		return anyNode(reflect.ValueOf(typed), func(node any) bool {
 			member, isMember := node.(ast.Expression)
-			return isMember && member != target && (targetAt(member, at) || patternTargetAt(member, at))
+			return isMember && member != target && (targetAt(member, offset) || patternTargetAt(member, offset))
 		})
 	}
 	return false
 }
 
-func patternTargetAt(member ast.Expression, at file.Idx) bool {
+func patternTargetAt(member ast.Expression, offset file.Idx) bool {
 	switch member.(type) {
 	case *ast.DotExpression, *ast.BracketExpression:
-		return member.Idx0() == at
+		return member.Idx0() == offset
 	}
 	return false
 }

@@ -49,7 +49,7 @@ type _Life struct {
 	cmd          *exec.Cmd
 	ended        chan struct{}
 	verdict      error
-	killedFor    atomic.Pointer[error]
+	killCause    atomic.Pointer[error]
 	buildTimeout time.Duration
 	wire         *_Wire
 	board        *_Switchboard
@@ -58,7 +58,7 @@ type _Life struct {
 type _Exit struct {
 	state     *os.ProcessState
 	stderr    *_HeadBuffer
-	killedFor error
+	killCause error
 	limit     _MemoryLimit
 }
 
@@ -146,49 +146,49 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 	var stderr = &_HeadBuffer{limit: stderrHeadBytes}
 	var cmd = exec.Command(image)
 	cmd.Env = w.env()
-	cmd.ExtraFiles = []*os.File{requests.read, replies.write, control.read}
+	cmd.ExtraFiles = []*os.File{requests.reader, replies.writer, control.reader}
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = evaluatorProcAttr()
 	err = cmd.Start()
-	closeAll(requests.read, replies.write, control.read)
+	closeAll(requests.reader, replies.writer, control.reader)
 	if err != nil {
-		closeAll(requests.write, replies.read, control.write)
+		closeAll(requests.writer, replies.reader, control.writer)
 		return nil, nil, err
 	}
 	var born = &_Life{
 		cmd:          cmd,
 		ended:        make(chan struct{}),
 		buildTimeout: spec.buildTimeout,
-		wire:         newWire(requests.write, control.write),
+		wire:         newWire(requests.writer, control.writer),
 		board:        &_Switchboard{pending: map[uint64]*_Expectation{}},
 	}
 	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	go func() {
 		_ = cmd.Wait()
-		var killedFor = born.killReason()
-		closeAll(requests.write, replies.read, control.write)
+		var killCause = born.killReason()
+		closeAll(requests.writer, replies.reader, control.writer)
 		unbind()
-		born.bury(_Exit{state: cmd.ProcessState, stderr: stderr, killedFor: killedFor, limit: w.limit})
+		born.bury(_Exit{state: cmd.ProcessState, stderr: stderr, killCause: killCause, limit: w.limit})
 	}()
-	return born, &_ReplyStream{lines: bufio.NewReader(replies.read), frames: framesFor(w.limit)}, nil
+	return born, &_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit)}, nil
 }
 
 type _Pipe struct {
-	read  *os.File
-	write *os.File
+	reader *os.File
+	writer *os.File
 }
 
 func openPipes(count int) ([]_Pipe, error) {
 	var opened []_Pipe
 	for range count {
-		read, write, err := os.Pipe()
+		reader, writer, err := os.Pipe()
 		if err != nil {
 			for _, made := range opened {
-				closeAll(made.read, made.write)
+				closeAll(made.reader, made.writer)
 			}
 			return nil, err
 		}
-		opened = append(opened, _Pipe{read: read, write: write})
+		opened = append(opened, _Pipe{reader: reader, writer: writer})
 	}
 	return opened, nil
 }
@@ -200,7 +200,7 @@ func (l *_Life) bury(ending _Exit) {
 }
 
 func (l *_Life) kill(reason error) {
-	l.killedFor.CompareAndSwap(nil, &reason)
+	l.killCause.CompareAndSwap(nil, &reason)
 	l.end()
 }
 
@@ -209,7 +209,7 @@ func (l *_Life) end() {
 }
 
 func (l *_Life) killReason() error {
-	if reason := l.killedFor.Load(); reason != nil {
+	if reason := l.killCause.Load(); reason != nil {
 		return *reason
 	}
 	return nil
@@ -279,8 +279,8 @@ func (x _Exit) verdict() error {
 		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", x.limit))
 	case reason == runtimeOutOfMemory:
 		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s): %s", x.state, reason))
-	case killedOutright(x.state) && x.killedFor != nil:
-		return x.killedFor
+	case killedOutright(x.state) && x.killCause != nil:
+		return x.killCause
 	case killedOutright(x.state) && x.stderr.holds(pressureMarker):
 		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", x.state, x.limit))
 	case killedOutright(x.state):
@@ -304,12 +304,12 @@ type _ReplyStream struct {
 	frames _Frames
 }
 
-func (s *_ReplyStream) read(into any) error {
+func (s *_ReplyStream) read(target any) error {
 	frame, err := s.frame()
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(frame, into); err != nil {
+	if err := json.Unmarshal(frame, target); err != nil {
 		return fmt.Errorf("reading the evaluator's answer: %w", err)
 	}
 	return nil
@@ -335,11 +335,11 @@ func (s *_ReplyStream) frame() ([]byte, error) {
 	}
 }
 
-func located(at string, err error) error {
+func located(path string, err error) error {
 	if own, isOwn := err.(_ExpressionError); isOwn {
 		return own
 	}
-	return fail(EvaluationFailed, "%w", err).within(at)
+	return fail(EvaluationFailed, "%w", err).within(path)
 }
 
 func cancelled(ctx context.Context) error {

@@ -154,8 +154,8 @@ func walkJSON(encoded []byte, onText func(text []byte)) int {
 	return deepest
 }
 
-func textEnd(encoded []byte, from int) int {
-	for i := from; i < len(encoded); i++ {
+func textEnd(encoded []byte, start int) int {
+	for i := start; i < len(encoded); i++ {
 		switch encoded[i] {
 		case '\\':
 			i++

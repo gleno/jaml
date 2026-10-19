@@ -42,7 +42,7 @@ func parseYAML(ctx context.Context, source string) (any, error) {
 		return nil, nil
 	}
 	var reader = &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
-	return reader.data(document.Content[0], _DataAt{})
+	return reader.data(document.Content[0], _DataPlace{})
 }
 
 func readOneDocument(source string) (*yaml.Node, error) {
@@ -74,17 +74,17 @@ func isEmptyDocument(document *yaml.Node) bool {
 	return content.Kind == yaml.ScalarNode && content.Style == 0 && content.Value == ""
 }
 
-type _DataAt struct {
+type _DataPlace struct {
 	path    *_DataPath
 	aliased bool
 }
 
-func (a _DataAt) atKey(key string) _DataAt {
-	return _DataAt{path: a.path.atKey(key), aliased: a.aliased}
+func (a _DataPlace) atKey(key string) _DataPlace {
+	return _DataPlace{path: a.path.atKey(key), aliased: a.aliased}
 }
 
-func (a _DataAt) atIndex(index int) _DataAt {
-	return _DataAt{path: a.path.atIndex(index), aliased: a.aliased}
+func (a _DataPlace) atIndex(index int) _DataPlace {
+	return _DataPlace{path: a.path.atIndex(index), aliased: a.aliased}
 }
 
 type _YamlReader struct {
@@ -124,21 +124,21 @@ func allowedAliasRatio(decoded int) float64 {
 	return generousAliasRatio - (generousAliasRatio-strictAliasRatio)*progress
 }
 
-func (r *_YamlReader) data(node *yaml.Node, at _DataAt) (any, error) {
+func (r *_YamlReader) data(node *yaml.Node, place _DataPlace) (any, error) {
 	if r.ctx.Err() != nil {
 		return nil, cancelled(r.ctx)
 	}
 	if node.Kind == yaml.AliasNode {
-		return r.alias(node, at)
+		return r.alias(node, place)
 	}
-	if err := r.budget.spend(at.aliased); err != nil {
-		return nil, refuse(at.path, err.Error())
+	if err := r.budget.spend(place.aliased); err != nil {
+		return nil, refuse(place.path, err.Error())
 	}
 	if node.Kind == yaml.ScalarNode {
-		return resolveScalar(node, at.path)
+		return resolveScalar(node, place.path)
 	}
-	if at.path.depth() >= maxDataDepth {
-		return nil, fail(InvalidExpression, "%s", nestsTooDeep).within(at.path.String())
+	if place.path.depth() >= maxDataDepth {
+		return nil, fail(InvalidExpression, "%s", nestsTooDeep).within(place.path.String())
 	}
 	if node.Anchor != "" {
 		r.expanding[node] = true
@@ -146,25 +146,25 @@ func (r *_YamlReader) data(node *yaml.Node, at _DataAt) (any, error) {
 	}
 	switch node.Kind {
 	case yaml.MappingNode:
-		return r.mapping(node, at)
+		return r.mapping(node, place)
 	case yaml.SequenceNode:
-		return r.sequence(node, at)
+		return r.sequence(node, place)
 	}
-	return nil, refuse(at.path, fmt.Sprintf("line %d holds a YAML node of unknown kind %d", node.Line, node.Kind))
+	return nil, refuse(place.path, fmt.Sprintf("line %d holds a YAML node of unknown kind %d", node.Line, node.Kind))
 }
 
-func (r *_YamlReader) alias(node *yaml.Node, at _DataAt) (any, error) {
+func (r *_YamlReader) alias(node *yaml.Node, place _DataPlace) (any, error) {
 	if r.expanding[node.Alias] {
-		return nil, refuse(at.path, fmt.Sprintf("alias *%s refers to a node that contains it", node.Value))
+		return nil, refuse(place.path, fmt.Sprintf("alias *%s refers to a node that contains it", node.Value))
 	}
-	at.aliased = true
-	return r.data(node.Alias, at)
+	place.aliased = true
+	return r.data(node.Alias, place)
 }
 
-func (r *_YamlReader) sequence(node *yaml.Node, at _DataAt) ([]any, error) {
+func (r *_YamlReader) sequence(node *yaml.Node, place _DataPlace) ([]any, error) {
 	var data = make([]any, len(node.Content))
 	for index, item := range node.Content {
-		converted, err := r.data(item, at.atIndex(index))
+		converted, err := r.data(item, place.atIndex(index))
 		if err != nil {
 			return nil, err
 		}
@@ -186,29 +186,29 @@ func (m *_Mapping) with(key string, value any) {
 	m.values[key] = value
 }
 
-func (r *_YamlReader) mapping(node *yaml.Node, at _DataAt) (*_Mapping, error) {
+func (r *_YamlReader) mapping(node *yaml.Node, place _DataPlace) (*_Mapping, error) {
 	var own = make(map[string]any, len(node.Content)/2)
 	var lines = make(map[string]int, len(node.Content)/2)
 	var written []any
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		keyNode, valueNode := node.Content[i], node.Content[i+1]
-		key, err := mappingKey(keyNode, at.path)
+		key, err := mappingKey(keyNode, place.path)
 		if err != nil {
 			return nil, err
 		}
 		if first, seen := lines[key]; seen {
-			return nil, refuse(at.path, fmt.Sprintf("line %d: mapping key %q already defined at line %d", keyNode.Line, key, first))
+			return nil, refuse(place.path, fmt.Sprintf("line %d: mapping key %q already defined at line %d", keyNode.Line, key, first))
 		}
 		lines[key] = keyNode.Line
 		if isMergeKey(keyNode) {
-			sources, err := r.mergeSources(valueNode, at)
+			sources, err := r.mergeSources(valueNode, place)
 			if err != nil {
 				return nil, err
 			}
 			written = append(written, sources)
 			continue
 		}
-		value, err := r.data(valueNode, at.atKey(key))
+		value, err := r.data(valueNode, place.atKey(key))
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +233,7 @@ func (r *_YamlReader) mapping(node *yaml.Node, at _DataAt) (*_Mapping, error) {
 	return data, nil
 }
 
-func (r *_YamlReader) mergeSources(node *yaml.Node, at _DataAt) ([]*_Mapping, error) {
+func (r *_YamlReader) mergeSources(node *yaml.Node, place _DataPlace) ([]*_Mapping, error) {
 	var items = []*yaml.Node{node}
 	if node.Kind == yaml.SequenceNode {
 		items = node.Content
@@ -241,9 +241,9 @@ func (r *_YamlReader) mergeSources(node *yaml.Node, at _DataAt) ([]*_Mapping, er
 	var sources = make([]*_Mapping, 0, len(items))
 	for _, item := range items {
 		if dealias(item).Kind != yaml.MappingNode {
-			return nil, refuse(at.path, fmt.Sprintf("line %d: a merge key (<<) takes a mapping or a list of mappings", item.Line))
+			return nil, refuse(place.path, fmt.Sprintf("line %d: a merge key (<<) takes a mapping or a list of mappings", item.Line))
 		}
-		source, err := r.data(item, at)
+		source, err := r.data(item, place)
 		if err != nil {
 			return nil, err
 		}
@@ -266,21 +266,21 @@ func isMergeKey(node *yaml.Node) bool {
 	return node.Style == 0 || node.Style == yaml.TaggedStyle && node.Tag == "!!merge"
 }
 
-func mappingKey(node *yaml.Node, at *_DataPath) (string, error) {
+func mappingKey(node *yaml.Node, path *_DataPath) (string, error) {
 	if isMergeKey(node) {
 		return node.Value, nil
 	}
 	var target = dealias(node)
 	if target.Kind != yaml.ScalarNode {
-		return "", refuse(at, fmt.Sprintf("the key on line %d is a collection; keys must be strings", node.Line))
+		return "", refuse(path, fmt.Sprintf("the key on line %d is a collection; keys must be strings", node.Line))
 	}
-	resolved, err := resolveScalar(target, at)
+	resolved, err := resolveScalar(target, path)
 	if err != nil {
 		return "", err
 	}
 	name, isString := resolved.(string)
 	if !isString {
-		return "", refuse(at, fmt.Sprintf("key %s is %s; keys must be strings, so quote it", target.Value, describeScalar(resolved)))
+		return "", refuse(path, fmt.Sprintf("key %s is %s; keys must be strings, so quote it", target.Value, describeScalar(resolved)))
 	}
 	return name, nil
 }
@@ -296,13 +296,13 @@ func describeScalar(value any) string {
 	}
 }
 
-func resolveScalar(node *yaml.Node, at *_DataPath) (any, error) {
+func resolveScalar(node *yaml.Node, path *_DataPath) (any, error) {
 	value, err := scalarValue(node)
 	if err != nil {
-		return nil, refuse(at, err.Error())
+		return nil, refuse(path, err.Error())
 	}
 	if text, isText := value.(string); isText && !utf8.ValidString(text) {
-		return nil, refuse(at, fmt.Sprintf("%s %s does not hold UTF-8 text", node.Tag, excerpt(node.Value, codeExcerptLength)))
+		return nil, refuse(path, fmt.Sprintf("%s %s does not hold UTF-8 text", node.Tag, excerpt(node.Value, codeExcerptLength)))
 	}
 	return value, nil
 }
@@ -478,6 +478,6 @@ func (n _Numeral) float() (any, error) {
 	return number, nil
 }
 
-func refuse(at *_DataPath, message string) error {
-	return fail(InvalidExpression, "%s", message).within(at.String())
+func refuse(path *_DataPath, message string) error {
+	return fail(InvalidExpression, "%s", message).within(path.String())
 }

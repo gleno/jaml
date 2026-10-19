@@ -167,9 +167,9 @@ func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 		memory bool
 		want   string
 	}{
-		"an exit 86 beats our kill":         {_Exit{state: exited(t, "exit 86").ProcessState, stderr: silent, killedFor: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
-		"a panic beats our kill":            {_Exit{state: exited(t, "exit 2").ProcessState, stderr: panicked, killedFor: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
-		"our kill names its reason":         {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, killedFor: ours, limit: 64 << 20}, false, ours.Error()},
+		"an exit 86 beats our kill":         {_Exit{state: exited(t, "exit 86").ProcessState, stderr: silent, killCause: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
+		"a panic beats our kill":            {_Exit{state: exited(t, "exit 2").ProcessState, stderr: panicked, killCause: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
+		"our kill names its reason":         {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
 		"a foreign kill under pressure":     {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
 		"a foreign kill without pressure":   {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
 		"a plain exit names its status":     {_Exit{state: exited(t, "exit 3").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},

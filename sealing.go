@@ -20,29 +20,29 @@ func (f _Frames) missing(job uint64) []byte {
 }
 
 func (f _Frames) answer(job uint64, result _Rendered) []byte {
-	var at = result.at.String()
+	var path = result.path.String()
 	var sealed = f.open(job)
 	var err = sealed.answer(result)
 	switch {
 	case errors.As(err, new(_PastLimit)):
-		return f.refusal(job, at)
+		return f.refusal(job, path)
 	case err != nil:
-		return f.failure(job, at, fail(CoercionFailed, "%w", err).within(at))
+		return f.failure(job, path, fail(CoercionFailed, "%w", err).within(path))
 	}
 	return sealed.written
 }
 
-func (f _Frames) failure(job uint64, at string, err error) []byte {
+func (f _Frames) failure(job uint64, path string, err error) []byte {
 	var sealed = f.open(job)
 	if sealed.failure(err) != nil {
-		return f.refusal(job, at)
+		return f.refusal(job, path)
 	}
 	return sealed.written
 }
 
-func (f _Frames) refusal(job uint64, at string) []byte {
+func (f _Frames) refusal(job uint64, path string) []byte {
 	var unbounded = _Frames{limit: math.MaxInt}
-	return unbounded.failure(job, at, located(at, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
+	return unbounded.failure(job, path, located(path, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
 }
 
 func (w *_WireWriter) answer(result _Rendered) error {

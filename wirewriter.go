@@ -135,13 +135,13 @@ func escapeAt(text string, index int) (string, int) {
 	if code := text[index]; code < utf8.RuneSelf {
 		return controlEscapes[code], 1
 	}
-	read, width := utf8.DecodeRuneInString(text[index:])
+	character, width := utf8.DecodeRuneInString(text[index:])
 	switch {
-	case read == utf8.RuneError && width == 1:
+	case character == utf8.RuneError && width == 1:
 		return "\\ufffd", 1
-	case read == 0x2028:
+	case character == 0x2028:
 		return "\\u2028", width
-	case read == 0x2029:
+	case character == 0x2029:
 		return "\\u2029", width
 	}
 	return "", width

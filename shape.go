@@ -330,7 +330,7 @@ func compareTagged(a, b _JSONField) int {
 	return 1
 }
 
-func (c *_ShapeCursor) at() *_ShapeNode {
+func (c *_ShapeCursor) current() *_ShapeNode {
 	if c == nil {
 		return nil
 	}
@@ -338,12 +338,12 @@ func (c *_ShapeCursor) at() *_ShapeNode {
 }
 
 func (c *_ShapeCursor) skips() bool {
-	var node = c.at()
+	var node = c.current()
 	return node != nil && node.Expression
 }
 
 func (c *_ShapeCursor) key(key string) *_ShapeCursor {
-	var node = c.at()
+	var node = c.current()
 	if node == nil {
 		return nil
 	}
@@ -358,7 +358,7 @@ func (c *_ShapeCursor) key(key string) *_ShapeCursor {
 }
 
 func (c *_ShapeCursor) item() *_ShapeCursor {
-	var node = c.at()
+	var node = c.current()
 	if node == nil || node.Items == 0 {
 		return nil
 	}

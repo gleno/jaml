@@ -55,10 +55,10 @@ func (d _Delimiter) around(code string) string {
 	return d.opens + excerpt(code, codeExcerptLength) + d.closes
 }
 
-func (c *_Compiler) visit(node any, at *_DataPath) error {
+func (c *_Compiler) visit(node any, path *_DataPath) error {
 	written, isString := node.(string)
 	if !isString {
-		return eachChild(node, at, c.visit)
+		return eachChild(node, path, c.visit)
 	}
 	if _, seen := c.texts[written]; seen {
 		return nil
@@ -68,7 +68,7 @@ func (c *_Compiler) visit(node any, at *_DataPath) error {
 	}
 	compiled, err := c.compileText(written)
 	if err != nil {
-		return fail(InvalidExpression, "%w", err).within(at.String())
+		return fail(InvalidExpression, "%w", err).within(path.String())
 	}
 	if compiled.holdsCode() {
 		c.texts[written] = compiled

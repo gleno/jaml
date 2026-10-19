@@ -16,7 +16,7 @@ func Resolve[T any](ctx context.Context, e *Expression, args ...any) (T, error) 
 	return result, err
 }
 
-func (e *Expression) resolve(ctx context.Context, into any, args []any) error {
+func (e *Expression) resolve(ctx context.Context, destination any, args []any) error {
 	if e == nil || e.held == nil {
 		return unmadeExpression("Resolve")
 	}
@@ -26,7 +26,7 @@ func (e *Expression) resolve(ctx context.Context, into any, args []any) error {
 	if err := e.held.admit(ctx, selectedPath(e.path).String()); err != nil {
 		return err
 	}
-	var target = reflect.TypeOf(into).Elem()
+	var target = reflect.TypeOf(destination).Elem()
 	if err := checkTarget(target); err != nil {
 		return err
 	}
@@ -48,10 +48,10 @@ func (e *Expression) resolve(ctx context.Context, into any, args []any) error {
 	}
 	var request = _Work{Path: e.path, Values: values, Scripts: scripts, Args: arguments, Skips: skips}
 	return e.held.answer(ctx, request, func(settled _Answered) error {
-		if err := json.Unmarshal(settled.data, into); err != nil {
+		if err := json.Unmarshal(settled.data, destination); err != nil {
 			return err
 		}
-		var decoded = reflect.ValueOf(into).Elem()
+		var decoded = reflect.ValueOf(destination).Elem()
 		for _, path := range settled.skipped {
 			bindView(decoded, path, &Expression{held: e.held, path: slices.Concat(e.path, path)})
 		}

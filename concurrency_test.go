@@ -20,10 +20,10 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 			Items   []string `json:"items"`
 			Leak    int      `json:"leak"`
 		}
-		var wait sync.WaitGroup
+		var group sync.WaitGroup
 		var failures = make(chan error, 64)
 		for worker := range 16 {
-			wait.Go(func() {
+			group.Go(func() {
 				for round := range 20 {
 					var n = worker*100 + round
 					var who = fmt.Sprintf("w%d", worker)
@@ -44,7 +44,7 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 				}
 			})
 		}
-		wait.Wait()
+		group.Wait()
 		close(failures)
 		for err := range failures {
 			t.Error(err)
@@ -56,16 +56,16 @@ func TestSharedVarsAreNotMutated(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "v: ${ [...shared.list, 1].length }\n")
 		var vars = map[string]any{"shared": map[string]any{"list": []any{}}}
-		var wait sync.WaitGroup
+		var group sync.WaitGroup
 		for range 8 {
-			wait.Go(func() {
+			group.Go(func() {
 				var out int
 				if err := resolveInto(valued(t.Context(), vars), &out, document.At("v")); err != nil || out != 1 {
 					t.Errorf("got %d, %v", out, err)
 				}
 			})
 		}
-		wait.Wait()
+		group.Wait()
 		expectEqual(t, vars["shared"], map[string]any{"list": []any{}})
 	})
 }

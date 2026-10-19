@@ -206,8 +206,8 @@ func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the respawning Eval outlived its sandbox")
 	}
-	if took := time.Since(started); took > 500*time.Millisecond {
-		t.Fatalf("an Eval behind a respawn took %s to see its sandbox end", took)
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("an Eval behind a respawn took %s to see its sandbox end", elapsed)
 	}
 }
 

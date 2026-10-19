@@ -98,16 +98,16 @@ func TestJobsThatOverflowTogetherInACrowdSucceedOnReplay(t *testing.T) {
 		documents[index] = mustJaml(t, sb, crowdedTemplate(index))
 	}
 	for round := range 2 {
-		var wait sync.WaitGroup
+		var group sync.WaitGroup
 		for index, document := range documents {
-			wait.Go(func() {
+			group.Go(func() {
 				var out int
 				if err := resolveInto(valued(within(t, 120*time.Second), map[string]any{"x": index}), &out, document.At("e")); err != nil || out != index+1 {
 					t.Errorf("round %d, document %d: got %d, %v", round, index, out, err)
 				}
 			})
 		}
-		wait.Wait()
+		group.Wait()
 	}
 }
 

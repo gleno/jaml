@@ -21,13 +21,13 @@ func TestThePinnedClockIsTheSameInstantInBothKinds(t *testing.T) {
 		"sub-millisecond":   time.Unix(0, 1_500_000),
 		"saturating":        time.Unix(math.MaxInt64, 0),
 	}
-	for name, at := range clocks {
+	for name, timestamp := range clocks {
 		t.Run(name, func(t *testing.T) {
 			var seen = map[string][]any{}
 			for _, kind := range sandboxKinds {
 				var compiled = mustExpression(t, sharedSandbox(t, kind), "[Date.now(), String(new Date())]")
 				var drawn []any
-				if err := resolveInto(WithFixedClock(t.Context(), at), &drawn, compiled); err != nil {
+				if err := resolveInto(WithFixedClock(t.Context(), timestamp), &drawn, compiled); err != nil {
 					t.Fatalf("%s: %v", kind.name, err)
 				}
 				seen[kind.name] = drawn

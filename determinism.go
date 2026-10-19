@@ -38,14 +38,14 @@ func pin(ctx context.Context) _Pinned {
 	return _Pinned{Millis: unixMillis(clock), Seed: seed}
 }
 
-func unixMillis(at time.Time) int64 {
+func unixMillis(timestamp time.Time) int64 {
 	switch {
-	case at.Before(time.UnixMilli(math.MinInt64)):
+	case timestamp.Before(time.UnixMilli(math.MinInt64)):
 		return math.MinInt64
-	case at.After(time.UnixMilli(math.MaxInt64)):
+	case timestamp.After(time.UnixMilli(math.MaxInt64)):
 		return math.MaxInt64
 	}
-	return at.UnixMilli()
+	return timestamp.UnixMilli()
 }
 
 func (p _Pinned) now() time.Time {

@@ -52,12 +52,12 @@ type _KeyDeep struct {
 }
 
 func jsonPicks(target reflect.Type, key string) []int {
-	var into = reflect.New(target)
+	var pointer = reflect.New(target)
 	var written = fmt.Sprintf(`{%q: 7}`, key)
-	if err := json.Unmarshal([]byte(written), into.Interface()); err != nil {
+	if err := json.Unmarshal([]byte(written), pointer.Interface()); err != nil {
 		return nil
 	}
-	return setLeaf(into.Elem(), nil)
+	return setLeaf(pointer.Elem(), nil)
 }
 
 func setLeaf(value reflect.Value, index []int) []int {

@@ -192,9 +192,9 @@ func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T)
 		documents[index] = mustJaml(t, sb, fmt.Sprintf("v: ${ n * %d }\n", index))
 		expressions[index] = mustExpression(t, sb, fmt.Sprintf("x => x + %d", index))
 	}
-	var wait sync.WaitGroup
+	var group sync.WaitGroup
 	for index := range documents {
-		wait.Go(func() {
+		group.Go(func() {
 			for round := range 20 {
 				var fromTemplate, fromCall int
 				if err := resolveInto(valued(within(t, 30*time.Second), map[string]any{"n": round}), &fromTemplate, documents[index].At("v")); err != nil || fromTemplate != round*index {
@@ -206,7 +206,7 @@ func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T)
 			}
 		})
 	}
-	wait.Wait()
+	group.Wait()
 	expectEqual(t, childPID(t, sb), pid)
 	expectEqual(t, liveChildren(t), before)
 }

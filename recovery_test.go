@@ -81,11 +81,11 @@ func recordRequests(t *testing.T, sb *Sandbox) *_RequestLog {
 }
 
 func tap(t *testing.T, child *_Life, log *_RequestLog) {
-	read, write, err := os.Pipe()
+	reader, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeAll(read, write) })
+	t.Cleanup(func() { closeAll(reader, writer) })
 	child.wire.mu.Lock()
 	log.mu.Lock()
 	for u, r := range child.wire.residents {
@@ -95,10 +95,10 @@ func tap(t *testing.T, child *_Life, log *_RequestLog) {
 	child.wire.mu.Unlock()
 	child.wire.writer <- struct{}{}
 	var forwarded = child.wire.requests
-	child.wire.requests = write
+	child.wire.requests = writer
 	<-child.wire.writer
 	go func() {
-		var lines = bufio.NewReader(read)
+		var lines = bufio.NewReader(reader)
 		for {
 			line, err := lines.ReadBytes('\n')
 			if err != nil {
@@ -137,9 +137,9 @@ func TestAMemoryBombAmongEightFailsAloneAndTheOthersReturn(t *testing.T) {
 	var log = recordRequests(t, sb)
 	var before = childPID(t, sb)
 	var peak = watchPeak(sb)
-	var wait sync.WaitGroup
+	var group sync.WaitGroup
 	for job := range 7 {
-		wait.Go(func() {
+		group.Go(func() {
 			var tag int
 			if err := resolveInto(within(t, 60*time.Second), &tag, peers, map[string]any{"loops": slowLoops(1), "tag": job}); err != nil || tag != job {
 				t.Errorf("peer %d: got %d, %v", job, tag, err)
@@ -149,7 +149,7 @@ func TestAMemoryBombAmongEightFailsAloneAndTheOthersReturn(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	var out any
 	var err = resolveInto(within(t, 60*time.Second), &out, bomb, map[string]any{"loops": slowLoops(0.05)})
-	wait.Wait()
+	group.Wait()
 	expectError(t, err, MemoryLimit, "$: exceeded the memory limit of 67108864 bytes")
 	expectEqual(t, peak(), 8)
 	expectEqual(t, len(log.served(unitOf(bomb))), 2)
@@ -164,16 +164,16 @@ func TestJobsThatOnlyOverflowTogetherSucceedOnReplay(t *testing.T) {
 	var sb = mustIsolated(t, WithMemoryLimit(64<<20), WithMaxConcurrency(2))
 	var holder = mustExpression(t, sb, "x => { const held = 'x'.repeat(40 << 20); let n = 0; for (let i = 0; i < x.loops; i++) n += i % 3; return held.length + x.tag }")
 	var before = childPID(t, sb)
-	var wait sync.WaitGroup
+	var group sync.WaitGroup
 	for job := range 2 {
-		wait.Go(func() {
+		group.Go(func() {
 			var length int
 			if err := resolveInto(within(t, 60*time.Second), &length, holder, map[string]any{"loops": slowLoops(2), "tag": job}); err != nil || length != 40<<20+job {
 				t.Errorf("holder %d: got %d, %v", job, length, err)
 			}
 		})
 	}
-	wait.Wait()
+	group.Wait()
 	if childPID(t, sb) == before {
 		t.Fatal("80 MiB held at once fit under a 64 MiB ceiling")
 	}
@@ -185,9 +185,9 @@ func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 	var peers = mustExpression(t, sb, slowCall)
 	var runaway = mustExpression(t, sb, "/^(a+)+(?=b)/.test('a'.repeat(32) + 'c')")
 	var before = childPID(t, sb)
-	var wait sync.WaitGroup
+	var group sync.WaitGroup
 	for job := range 7 {
-		wait.Go(func() {
+		group.Go(func() {
 			var tag int
 			if err := resolveInto(within(t, 60*time.Second), &tag, peers, map[string]any{"loops": slowLoops(2.5), "tag": job}); err != nil || tag != job {
 				t.Errorf("peer %d: got %d, %v", job, tag, err)
@@ -199,7 +199,7 @@ func TestARunawayBuiltInPastItsDeadlineFailsAloneWithItsCause(t *testing.T) {
 	var out any
 	var err = resolveInto(within(t, 100*time.Millisecond), &out, runaway)
 	var stopped = time.Since(started)
-	wait.Wait()
+	group.Wait()
 	expectError(t, err, EvaluationFailed, "$: cancelled: context deadline exceeded")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded in %v", err)
@@ -222,9 +222,9 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 	var contexts = map[string]context.Context{"unset": t.Context(), "fixed": fixed}
 	var seen = map[string][]any{}
 	var guard sync.Mutex
-	var wait sync.WaitGroup
+	var group sync.WaitGroup
 	for name, ctx := range contexts {
-		wait.Go(func() {
+		group.Go(func() {
 			bounded, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
 			var drawn []any
@@ -239,7 +239,7 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	var out any
 	expectError(t, resolveInto(within(t, 60*time.Second), &out, bomb, map[string]any{"loops": slowLoops(0.05)}), MemoryLimit)
-	wait.Wait()
+	group.Wait()
 	var attempts = log.served(unitOf(observer))
 	expectEqual(t, len(attempts), 4)
 	var pins = map[_Pinned]int{}

@@ -164,7 +164,7 @@ func describeFailure(err error) _Failure {
 	if !isOwn {
 		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
 	}
-	var described = _Failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error()}
+	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
@@ -215,7 +215,7 @@ func (f _Failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return _ExpressionError{kind: kind, at: f.At, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+	return _ExpressionError{kind: kind, path: f.At, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {

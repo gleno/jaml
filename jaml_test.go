@@ -95,10 +95,10 @@ func evalAs[T any](t *testing.T, e *Expression, values map[string]any, path ...s
 	return mustResolve[T](t, valued(t.Context(), values), e.At(path...))
 }
 
-func resolveInto[T any](ctx context.Context, into *T, e *Expression, args ...any) error {
+func resolveInto[T any](ctx context.Context, target *T, e *Expression, args ...any) error {
 	resolved, err := Resolve[T](ctx, e, args...)
 	if err == nil {
-		*into = resolved
+		*target = resolved
 	}
 	return err
 }

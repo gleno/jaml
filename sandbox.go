@@ -228,13 +228,13 @@ func (e *Expression) Copy(ctx context.Context) (*Expression, error) {
 	if e == nil || e.held == nil {
 		return nil, unmadeExpression("Copy")
 	}
-	var at = selectedPath(e.path).String()
-	if err := e.held.admit(ctx, at); err != nil {
+	var path = selectedPath(e.path).String()
+	if err := e.held.admit(ctx, path); err != nil {
 		return nil, err
 	}
 	held, holding := e.held.keep.hold(ctx)
 	if !holding {
-		return nil, e.held.keep.closed().within(at)
+		return nil, e.held.keep.closed().within(path)
 	}
 	return &Expression{held: held, path: e.path}, nil
 }
@@ -243,12 +243,12 @@ func unmadeExpression(method string) error {
 	return fail(InvalidExpression, "%s on an expression not made by a Sandbox", method)
 }
 
-func (h *_Handle) admit(ctx context.Context, at string) error {
+func (h *_Handle) admit(ctx context.Context, path string) error {
 	if h.ended() {
-		return fail(Closed, "%s has ended", h.endedContext()).within(at)
+		return fail(Closed, "%s has ended", h.endedContext()).within(path)
 	}
 	if ctx.Err() != nil {
-		return fail(EvaluationFailed, "%w", cancelled(ctx)).within(at)
+		return fail(EvaluationFailed, "%w", cancelled(ctx)).within(path)
 	}
 	return nil
 }
@@ -261,21 +261,21 @@ func (h *_Handle) answer(ctx context.Context, request _Work, decode func(settled
 	var unbind = context.AfterFunc(h.lifetime, func() { stop(errLifetimeOver) })
 	defer unbind()
 	var result = h.keep.unit.serve(job, request)
-	var at = selectedPath(request.Path).String()
+	var path = selectedPath(request.Path).String()
 	switch {
 	case h.ended():
-		return fail(Closed, "%s ended while it ran", h.endedContext()).within(at)
+		return fail(Closed, "%s ended while it ran", h.endedContext()).within(path)
 	case ctx.Err() != nil:
-		return located(at, cancelled(ctx))
+		return located(path, cancelled(ctx))
 	}
 	switch settled := result.(type) {
 	case _Answered:
 		if err := decode(settled); err != nil {
-			return fail(CoercionFailed, "%w", err).within(blame(at, settled.data, err))
+			return fail(CoercionFailed, "%w", err).within(blame(path, settled.data, err))
 		}
 		return nil
 	case _Refused:
-		return located(at, settled.err)
+		return located(path, settled.err)
 	}
-	return located(at, errUnjudged)
+	return located(path, errUnjudged)
 }

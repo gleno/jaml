@@ -17,28 +17,28 @@ type _Renderer struct {
 }
 
 type _Place struct {
-	at    *_DataPath
+	path  *_DataPath
 	skips *_ShapeCursor
 }
 
-func (r *_Renderer) place(at *_DataPath) _Place {
+func (r *_Renderer) place(path *_DataPath) _Place {
 	if r.skips == nil {
-		return _Place{at: at}
+		return _Place{path: path}
 	}
-	return _Place{at: at, skips: &_ShapeCursor{shape: r.skips}}
+	return _Place{path: path, skips: &_ShapeCursor{shape: r.skips}}
 }
 
 func (p _Place) key(key string) _Place {
-	return _Place{at: p.at.atKey(key), skips: p.skips.key(key)}
+	return _Place{path: p.path.atKey(key), skips: p.skips.key(key)}
 }
 
 func (p _Place) item(index int) _Place {
-	return _Place{at: p.at.atIndex(index), skips: p.skips.item()}
+	return _Place{path: p.path.atIndex(index), skips: p.skips.item()}
 }
 
 func (r *_Renderer) render(node any, place _Place) (any, error) {
 	if place.skips.skips() {
-		r.skipped = append(r.skipped, r.relative(place.at))
+		r.skipped = append(r.skipped, r.relative(place.path))
 		return map[string]any{}, nil
 	}
 	switch typed := node.(type) {
@@ -67,15 +67,15 @@ func (r *_Renderer) render(node any, place _Place) (any, error) {
 		if !hasCode {
 			return typed, nil
 		}
-		return r.renderText(compiled, place.at)
+		return r.renderText(compiled, place.path)
 	default:
 		return node, nil
 	}
 }
 
-func (r *_Renderer) relative(at *_DataPath) []string {
+func (r *_Renderer) relative(path *_DataPath) []string {
 	var steps []string
-	for step := at; step.depth() > r.depth; step = step.parent {
+	for step := path; step.depth() > r.depth; step = step.parent {
 		if step.keyed {
 			steps = append(steps, step.key)
 		} else {
@@ -86,13 +86,13 @@ func (r *_Renderer) relative(at *_DataPath) []string {
 	return steps
 }
 
-func (r *_Renderer) renderText(compiled _Text, at *_DataPath) (any, error) {
+func (r *_Renderer) renderText(compiled _Text, path *_DataPath) (any, error) {
 	if compiled.whole != nil {
-		result, err := r.evaluate(*compiled.whole, at)
+		result, err := r.evaluate(*compiled.whole, path)
 		if err != nil {
 			return nil, err
 		}
-		return r.admit(result, *compiled.whole, at)
+		return r.admit(result, *compiled.whole, path)
 	}
 	var rendered strings.Builder
 	for _, piece := range compiled.segments {
@@ -100,24 +100,24 @@ func (r *_Renderer) renderText(compiled _Text, at *_DataPath) (any, error) {
 			rendered.WriteString(piece.literal)
 			continue
 		}
-		result, err := r.evaluate(*piece.code, at)
+		result, err := r.evaluate(*piece.code, path)
 		if err != nil {
 			return nil, err
 		}
-		admitted, err := r.admit(result, *piece.code, at)
+		admitted, err := r.admit(result, *piece.code, path)
 		if err != nil {
 			return nil, err
 		}
 		written, err := stringify(admitted)
 		if err != nil {
-			return nil, fail(EvaluationFailed, "%s: %w", piece.code.written(), err).within(at.String())
+			return nil, fail(EvaluationFailed, "%s: %w", piece.code.written(), err).within(path.String())
 		}
 		rendered.WriteString(written)
 	}
 	return rendered.String(), nil
 }
 
-func (r *_Renderer) admit(result any, compiled _Expression, at *_DataPath) (any, error) {
+func (r *_Renderer) admit(result any, compiled _Expression, path *_DataPath) (any, error) {
 	absent, coercion := "", Loose
 	switch result.(type) {
 	case nil:
@@ -128,7 +128,7 @@ func (r *_Renderer) admit(result any, compiled _Expression, at *_DataPath) (any,
 		return result, nil
 	}
 	if coercion == Strict {
-		return nil, fail(CoercionFailed, "%s is %s, which strict %s coercion refuses%s", compiled.written(), absent, absent, hintFor(absent, compiled)).within(at.String())
+		return nil, fail(CoercionFailed, "%s is %s, which strict %s coercion refuses%s", compiled.written(), absent, absent, hintFor(absent, compiled)).within(path.String())
 	}
 	return nil, nil
 }
@@ -140,14 +140,14 @@ func hintFor(absent string, compiled _Expression) string {
 	return compiled.undefinedHint()
 }
 
-func (r *_Renderer) evaluate(compiled _Expression, at *_DataPath) (any, error) {
+func (r *_Renderer) evaluate(compiled _Expression, path *_DataPath) (any, error) {
 	session, err := r.engine.open()
 	if err != nil {
 		return nil, err
 	}
 	result, err := session.evaluate(compiled, r.args)
 	if err != nil {
-		return nil, fail(EvaluationFailed, "%s: %w", compiled.written(), err).within(at.String())
+		return nil, fail(EvaluationFailed, "%s: %w", compiled.written(), err).within(path.String())
 	}
 	return result, nil
 }

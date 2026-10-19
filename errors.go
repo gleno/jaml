@@ -6,7 +6,7 @@ const rootPlace = "$"
 
 type _ExpressionError struct {
 	kind  error
-	at    string
+	path  string
 	cause error
 }
 
@@ -14,16 +14,16 @@ func fail(kind error, format string, args ...any) _ExpressionError {
 	return _ExpressionError{kind: kind, cause: fmt.Errorf(format, args...)}
 }
 
-func (e _ExpressionError) within(at string) _ExpressionError {
-	e.at = at
+func (e _ExpressionError) within(path string) _ExpressionError {
+	e.path = path
 	return e
 }
 
 func (e _ExpressionError) place() string {
-	if e.at == "" {
+	if e.path == "" {
 		return rootPlace
 	}
-	return e.at
+	return e.path
 }
 
 func (e _ExpressionError) Error() string {
