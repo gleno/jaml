@@ -2,6 +2,7 @@ package jaml
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"time"
 )
@@ -13,8 +14,8 @@ type randomSeedKey struct{}
 const seedStream = 0x6a616d6c
 
 type pinned struct {
-	Clock time.Time `json:"clock"`
-	Seed  uint64    `json:"seed"`
+	Millis int64  `json:"clock"`
+	Seed   uint64 `json:"seed"`
 }
 
 func WithFixedClock(ctx context.Context, at time.Time) context.Context {
@@ -34,11 +35,21 @@ func pin(ctx context.Context) pinned {
 	if !seeded {
 		seed = rand.Uint64()
 	}
-	return pinned{Clock: clock.Round(0), Seed: seed}
+	return pinned{Millis: unixMillis(clock), Seed: seed}
+}
+
+func unixMillis(at time.Time) int64 {
+	switch {
+	case at.Before(time.UnixMilli(math.MinInt64)):
+		return math.MinInt64
+	case at.After(time.UnixMilli(math.MaxInt64)):
+		return math.MaxInt64
+	}
+	return at.UnixMilli()
 }
 
 func (p pinned) now() time.Time {
-	return p.Clock
+	return time.UnixMilli(p.Millis)
 }
 
 func (p pinned) random() func() float64 {

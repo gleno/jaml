@@ -249,8 +249,8 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 	expectEqual(t, len(pins), 2)
 	for pin, count := range pins {
 		expectEqual(t, count, 2)
-		if pin.Clock.UnixMilli() != int64(seen["unset"][0].(float64)) && pin.Clock.UnixMilli() != int64(seen["fixed"][0].(float64)) {
-			t.Fatalf("no Call saw the pinned clock %s: %v", pin.Clock, seen)
+		if pin.Millis != int64(seen["unset"][0].(float64)) && pin.Millis != int64(seen["fixed"][0].(float64)) {
+			t.Fatalf("no Call saw the pinned clock %d: %v", pin.Millis, seen)
 		}
 	}
 	trusted := mustCompile(t, mustSandbox(t, trustedKind), "x => [Date.now(), Math.random(), Math.random()]")

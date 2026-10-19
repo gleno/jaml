@@ -95,7 +95,7 @@ ctx = jaml.WithFixedClock(ctx, at)
 ctx = jaml.WithRandomSeed(ctx, seed)
 ```
 
-Every `Eval` and `Call` pins a clock and a random seed when it is submitted: the ones on its context, or else the current time and a fresh random seed. `Date.now()` and `new Date()` return the pinned time for the whole call, and `Math.random()` draws from a generator seeded with the pinned seed. With both set, results are identical in both sandbox kinds and on every run. Pinning at submission also means that a call replayed after a crash (see below) sees exactly what its first attempt saw.
+Every `Eval` and `Call` pins a clock and a random seed when it is submitted: the ones on its context, or else the current time and a fresh random seed. `Date.now()` and `new Date()` return the pinned time for the whole call, and `Math.random()` draws from a generator seeded with the pinned seed. With both set, results are identical in both sandbox kinds and on every run. The clock is pinned to the millisecond, the way JavaScript sees it: any instant is accepted, its zone and anything below a millisecond are dropped, and an instant beyond about 292 million years from 1970 is held at that bound, the same in both kinds. Past the JavaScript `Date` range (±8.64e15 ms) `Date.now()` still returns the pinned number, and `new Date()` is an `Invalid Date`. Pinning at submission also means that a call replayed after a crash (see below) sees exactly what its first attempt saw.
 
 ### Thrown values
 
