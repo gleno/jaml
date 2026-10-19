@@ -52,14 +52,14 @@ type blueprint struct {
 }
 
 type work struct {
-	Path   []string    `json:"path,omitempty"`
-	Vars   encodedVars `json:"vars,omitempty"`
-	Call   *callArgs   `json:"call,omitempty"`
-	Pinned pinned      `json:"pinned"`
+	Path   []string  `json:"path,omitempty"`
+	Vars   boundVars `json:"vars,omitempty"`
+	Call   *callArgs `json:"call,omitempty"`
+	Pinned pinned    `json:"pinned"`
 }
 
 type callArgs struct {
-	Args []json.RawMessage `json:"args"`
+	Args []datum `json:"args"`
 }
 
 type reply struct {
@@ -226,11 +226,7 @@ func (t *thrownOnWire) rebuild() *Thrown {
 	if t == nil {
 		return nil
 	}
-	var value any
-	if err := json.Unmarshal(t.Value, &value); err != nil {
-		value = nil
-	}
-	return &Thrown{Message: t.Message, Value: value}
+	return newThrown(t.Message, t.Value)
 }
 
 type carriedCause struct {

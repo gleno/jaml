@@ -42,13 +42,17 @@ func clip(text string, limit int) string {
 }
 
 func (r realm) explain(err error) error {
-	var overflowed *goja.StackOverflowError
-	if errors.As(err, &overflowed) {
-		return fmt.Errorf("exceeded the maximum call depth of %d", maxCallStackSize)
-	}
 	var exception *goja.Exception
 	if errors.As(err, &exception) {
 		return r.describeException(exception)
+	}
+	return uncatchable(err)
+}
+
+func uncatchable(err error) error {
+	var overflowed *goja.StackOverflowError
+	if errors.As(err, &overflowed) {
+		return fmt.Errorf("exceeded the maximum call depth of %d", maxCallStackSize)
 	}
 	if holdsEngineValue(err) {
 		return fmt.Errorf("the engine stopped with a %T", err)
@@ -57,17 +61,15 @@ func (r realm) explain(err error) error {
 }
 
 func (r realm) describeException(exception *goja.Exception) *Thrown {
-	message, err := r.describe(exception.Value())
-	if err != nil {
-		message = unreadableThrow
-	}
-	return &Thrown{Message: message, Value: r.snapshot(exception.Value())}
+	return newThrown(r.describe(exception.Value()), r.snapshot(exception.Value()))
 }
 
-func (r realm) describe(value goja.Value) (string, error) {
+func (r realm) describe(value goja.Value) string {
 	var text string
-	err := r.guarded(func() { text = r.describeThrown(value) })
-	return excerpt(text, thrownExcerptLength), err
+	if err := r.contain(func() { text = r.describeThrown(value) }); err != nil {
+		return unreadableThrow
+	}
+	return excerpt(text, thrownExcerptLength)
 }
 
 func typeOf(value goja.Value) string {

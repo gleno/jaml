@@ -18,7 +18,7 @@ Nothing in jaml has a `Close` method. **Everything lives exactly as long as the 
 
 So **pass a long-lived context** to the constructors: your service's root context, not a request's. A template made with a request-scoped context dies when the request ends. Each call (`Eval`, `Call`) takes its own context, which bounds only that call.
 
-A template or expression you drop without ending its context is still forgotten: once the garbage collector finds it unreachable, jaml ends its lifetime and tells the sandbox to drop it.
+A template or expression you drop without ending its context is still forgotten: once the garbage collector finds no copy of it reachable, jaml ends its lifetime and tells the sandbox to drop it. Copying a `Template` or `Expression` by value is fine; every copy works for as long as any of them is reachable.
 
 ## What it gives you
 
@@ -67,7 +67,7 @@ err = template.Eval(requestCtx, &cfg, map[string]any{"name": "abc"}, "config")
 
 `Eval(ctx, into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error.
 
-`vars` must be JSON data. Every `Eval` checks and binds all of them before evaluating anything, whatever the path selects. A var that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …) is an `EvaluationFailed` error naming the var, never a template path.
+`vars` must be JSON data. Every `Eval` checks and binds all of them before evaluating anything, whatever the path selects. A var that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …, and every name the global object inherits: `constructor`, `hasOwnProperty`, `__proto__`, …) is an `EvaluationFailed` error naming the var, never a template path. Text is checked as JavaScript will see it, whatever marshalled it: a `json.RawMessage` or a custom `MarshalJSON` that writes an unpaired surrogate escape (`"\ud800"`) or raw bytes that are not UTF-8 is refused too. `encoding/json` writes invalid UTF-8 in a Go string as the escape `\ufffd`, so that escape is refused wherever it appears; a real U+FFFD written as the character itself binds.
 
 ### Expressions and functions
 
@@ -107,7 +107,7 @@ if errors.As(err, &thrown) {
 }
 ```
 
-An error from an expression that threw wraps a `*jaml.Thrown`, inside an `EvaluationFailed`. `Value` is what the thrown value looks like as JSON, read without calling `toJSON`: numbers are `float64`, lists `[]any`, objects `map[string]any`. Inside objects, functions, symbols and `undefined` are left out; inside lists they become `nil`. `NaN`, infinities and BigInts become `nil`. An `Error` or class instance contributes its own enumerable properties (`e.status = 404` gives `{"status": 404}`). Cycles, proxies and anything nested deeper than 4096 become `nil`. If reading the value throws, or it holds more than 1,048,576 values, `Value` is `nil`. Getters run while it is read, inside the sandbox. No JavaScript value ever reaches your code.
+An error from an expression that threw wraps a `*jaml.Thrown`, inside an `EvaluationFailed`. `Value` is what the thrown value looks like as JSON, read without calling `toJSON`: numbers are `float64`, lists `[]any`, objects `map[string]any`. Inside objects, functions, symbols and `undefined` are left out; inside lists they become `nil`. `NaN`, infinities and BigInts become `nil`. An `Error` or class instance contributes its own enumerable properties (`e.status = 404` gives `{"status": 404}`). Cycles, proxies and anything nested deeper than 4096 become `nil`. A string with an unpaired surrogate becomes `nil`, and a key with one is left out. If reading the value throws, or it holds more than 1,048,576 values, counting the value itself and every listed element and key once (left-out keys included), `Value` is `nil`: the same limit a result has. Getters run while it is read, inside the sandbox. Once the call's context has ended, the thrown value is not read; the call fails with the context's cause. No JavaScript value ever reaches your code.
 
 ## Syntax
 
@@ -187,7 +187,7 @@ Both kinds run at most `WithMaxConcurrency` jobs at once, in arrival order; a jo
 
 ### Trusted
 
-`MakeTrustedSandbox` runs everything in your process. The context of each call interrupts its JavaScript cooperatively, so an infinite loop ends with its context, but a built-in that never returns to the interpreter runs on, and an allocation bomb takes your process down. A build that outlives its context or timeout returns to you at once, and keeps its concurrency slot until it has stopped. `WithMemoryLimit` is refused. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code; trusted mode makes no promise about running untrusted code.
+`MakeTrustedSandbox` runs everything in your process. The context of each call interrupts its JavaScript cooperatively, so an infinite loop ends with its context, and so does binding vars or reading a result or a thrown value; but a built-in that never returns to the interpreter runs on, and an allocation bomb takes your process down. A build that outlives its context or timeout returns to you at once, and keeps its concurrency slot until it has stopped. `WithMemoryLimit` is refused. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code; trusted mode makes no promise about running untrusted code.
 
 ### Isolated
 

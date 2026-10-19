@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ func expectNoTemplatePath(t *testing.T, err error) {
 }
 
 func TestVarsNamedLikeJavaScriptGlobalsAreRefusedInBothKinds(t *testing.T) {
-	for _, name := range []string{"JSON", "Error", "Array", "Math", "globalThis", "undefined", "NaN", "Infinity", "eval", "Function", "Object", "parseInt"} {
+	for _, name := range []string{"JSON", "Error", "Array", "Math", "globalThis", "undefined", "NaN", "Infinity", "eval", "Function", "Object", "parseInt", "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "__proto__"} {
 		t.Run(name, func(t *testing.T) {
 			for _, text := range []string{"a: ${ 1 }\nb: ${ 2 }\n", "plain: 1\n"} {
 				both := agreement{text: text, vars: map[string]any{name: 7, "fine": 1}}.eval(t, intoAny)
@@ -94,4 +95,77 @@ func TestVarsBindOnceTheFirstExpressionNeedsThem(t *testing.T) {
 		template := mustTemplate(t, sb, "plain: [1, 2]\nlater: ${ answer + 1 }\n")
 		expectEqual(t, evalAs[map[string]any](t, template, map[string]any{"answer": 41}), map[string]any{"plain": []any{float64(1), float64(2)}, "later": float64(42)})
 	})
+}
+
+type writtenJSON string
+
+func (w writtenJSON) MarshalJSON() ([]byte, error) {
+	return []byte(w), nil
+}
+
+var textThatIsNotUTF8 = map[string]any{
+	"escaped lone high":      json.RawMessage(`"\ud800"`),
+	"escaped lone low":       json.RawMessage(`"a\udc00b"`),
+	"escaped reversed pair":  json.RawMessage(`"\udc00\ud800"`),
+	"escaped lone key":       json.RawMessage(`{"\ud800": 1}`),
+	"marshaled lone":         writtenJSON(`["\udfff"]`),
+	"raw invalid byte":       json.RawMessage("\"\xff\""),
+	"raw invalid key":        json.RawMessage("{\"\xfe\": 1}"),
+	"marshaled invalid byte": writtenJSON("{\"k\": \"a\xc3\"}"),
+}
+
+func TestVarsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) {
+	for name, value := range textThatIsNotUTF8 {
+		t.Run(name, func(t *testing.T) {
+			both := agreement{text: "v: ${ typeof bad }\n", vars: map[string]any{"bad": value}}.eval(t, intoAny)
+			both.expectRefused(t, EvaluationFailed, `binding vars: var "bad" holds text that is not valid UTF-8`)
+		})
+	}
+}
+
+func TestArgumentsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		compiled := mustCompile(t, sb, "(a, b) => typeof b")
+		for name, value := range textThatIsNotUTF8 {
+			t.Run(name, func(t *testing.T) {
+				var out any
+				expectError(t, compiled.Call(t.Context(), &out, 1, value), EvaluationFailed, `binding arguments: argument 2 holds text that is not valid UTF-8`)
+			})
+		}
+	})
+}
+
+func TestWellFormedWrittenTextStillBinds(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		compiled := mustCompile(t, sb, "x => [x.pair, x.pair.length, x.real, x.plain]")
+		var out []any
+		value := writtenJSON(`{"pair": "\ud83d\ude00", "real": "` + "\u00e9\ufffd" + `", "plain": "\u0041"}`)
+		if err := compiled.Call(t.Context(), &out, value); err != nil {
+			t.Fatal(err)
+		}
+		expectEqual(t, out, []any{"\U0001F600", float64(2), "\u00e9\ufffd", "A"})
+	})
+}
+
+func TestTheChildRefusesWorkThatWasNeverAdmitted(t *testing.T) {
+	for name, written := range map[string]string{
+		"inherited name":   `{"vars": {"hasOwnProperty": 1}, "pinned": {}}`,
+		"own global name":  `{"vars": {"JSON": 1}, "pinned": {}}`,
+		"lone surrogate":   `{"vars": {"a": "\ud800"}, "pinned": {}}`,
+		"raw invalid byte": "{\"vars\": {\"a\": \"\xff\"}, \"pinned\": {}}",
+		"too deep":         `{"vars": {"a": ` + nestedJSONText(4097) + `}, "pinned": {}}`,
+		"lone argument":    `{"call": {"args": [1, "\udc00"]}, "pinned": {}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var decoded work
+			if err := json.Unmarshal([]byte(written), &decoded); err == nil {
+				t.Fatalf("the child bound unchecked work %s", written)
+			}
+		})
+	}
+	var decoded work
+	if err := json.Unmarshal([]byte(`{"vars": {"a": "\ud83d\ude00"}, "call": {"args": [{"k": [1]}]}, "pinned": {}}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	expectEqual(t, string(decoded.Vars["a"].encoded)+string(decoded.Call.Args[0].encoded), `"\ud83d\ude00"{"k": [1]}`)
 }
