@@ -225,9 +225,9 @@ func (l *life) alive() bool {
 	}
 }
 
-func (l *life) lost(at string) lost {
+func (l *life) lost() lost {
 	<-l.ended
-	return lost{at: at, cause: l.verdict}
+	return lost{cause: l.verdict}
 }
 
 func (l *life) greet(ctx context.Context, replies *replyStream) (hello, error) {

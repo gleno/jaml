@@ -117,7 +117,7 @@ func answerBadly(requests, replies *os.File, greeting hello, badAnswer string) {
 		case opBuild:
 			fmt.Fprintf(replies, "{\"job\": %d, \"built\": true}\n", asked.Job)
 		case opServe:
-			fmt.Fprintf(replies, "{\"job\": %d, \"at\": \"$.v\"}\n"+badAnswer, asked.Job, asked.Job)
+			fmt.Fprintf(replies, badAnswer, asked.Job)
 		}
 	}
 }

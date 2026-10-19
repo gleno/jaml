@@ -65,7 +65,6 @@ type callArgs struct {
 
 type reply struct {
 	Job     uint64          `json:"job"`
-	At      *string         `json:"at,omitempty"`
 	Built   bool            `json:"built,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"`
 	Failure *failure        `json:"failure,omitempty"`
@@ -182,7 +181,7 @@ func thrownOnWireFrom(err error) *thrownOnWire {
 
 func (r reply) outcomes() int {
 	count := 0
-	for _, present := range [...]bool{r.At != nil, r.Built, len(r.Data) != 0, r.Failure != nil, r.Missing} {
+	for _, present := range [...]bool{r.Built, len(r.Data) != 0, r.Failure != nil, r.Missing} {
 		if present {
 			count++
 		}
@@ -190,7 +189,7 @@ func (r reply) outcomes() int {
 	return count
 }
 
-func (r reply) fits(op opcode, located bool) error {
+func (r reply) fits(op opcode) error {
 	switch {
 	case r.outcomes() > 1:
 		return errors.New("the evaluator answered with more than one outcome")
@@ -204,14 +203,8 @@ func (r reply) fits(op opcode, located bool) error {
 		return errors.New("the evaluator answered a build with something other than built")
 	case op == opServe && r.Built:
 		return errors.New("the evaluator answered an evaluation with a build")
-	case op == opServe && r.At != nil && located:
-		return errors.New("the evaluator located an evaluation twice")
 	}
 	return nil
-}
-
-func (r reply) final() bool {
-	return r.At == nil
 }
 
 func (f failure) kind() error {

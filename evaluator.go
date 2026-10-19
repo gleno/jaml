@@ -185,21 +185,21 @@ func (e *evaluator) build(ctx context.Context, job uint64, plan blueprint) {
 
 func (e *evaluator) serve(ctx context.Context, job uint64, held servable, request work) {
 	defer e.finish(job)
-	ready, err := held.prepare(request)
+	run, err := held.prepare(request)
 	if err != nil {
 		refused := describeFailure(err)
 		e.replies.send("", reply{Job: job, Failure: &refused})
 		return
 	}
-	e.replies.send(ready.at, reply{Job: job, At: &ready.at})
+	at := selectedPath(request.Path).String()
 	var data []byte
-	e.watch.during(func() { data, err = ready.run(ctx) })
+	e.watch.during(func() { data, err = run(ctx) })
 	if err != nil {
 		failed := describeFailure(err)
-		e.replies.send(ready.at, reply{Job: job, Failure: &failed})
+		e.replies.send(at, reply{Job: job, Failure: &failed})
 		return
 	}
-	e.replies.send(ready.at, reply{Job: job, Data: data})
+	e.replies.send(at, reply{Job: job, Data: data})
 }
 
 func (e *evaluator) finish(job uint64) {
