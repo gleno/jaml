@@ -36,7 +36,7 @@ func namesField(found *_DataPath, field string) bool {
 	if field == "" {
 		return true
 	}
-	last := field[strings.LastIndexByte(field, '.')+1:]
+	var last = field[strings.LastIndexByte(field, '.')+1:]
 	for step := found; step != nil; step = step.parent {
 		if step.keyed && step.key == last {
 			return true
@@ -55,7 +55,7 @@ type _JsonFrame struct {
 
 func mismatchedValue(encoded []byte, offset int64) (*_DataPath, json.Token, bool) {
 	var root *_DataPath
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	var decoder = json.NewDecoder(bytes.NewReader(encoded))
 	var open []*_JsonFrame
 	for {
 		token, err := decoder.Token()
@@ -67,9 +67,9 @@ func mismatchedValue(encoded []byte, offset int64) (*_DataPath, json.Token, bool
 			open = open[:len(open)-1]
 			continue
 		}
-		valueAt := root
+		var valueAt = root
 		if len(open) > 0 {
-			top := open[len(open)-1]
+			var top = open[len(open)-1]
 			switch {
 			case top.object && top.expectKey:
 				top.key, top.expectKey = token.(string), false

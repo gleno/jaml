@@ -9,7 +9,7 @@ import (
 
 func TestResolveWalksTheDocumentInWrittenOrder(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 zebra: ${ tick('zebra') }
 apple:
   - ${ tick('apple 0') }
@@ -20,15 +20,15 @@ shared: &shared ${ tick('alias') }
 again: *shared
 mango: ${ seen }
 `)
-		ctx := WithScript(t.Context(), "const order = []; function tick(name) { order.push(name); return order.length } var seen = () => order")
-		got := mustResolve[map[string]any](t, ctx, document)
+		var ctx = WithScript(t.Context(), "const order = []; function tick(name) { order.push(name); return order.length } var seen = () => order")
+		var got = mustResolve[map[string]any](t, ctx, document)
 		expectEqual(t, got["mango"], []any{"zebra", "apple 0", "inner", "first", "left", "right", "alias", "alias"})
 	})
 }
 
 func TestAFunctionLeafIsCalledWithTheArguments(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 rename: "${ (state, suffix) => ({ ...state, name: state.name + suffix }) }"
 thunk: ${ (u) => () => () => u.id * 2 }
 plain: ${ 7 }
@@ -47,7 +47,7 @@ receiver: ${ function () { return this === globalThis } }
 
 func TestAnExpressionFieldStaysUnevaluatedUntilItsOwnResolve(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 config:
   team: ${ user.team }
   names: ${ (u) => [u.name, user.team] }
@@ -64,27 +64,27 @@ config:
 			Later map[string]*Expression `json:"later"`
 			Each  []*Expression          `json:"each"`
 		}
-		ctx := withValues(t, map[string]any{"user": map[string]any{"team": "core"}})
-		got := mustResolve[_Config](t, ctx, document.At("config"))
+		var ctx = withValues(t, map[string]any{"user": map[string]any{"team": "core"}})
+		var got = mustResolve[_Config](t, ctx, document.At("config"))
 		expectEqual(t, got.Team, "core")
-		other := map[string]any{"name": "ada"}
+		var other = map[string]any{"name": "ada"}
 		expectEqual(t, mustResolve[[]string](t, ctx, got.Names, other), []string{"ada", "core"})
 		expectEqual(t, mustResolve[string](t, ctx, got.Later["b"], other), "adab")
 		expectEqual(t, mustResolve[string](t, ctx, got.Each[1], other), "ada")
-		numbered := mustResolve[map[int]*Expression](t, ctx, mustJaml(t, sb, "\"1\": \"${ (u) => u.name }\"\n"))
+		var numbered = mustResolve[map[int]*Expression](t, ctx, mustJaml(t, sb, "\"1\": \"${ (u) => u.name }\"\n"))
 		expectEqual(t, mustResolve[string](t, ctx, numbered[1], other), "ada")
 	})
 }
 
 func TestAnExpressionFieldBindsWhereverTheDocumentHasThePath(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "present: ~\nNamed: ${ 'folded' }\n")
+		var document = mustJaml(t, sb, "present: ~\nNamed: ${ 'folded' }\n")
 		type _Target struct {
 			Present *Expression `json:"present"`
 			Missing *Expression `json:"missing"`
 			Named   *Expression `json:"named"`
 		}
-		got := mustResolve[_Target](t, t.Context(), document)
+		var got = mustResolve[_Target](t, t.Context(), document)
 		if got.Missing != nil {
 			t.Fatalf("a path the document lacks bound %v", got.Missing)
 		}
@@ -109,8 +109,8 @@ type _Observed struct {
 
 func TestTheTargetNeverObservesAPlaceholder(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "later: ${ (x) => x + 1 }\nrest:\n  inner: ${ (x) => x * 10 }\n")
-		got := mustResolve[_Observed](t, t.Context(), document, 4)
+		var document = mustJaml(t, sb, "later: ${ (x) => x + 1 }\nrest:\n  inner: ${ (x) => x * 10 }\n")
+		var got = mustResolve[_Observed](t, t.Context(), document, 4)
 		expectEqual(t, got.Rest.raw, `{"inner":40}`)
 		expectEqual(t, mustResolve[int](t, t.Context(), got.Later, 1), 2)
 		type _Raw struct {
@@ -166,9 +166,9 @@ func TestACopyDiesWithItsSandbox(t *testing.T) {
 
 func TestValuesMergeByNameAndAreCopiedWhenBound(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		pair := mustExpression(t, sb, "[a, b]")
-		values := map[string]any{"a": 1, "b": 2}
-		ctx := WithValues(t.Context(), values)
+		var pair = mustExpression(t, sb, "[a, b]")
+		var values = map[string]any{"a": 1, "b": 2}
+		var ctx = WithValues(t.Context(), values)
 		ctx = WithValues(ctx, map[string]any{"b": 3})
 		values["a"] = 9
 		expectEqual(t, mustResolve[[]int](t, ctx, pair), []int{1, 3})
@@ -178,13 +178,13 @@ func TestValuesMergeByNameAndAreCopiedWhenBound(t *testing.T) {
 
 func TestEveryLeafSeesTheValuesAsBound(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 replace: ${ (() => { try { user = 1 } catch (e) { return e.name } })() }
 remove: ${ (() => { try { delete globalThis.user } catch (e) { return e.name } })() }
 deep: ${ (() => { try { user.tags.push('x') } catch (e) { return e.name } })() }
 seen: ${ [user.name, user.tags.length, this.user === user] }
 `)
-		ctx := withValues(t, map[string]any{"user": map[string]any{"name": "ada", "tags": []string{"a"}}})
+		var ctx = withValues(t, map[string]any{"user": map[string]any{"name": "ada", "tags": []string{"a"}}})
 		expectEqual(t, mustResolve[map[string]any](t, ctx, document), map[string]any{
 			"replace": "TypeError",
 			"remove":  "TypeError",
@@ -196,13 +196,13 @@ seen: ${ [user.name, user.tags.length, this.user === user] }
 
 func TestTheUnwrapCapCountsEveryCall(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		chain := func(calls int) string {
+		var chain = func(calls int) string {
 			return "x => " + strings.Repeat("() => ", calls-1) + "x"
 		}
 		expectEqual(t, mustResolve[int](t, t.Context(), mustExpression(t, sb, chain(16)), 7), 7)
 		_, err := Resolve[int](t.Context(), mustExpression(t, sb, chain(17)), 7)
 		expectError(t, err, EvaluationFailed, "$: ", "still a function after 16 calls")
-		document := mustJaml(t, sb, "deep:\n  v: \"${ "+chain(17)+" }\"\n")
+		var document = mustJaml(t, sb, "deep:\n  v: \"${ "+chain(17)+" }\"\n")
 		_, err = Resolve[any](t.Context(), document)
 		expectError(t, err, EvaluationFailed, "$.deep.v: ", "still a function after 16 calls")
 	})
@@ -210,7 +210,7 @@ func TestTheUnwrapCapCountsEveryCall(t *testing.T) {
 
 func TestMergedKeysAreWalkedWhereTheMergeIsWritten(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 base: &base
   b: ${ tick('base b') }
   c: ${ tick('base c') }
@@ -222,8 +222,8 @@ m:
   c: ${ tick('own c') }
   z: ${ seen }
 `)
-		ctx := WithScript(t.Context(), "const order = []; function tick(name) { order.push(name); return order.length } var seen = () => order")
-		got := mustResolve[map[string]any](t, ctx, document.At("m"))
+		var ctx = WithScript(t.Context(), "const order = []; function tick(name) { order.push(name); return order.length } var seen = () => order")
+		var got = mustResolve[map[string]any](t, ctx, document.At("m"))
 		expectEqual(t, got["z"], []any{"own a", "base b", "other d", "own c"})
 	})
 }

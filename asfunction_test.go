@@ -34,7 +34,7 @@ func TestAsFunctionAcceptsFunctionLiterals(t *testing.T) {
 
 func TestAsFunctionRefusesEverythingElse(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		cases := map[string]string{
+		var cases = map[string]string{
 			"1 + 1":                    "not a function literal",
 			"parseInt":                 "not a function literal",
 			"Math.max":                 "not a function literal",
@@ -63,7 +63,7 @@ func TestAsFunctionRefusesEverythingElse(t *testing.T) {
 
 func TestAsFunctionEvaluatesNothing(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		ctx := within(t, 20*time.Second)
+		var ctx = within(t, 20*time.Second)
 		_, err := sb.MakeExpression(ctx, "(() => { globalThis.fired = true; while (true) {} })()", AsFunction())
 		expectError(t, err, InvalidExpression, "not a function literal")
 		for _, source := range []string{

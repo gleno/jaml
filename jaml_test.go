@@ -51,11 +51,11 @@ var sharedSandboxes sync.Map
 
 func sharedSandbox(t *testing.T, kind _SandboxKind) *Sandbox {
 	t.Helper()
-	key := _TestKind{test: t, kind: kind.name}
+	var key = _TestKind{test: t, kind: kind.name}
 	if shared, found := sharedSandboxes.Load(key); found {
 		return shared.(*Sandbox)
 	}
-	made := mustSandbox(t, kind)
+	var made = mustSandbox(t, kind)
 	sharedSandboxes.Store(key, made)
 	t.Cleanup(func() { sharedSandboxes.Delete(key) })
 	return made
@@ -146,7 +146,7 @@ func expectEqual(t *testing.T, got, want any) {
 
 func TestTheSpecifiedExample(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 config:
   value1: 123
   value2: ${1+1}
@@ -157,22 +157,22 @@ config:
 			Value2 int    `json:"value2"`
 			Value3 string `json:"value3"`
 		}
-		got := mustResolve[_Config](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
+		var got = mustResolve[_Config](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
 		expectEqual(t, got, _Config{Value1: 123, Value2: 2, Value3: "some string abc"})
 	})
 }
 
 func TestTheExampleIntoAMap(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "config:\n  value1: 123\n  value2: ${1+1}\n  value3: \"some string ${{name}}\"\n")
-		got := mustResolve[map[string]any](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
+		var document = mustJaml(t, sb, "config:\n  value1: 123\n  value2: ${1+1}\n  value3: \"some string ${{name}}\"\n")
+		var got = mustResolve[map[string]any](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
 		expectEqual(t, got, map[string]any{"value1": float64(123), "value2": float64(2), "value3": "some string abc"})
 	})
 }
 
 func TestAnExpressionEvaluatesNothingUntilResolve(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "a: ${ (() => { throw new Error('boom') })() }\nb: 1\n")
+		var document = mustJaml(t, sb, "a: ${ (() => { throw new Error('boom') })() }\nb: 1\n")
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("b")), 1)
 		_, err := Resolve[map[string]any](t.Context(), document)
 		expectError(t, err, EvaluationFailed, "$.a", "Error: boom")
@@ -181,7 +181,7 @@ func TestAnExpressionEvaluatesNothingUntilResolve(t *testing.T) {
 
 func TestAnExpressionIsReusableWithDifferentValues(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		greeting := mustJaml(t, sb, "greeting: hello ${{who}}\n").At("greeting")
+		var greeting = mustJaml(t, sb, "greeting: hello ${{who}}\n").At("greeting")
 		expectEqual(t, mustResolve[string](t, withValues(t, map[string]any{"who": "ada"}), greeting), "hello ada")
 		expectEqual(t, mustResolve[string](t, withValues(t, map[string]any{"who": "bob"}), greeting), "hello bob")
 	})

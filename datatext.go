@@ -74,11 +74,11 @@ func writeObject(text *strings.Builder, object map[string]any) error {
 }
 
 func writeNumber(text *strings.Builder, number float64) {
-	format := byte('f')
+	var format = byte('f')
 	if magnitude := math.Abs(number); magnitude != 0 && (magnitude < 1e-6 || magnitude >= 1e21) {
 		format = 'e'
 	}
-	written := strconv.AppendFloat(nil, number, format, -1, 64)
+	var written = strconv.AppendFloat(nil, number, format, -1, 64)
 	if format == 'e' {
 		written = bytes.Replace(written, []byte("e-0"), []byte("e-"), 1)
 	}

@@ -26,10 +26,10 @@ func TestAChildThatPanicsBeforeGreetingSaysWhy(t *testing.T) {
 }
 
 func TestACancelledBuildLeavesTheChildAlone(t *testing.T) {
-	sb := mustIsolated(t)
-	before := childPID(t, sb)
-	text := slowBuild(1)
-	started := time.Now()
+	var sb = mustIsolated(t)
+	var before = childPID(t, sb)
+	var text = slowBuild(1)
+	var started = time.Now()
 	_, err := sb.MakeExpressionFromJaml(within(t, 20*time.Millisecond), text)
 	expectError(t, err, EvaluationFailed, "building: cancelled", "deadline exceeded")
 	if waited := time.Since(started); waited > 200*time.Millisecond {
@@ -41,13 +41,13 @@ func TestACancelledBuildLeavesTheChildAlone(t *testing.T) {
 }
 
 func TestACancelledRebuildKeepsItsSlotAndLeavesTheChildAlone(t *testing.T) {
-	sb := mustIsolated(t, WithMaxConcurrency(1), WithMemoryLimit(512<<20))
-	big := mustJaml(t, sb, slowBuild(0.4)+"v: ${ 1 }\n")
-	small := mustJaml(t, sb, "v: ${ 2 }\n")
+	var sb = mustIsolated(t, WithMaxConcurrency(1), WithMemoryLimit(512<<20))
+	var big = mustJaml(t, sb, slowBuild(0.4)+"v: ${ 1 }\n")
+	var small = mustJaml(t, sb, "v: ${ 2 }\n")
 	killChild(t, sb)
 	expectEqual(t, isolatedEvalAs[int](t, small, nil, "v"), 2)
-	respawned := childPID(t, sb)
-	started := time.Now()
+	var respawned = childPID(t, sb)
+	var started = time.Now()
 	var out int
 	expectError(t, resolveInto(within(t, 10*time.Millisecond), &out, big.At("v")), EvaluationFailed, "$.v: cancelled", "deadline exceeded")
 	if waited := time.Since(started); waited > 200*time.Millisecond {
@@ -62,16 +62,16 @@ func TestACancelledRebuildKeepsItsSlotAndLeavesTheChildAlone(t *testing.T) {
 }
 
 func TestARunawayBuiltInReturnsAtItsDeadline(t *testing.T) {
-	sb := mustIsolated(t)
-	runaway := mustExpression(t, sb, "/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')")
-	before := childPID(t, sb)
-	started := time.Now()
+	var sb = mustIsolated(t)
+	var runaway = mustExpression(t, sb, "/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')")
+	var before = childPID(t, sb)
+	var started = time.Now()
 	var out any
 	expectError(t, resolveInto(within(t, 20*time.Millisecond), &out, runaway), EvaluationFailed, "$: cancelled", "deadline exceeded")
 	if waited := time.Since(started); waited > 150*time.Millisecond {
 		t.Fatalf("a runaway built-in held its caller for %s past a 20ms deadline", waited)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	var deadline = time.Now().Add(5 * time.Second)
 	for childPID(t, sb) == before {
 		if time.Now().After(deadline) {
 			t.Fatal("the runaway built-in was never killed")
@@ -83,7 +83,7 @@ func TestARunawayBuiltInReturnsAtItsDeadline(t *testing.T) {
 
 func crowdedTemplate(index int) string {
 	var written strings.Builder
-	padding := strings.Repeat("p", 400)
+	var padding = strings.Repeat("p", 400)
 	for key := range 9500 {
 		fmt.Fprintf(&written, "k%d: \"%s%d-%d\"\n", key, padding, index, key)
 	}
@@ -92,8 +92,8 @@ func crowdedTemplate(index int) string {
 }
 
 func TestJobsThatOverflowTogetherInACrowdSucceedOnReplay(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(24<<20), WithMaxConcurrency(8), WithBuildTimeout(30*time.Second))
-	documents := make([]*Expression, 8)
+	var sb = mustIsolated(t, WithMemoryLimit(24<<20), WithMaxConcurrency(8), WithBuildTimeout(30*time.Second))
+	var documents = make([]*Expression, 8)
 	for index := range documents {
 		documents[index] = mustJaml(t, sb, crowdedTemplate(index))
 	}
@@ -112,11 +112,11 @@ func TestJobsThatOverflowTogetherInACrowdSucceedOnReplay(t *testing.T) {
 }
 
 func TestACancelBehindABigRequestStillLands(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(512<<20), WithMaxConcurrency(4))
-	spin := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
-	before := childPID(t, sb)
-	huge := "v: '" + strings.Repeat("\x01", (16<<20)/raceSlowdown) + "'\n"
-	spinning := make(chan error, 1)
+	var sb = mustIsolated(t, WithMemoryLimit(512<<20), WithMaxConcurrency(4))
+	var spin = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
+	var before = childPID(t, sb)
+	var huge = "v: '" + strings.Repeat("\x01", (16<<20)/raceSlowdown) + "'\n"
+	var spinning = make(chan error, 1)
 	go func() {
 		var out any
 		spinning <- resolveInto(within(t, 150*time.Millisecond), &out, spin.At("spin"))
@@ -129,13 +129,13 @@ func TestACancelBehindABigRequestStillLands(t *testing.T) {
 }
 
 func TestForgottenRebuildsLeaveNothingResident(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(64<<20), WithBuildTimeout(30*time.Second))
-	documents := make([]*Expression, 12/min(raceSlowdown, 3))
-	ends := make([]context.CancelFunc, len(documents))
+	var sb = mustIsolated(t, WithMemoryLimit(64<<20), WithBuildTimeout(30*time.Second))
+	var documents = make([]*Expression, 12/min(raceSlowdown, 3))
+	var ends = make([]context.CancelFunc, len(documents))
 	var half time.Duration
 	for index := range documents {
 		ctx, end := context.WithCancel(t.Context())
-		started := time.Now()
+		var started = time.Now()
 		made, err := sb.MakeExpressionFromJaml(ctx, listOfPlainServers(30000)+fmt.Sprintf("v: %d\n", index))
 		if err != nil {
 			t.Fatal(err)
@@ -145,7 +145,7 @@ func TestForgottenRebuildsLeaveNothingResident(t *testing.T) {
 		killChild(t, sb)
 	}
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 6 }\n"), nil, "v"), 6)
-	before := childPID(t, sb)
+	var before = childPID(t, sb)
 	for index, document := range documents {
 		time.AfterFunc(half, ends[index])
 		var out int
@@ -158,8 +158,8 @@ func TestForgottenRebuildsLeaveNothingResident(t *testing.T) {
 
 func TestACallCancelledWhileQueuedNamesItsPath(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\nlist: [\"${ 1 }\"]\n")
-		spinning := make(chan error, 1)
+		var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\nlist: [\"${ 1 }\"]\n")
+		var spinning = make(chan error, 1)
 		go func() {
 			var out any
 			spinning <- resolveInto(within(t, time.Second), &out, document.At("spin"))
@@ -173,12 +173,12 @@ func TestACallCancelledWhileQueuedNamesItsPath(t *testing.T) {
 }
 
 func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
-	sb := mustIsolated(t, WithMaxConcurrency(8))
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
+	var sb = mustIsolated(t, WithMaxConcurrency(8))
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
 	respawnAs(t, sb, _ChildSpec{limit: silentLimit, buildTimeout: 300 * time.Millisecond})
 	killChild(t, sb)
-	started := time.Now()
-	failures := make(chan error, 6)
+	var started = time.Now()
+	var failures = make(chan error, 6)
 	for range 6 {
 		go func() {
 			var out int
@@ -187,7 +187,7 @@ func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 	}
 	var first error
 	for range 6 {
-		err := <-failures
+		var err = <-failures
 		expectError(t, err, EvaluationFailed, "starting the evaluator", "took longer than 300ms to start")
 		if first == nil {
 			first = err
@@ -200,13 +200,13 @@ func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 }
 
 func TestAChildKilledMidRequestIsNamedByTheReaper(t *testing.T) {
-	sb := mustIsolated(t)
-	process := currentChild(t, sb)
-	pid := process.cmd.Process.Pid
+	var sb = mustIsolated(t)
+	var process = currentChild(t, sb)
+	var pid = process.cmd.Process.Pid
 	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
 		t.Fatal(err)
 	}
-	sent := make(chan error, 1)
+	var sent = make(chan error, 1)
 	go func() {
 		_, err := process.send(t.Context(), _Request{Op: opBuild, Plan: &_Blueprint{Written: strings.Repeat("x", 4<<20)}})
 		sent <- err

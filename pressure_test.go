@@ -16,7 +16,7 @@ import (
 )
 
 func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		heldMiB int
 		memory  bool
 		want    string
@@ -26,11 +26,11 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			sb := mustIsolated(t, WithMemoryLimit(64<<20))
-			holding := mustExpression(t, sb, "(() => { const keep = 'x'.repeat("+strconv.Itoa(c.heldMiB)+" << 20); let n = 0; for (let j = 0; ; j++) n += keep.length & j; })()")
-			first := childPID(t, sb)
-			busy := resident(t, first) + c.heldMiB<<20
-			verdict := make(chan error, 1)
+			var sb = mustIsolated(t, WithMemoryLimit(64<<20))
+			var holding = mustExpression(t, sb, "(() => { const keep = 'x'.repeat("+strconv.Itoa(c.heldMiB)+" << 20); let n = 0; for (let j = 0; ; j++) n += keep.length & j; })()")
+			var first = childPID(t, sb)
+			var busy = resident(t, first) + c.heldMiB<<20
+			var verdict = make(chan error, 1)
 			go func() {
 				var out any
 				verdict <- resolveInto(within(t, 60*time.Second), &out, holding)
@@ -38,11 +38,11 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 			for pid := first; pid != 0; {
 				awaitResident(t, pid, busy)
 				time.Sleep(time.Second)
-				known := ourChildren(t)
+				var known = ourChildren(t)
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 				pid = awaitNewChild(t, known, verdict)
 			}
-			err := <-verdict
+			var err = <-verdict
 			if errors.Is(err, MemoryLimit) != c.memory || err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v (memory %v), want %q (memory %v)", err, errors.Is(err, MemoryLimit), c.want, c.memory)
 			}
@@ -52,7 +52,7 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 
 func awaitNewChild(t *testing.T, known []int, verdict chan error) int {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	var deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-verdict:
@@ -73,7 +73,7 @@ func awaitNewChild(t *testing.T, known []int, verdict chan error) int {
 
 func ourChildren(t *testing.T) []int {
 	t.Helper()
-	listing := exec.Command("ps", "-axo", "pid=,ppid=")
+	var listing = exec.Command("ps", "-axo", "pid=,ppid=")
 	out, err := listing.Output()
 	if err != nil {
 		t.Fatalf("ps: %v", err)
@@ -93,7 +93,7 @@ func ourChildren(t *testing.T) []int {
 
 func awaitResident(t *testing.T, pid int, bytes int) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	var deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if resident(t, pid) >= bytes {
 			return

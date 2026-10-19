@@ -4,7 +4,7 @@ import "testing"
 
 func TestResultsMustBeYAMLData(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		cases := map[string]struct {
+		var cases = map[string]struct {
 			source    string
 			fragments []string
 		}{
@@ -32,7 +32,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 		}
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
-				document := mustJaml(t, sb, "v: \""+c.source+"\"\n")
+				var document = mustJaml(t, sb, "v: \""+c.source+"\"\n")
 				var out any
 				expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
 			})
@@ -42,7 +42,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 
 func TestPlainDataResultsAreAccepted(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 shared: "${ (() => { const x = {n: 1}; return [x, x] })() }"
 nullProto: "${ Object.assign(Object.create(null), {a: 1}) }"
 sparse: "${ [1, , 3] }"
@@ -52,7 +52,7 @@ getter: "${ ({ get g() { return 2 } }) }"
 symbolKeysIgnored: "${ ({a: 1, [Symbol('s')]: 2}) }"
 nonEnumerableIgnored: "${ Object.defineProperty({a: 1}, 'hidden', {value: 2}) }"
 `, WithUndefinedCoercion(Loose))
-		got := evalAs[map[string]any](t, document, nil)
+		var got = evalAs[map[string]any](t, document, nil)
 		expectEqual(t, got, map[string]any{
 			"shared":               []any{map[string]any{"n": float64(1)}, map[string]any{"n": float64(1)}},
 			"nullProto":            map[string]any{"a": float64(1)},
@@ -68,24 +68,24 @@ nonEnumerableIgnored: "${ Object.defineProperty({a: 1}, 'hidden', {value: 2}) }"
 
 func TestObjectsInterpolateAsJSON(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "v: \"is ${{ ({z: 1, a: [2]}) }}\"\n")
+		var document = mustJaml(t, sb, "v: \"is ${{ ({z: 1, a: [2]}) }}\"\n")
 		expectEqual(t, mustResolve[string](t, t.Context(), document.At("v")), `is {"a":[2],"z":1}`)
 	})
 }
 
 func TestHugeResultsAreRefused(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 30; i++) a = [a, a]; return a })() }\"\n")
+		var document = mustJaml(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 30; i++) a = [a, a]; return a })() }\"\n")
 		var out any
 		expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, "holds more than")
-		long := mustJaml(t, sb, "v: \"${ (() => { const a = []; a.length = 1e9; return a })() }\"\n")
+		var long = mustJaml(t, sb, "v: \"${ (() => { const a = []; a.length = 1e9; return a })() }\"\n")
 		expectError(t, resolveInto(t.Context(), &out, long.At("v")), EvaluationFailed, "result holds more than")
 	})
 }
 
 func TestThrowingGettersFailTheEvaluation(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "v: \"${ ({ get g() { throw new TypeError('nope') } }) }\"\n")
+		var document = mustJaml(t, sb, "v: \"${ ({ get g() { throw new TypeError('nope') } }) }\"\n")
 		var out any
 		expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, "TypeError: nope")
 	})
@@ -93,7 +93,7 @@ func TestThrowingGettersFailTheEvaluation(t *testing.T) {
 
 func TestRuntimeErrorsNameTheExpression(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		cases := map[string]struct {
+		var cases = map[string]struct {
 			source    string
 			fragments []string
 		}{
@@ -107,7 +107,7 @@ func TestRuntimeErrorsNameTheExpression(t *testing.T) {
 		}
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
-				document := mustJaml(t, sb, "v: \""+c.source+"\"\n")
+				var document = mustJaml(t, sb, "v: \""+c.source+"\"\n")
 				var out any
 				expectError(t, resolveInto(t.Context(), &out, document.At("v")), EvaluationFailed, append([]string{"$.v"}, c.fragments...)...)
 			})
@@ -116,7 +116,7 @@ func TestRuntimeErrorsNameTheExpression(t *testing.T) {
 }
 
 func TestProxiesAreRefusedBeforeAnyTrapRuns(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		source, refused string
 	}{
 		"over a list":     {"new Proxy([1], {})", "result is a proxy, which is not YAML data"},
@@ -134,7 +134,7 @@ func TestProxiesAreRefusedBeforeAnyTrapRuns(t *testing.T) {
 }
 
 func TestUnpairedSurrogatesAreRefused(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		source, refused string
 	}{
 		"a lone high value":     {`'\\uD800'`, "result is a string with an unpaired surrogate, which is not YAML data"},
@@ -152,7 +152,7 @@ func TestUnpairedSurrogatesAreRefused(t *testing.T) {
 
 func TestPairedSurrogatesAndReplacementCharactersAreData(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		text := `v: "${ ({'😀': '😀', '\\uFFFD': 'a\\uFFFDb', s: '\\uD83D\\uDE00'}) }"` + "\n"
+		var text = `v: "${ ({'😀': '😀', '\\uFFFD': 'a\\uFFFDb', s: '\\uD83D\\uDE00'}) }"` + "\n"
 		evalInBothKinds(t, text, nil).expectAccepted(t)
 		expectEqual(t, evalAs[map[string]string](t, mustJaml(t, sb, text), nil, "v"), map[string]string{"😀": "😀", "\uFFFD": "a\uFFFDb", "s": "😀"})
 	})
@@ -160,9 +160,9 @@ func TestPairedSurrogatesAndReplacementCharactersAreData(t *testing.T) {
 
 func TestNestedSparseListsCannotFundTheirDeclaredLength(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 400; i++) { const b = []; b.length = 1e6; b[0] = a; a = b } return a })() }\"\n")
+		var document = mustJaml(t, sb, "v: \"${ (() => { let a = [1]; for (let i = 0; i < 400; i++) { const b = []; b.length = 1e6; b[0] = a; a = b } return a })() }\"\n")
 		var err error
-		allocated := allocatedBy(func() {
+		var allocated = allocatedBy(func() {
 			var out any
 			err = resolveInto(t.Context(), &out, document)
 		})
@@ -182,7 +182,7 @@ func TestTheValueCapCountsListsAndObjects(t *testing.T) {
 
 func TestInterpolatedDataIsWrittenAsJSONStringifyWritesIt(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		cases := map[string]struct {
+		var cases = map[string]struct {
 			source, written string
 		}{
 			"markup":              {`({a: '<b>&amp;'})`, `{"a":"<b>&amp;"}`},
@@ -196,9 +196,9 @@ func TestInterpolatedDataIsWrittenAsJSONStringifyWritesIt(t *testing.T) {
 		}
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
-				text := "v: \"<${{ " + c.source + " }}>\"\n"
+				var text = "v: \"<${{ " + c.source + " }}>\"\n"
 				evalInBothKinds(t, text, nil).expectAccepted(t)
-				got := mustResolve[string](t, t.Context(), mustJaml(t, sb, text).At("v"))
+				var got = mustResolve[string](t, t.Context(), mustJaml(t, sb, text).At("v"))
 				if want := "<" + c.written + ">"; got != want {
 					t.Fatalf("got %s, want %s", got, want)
 				}

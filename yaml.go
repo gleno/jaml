@@ -41,19 +41,19 @@ func parseYAML(ctx context.Context, source string) (any, error) {
 	if document.Kind == 0 || len(document.Content) == 0 {
 		return nil, nil
 	}
-	reader := &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
+	var reader = &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
 	return reader.data(document.Content[0], _DataAt{})
 }
 
 func readOneDocument(source string) (*yaml.Node, error) {
-	decoder := yaml.NewDecoder(strings.NewReader(source))
+	var decoder = yaml.NewDecoder(strings.NewReader(source))
 	var document yaml.Node
 	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fail(InvalidExpression, "%w", err)
 	}
 	for {
 		var another yaml.Node
-		err := decoder.Decode(&another)
+		var err = decoder.Decode(&another)
 		if errors.Is(err, io.EOF) {
 			return &document, nil
 		}
@@ -70,7 +70,7 @@ func isEmptyDocument(document *yaml.Node) bool {
 	if len(document.Content) == 0 {
 		return true
 	}
-	content := document.Content[0]
+	var content = document.Content[0]
 	return content.Kind == yaml.ScalarNode && content.Style == 0 && content.Value == ""
 }
 
@@ -120,7 +120,7 @@ func allowedAliasRatio(decoded int) float64 {
 	case decoded >= aliasRatioCeiling:
 		return strictAliasRatio
 	}
-	progress := float64(decoded-aliasRatioFloor) / float64(aliasRatioCeiling-aliasRatioFloor)
+	var progress = float64(decoded-aliasRatioFloor) / float64(aliasRatioCeiling-aliasRatioFloor)
 	return generousAliasRatio - (generousAliasRatio-strictAliasRatio)*progress
 }
 
@@ -162,7 +162,7 @@ func (r *_YamlReader) alias(node *yaml.Node, at _DataAt) (any, error) {
 }
 
 func (r *_YamlReader) sequence(node *yaml.Node, at _DataAt) ([]any, error) {
-	data := make([]any, len(node.Content))
+	var data = make([]any, len(node.Content))
 	for index, item := range node.Content {
 		converted, err := r.data(item, at.atIndex(index))
 		if err != nil {
@@ -188,7 +188,7 @@ func (m *_Mapping) with(key string, value any) {
 
 func (r *_YamlReader) mapping(node *yaml.Node, at _DataAt) (*_Mapping, error) {
 	var own = make(map[string]any, len(node.Content)/2)
-	lines := make(map[string]int, len(node.Content)/2)
+	var lines = make(map[string]int, len(node.Content)/2)
 	var written []any
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		keyNode, valueNode := node.Content[i], node.Content[i+1]
@@ -234,11 +234,11 @@ func (r *_YamlReader) mapping(node *yaml.Node, at _DataAt) (*_Mapping, error) {
 }
 
 func (r *_YamlReader) mergeSources(node *yaml.Node, at _DataAt) ([]*_Mapping, error) {
-	items := []*yaml.Node{node}
+	var items = []*yaml.Node{node}
 	if node.Kind == yaml.SequenceNode {
 		items = node.Content
 	}
-	sources := make([]*_Mapping, 0, len(items))
+	var sources = make([]*_Mapping, 0, len(items))
 	for _, item := range items {
 		if dealias(item).Kind != yaml.MappingNode {
 			return nil, refuse(at.path, fmt.Sprintf("line %d: a merge key (<<) takes a mapping or a list of mappings", item.Line))
@@ -270,7 +270,7 @@ func mappingKey(node *yaml.Node, at *_DataPath) (string, error) {
 	if isMergeKey(node) {
 		return node.Value, nil
 	}
-	target := dealias(node)
+	var target = dealias(node)
 	if target.Kind != yaml.ScalarNode {
 		return "", refuse(at, fmt.Sprintf("the key on line %d is a collection; keys must be strings", node.Line))
 	}
@@ -419,7 +419,7 @@ func readNumeral(written string) (_Numeral, error) {
 	if !strings.Contains(written, "_") || strings.HasPrefix(strings.TrimLeft(written, "+-"), "_") {
 		return _Numeral{written: written, digits: written}, nil
 	}
-	number := _Numeral{written: written, digits: strings.ReplaceAll(written, "_", "")}
+	var number = _Numeral{written: written, digits: strings.ReplaceAll(written, "_", "")}
 	if (number.isInteger() || number.isDecimal()) && !number.underscoresSeparateDigits() {
 		return _Numeral{}, fmt.Errorf("%s has an underscore that does not sit between two digits", shown(written))
 	}
@@ -435,16 +435,16 @@ func (n _Numeral) isDecimal() bool {
 }
 
 func (n _Numeral) underscoresSeparateDigits() bool {
-	digits := decimalDigits
+	var digits = decimalDigits
 	if strings.HasPrefix(strings.TrimLeft(n.digits, "+-"), "0x") {
 		digits = hexDigits
 	}
-	unsigned := strings.TrimLeft(n.written, "+-")
-	prefixEnd := -1
+	var unsigned = strings.TrimLeft(n.written, "+-")
+	var prefixEnd = -1
 	if len(unsigned) > 2 && unsigned[0] == '0' && strings.IndexByte("xob", unsigned[1]) >= 0 {
 		prefixEnd = len(n.written) - len(unsigned) + 1
 	}
-	isDigit := func(index int) bool {
+	var isDigit = func(index int) bool {
 		return index >= 0 && index < len(n.written) && strings.IndexByte(digits, n.written[index]) >= 0
 	}
 	for index := range len(n.written) {

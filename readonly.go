@@ -46,7 +46,7 @@ func (r _Realm) refusesWrite(thrown goja.Value) bool {
 }
 
 func (e _Expression) writesWhere(exception *goja.Exception) bool {
-	stack := exception.Stack()
+	var stack = exception.Stack()
 	if len(stack) == 0 || stack[0].SrcName() != expressionFile {
 		return false
 	}
@@ -54,7 +54,7 @@ func (e _Expression) writesWhere(exception *goja.Exception) bool {
 	if err != nil {
 		return false
 	}
-	at := file.Idx(offsetOf(expressionOpens+e.source+"\n", stack[0].Position()) + 1)
+	var at = file.Idx(offsetOf(expressionOpens+e.source+"\n", stack[0].Position()) + 1)
 	return anyNode(reflect.ValueOf(parsed.program), func(node any) bool {
 		switch typed := node.(type) {
 		case *ast.AssignExpression:

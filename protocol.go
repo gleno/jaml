@@ -82,7 +82,7 @@ func framesFor(limit _MemoryLimit) _Frames {
 
 func wireJSON(value any) ([]byte, error) {
 	var encoded bytes.Buffer
-	encoder := json.NewEncoder(&encoded)
+	var encoder = json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(value); err != nil {
 		return nil, err
@@ -152,7 +152,7 @@ func (b _Blueprint) options() []Option {
 }
 
 func buildPanic(recovered any) error {
-	failure := engineFailure(recovered)
+	var failure = engineFailure(recovered)
 	if failure == nil {
 		return nil
 	}
@@ -164,7 +164,7 @@ func describeFailure(err error) _Failure {
 	if !isOwn {
 		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
 	}
-	described := _Failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error()}
+	var described = _Failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
@@ -174,7 +174,7 @@ func describeFailure(err error) _Failure {
 }
 
 func (r _Reply) outcomes() int {
-	count := 0
+	var count = 0
 	for _, present := range [...]bool{r.Built, len(r.Data) != 0, r.Failure != nil, r.Missing} {
 		if present {
 			count++
@@ -211,7 +211,7 @@ func (f _Failure) kind() error {
 }
 
 func (f _Failure) rebuild() error {
-	kind := f.kind()
+	var kind = f.kind()
 	if kind == nil {
 		kind = EvaluationFailed
 	}

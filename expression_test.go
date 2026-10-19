@@ -18,29 +18,29 @@ func expectNoFragment(t *testing.T, err error, fragments ...string) {
 
 func TestRegexLiteralsEndWhereJavaScriptSaysTheyEnd(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 closing: ${ /}/.test(x) }
 opening: ${ /{/.source }
 quote: ${ s.split(/'/).length }
 slashes: ${ /https?:\/\//.test(u) }
 interpolated: "${{ /}}/.test(s) }} and ${{ /{/.source }}"
 `)
-		got := evalAs[map[string]any](t, document, map[string]any{"x": "a}", "s": "it's }}", "u": "https://x"})
+		var got = evalAs[map[string]any](t, document, map[string]any{"x": "a}", "s": "it's }}", "u": "https://x"})
 		expectEqual(t, got, map[string]any{"closing": true, "opening": "{", "quote": float64(2), "slashes": true, "interpolated": "true and {"})
 	})
 }
 
 func TestInterpolationEndsAtTheFirstClosingPairJavaScriptLeaves(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "object: \"${{ {a: 1}}}\"\nnested: \"<${{ `${ `${1}}` }` }}>\"\nregex: \"${{ /}}/.source }}\"\n")
-		got := evalAs[map[string]string](t, document, nil)
+		var document = mustJaml(t, sb, "object: \"${{ {a: 1}}}\"\nnested: \"<${{ `${ `${1}}` }` }}>\"\nregex: \"${{ /}}/.source }}\"\n")
+		var got = evalAs[map[string]string](t, document, nil)
 		expectEqual(t, got, map[string]string{"object": `{"a":1}`, "nested": "<1}>", "regex": "}}"})
 	})
 }
 
 func TestFunctionScopeBindingsDoNotExist(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "count: ${ arguments.length }\ntext: \"${{ arguments }}\"\n")
+		var document = mustJaml(t, sb, "count: ${ arguments.length }\ntext: \"${{ arguments }}\"\n")
 		var out any
 		expectError(t, resolveInto(t.Context(), &out, document.At("count")), EvaluationFailed, "ReferenceError")
 		expectError(t, resolveInto(t.Context(), &out, document.At("text")), EvaluationFailed, "ReferenceError")
@@ -51,7 +51,7 @@ func TestFunctionScopeBindingsDoNotExist(t *testing.T) {
 
 func TestTopLevelThisIsTheGlobalObject(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "a: ${ this === globalThis }\n")
+		var document = mustJaml(t, sb, "a: ${ this === globalThis }\n")
 		expectEqual(t, mustResolve[bool](t, t.Context(), document.At("a")), true)
 	})
 }
@@ -62,7 +62,7 @@ func TestLegacyOctalEscapesAreRefused(t *testing.T) {
 			_, err := sb.MakeExpressionFromJaml(t.Context(), text+"\n")
 			expectError(t, err, InvalidExpression, "Octal escape sequences are not allowed in strict mode")
 		}
-		document := mustJaml(t, sb, `a: ${ ["\\101", "\0", "\x41", "\u0041"] }`+"\n")
+		var document = mustJaml(t, sb, `a: ${ ["\\101", "\0", "\x41", "\u0041"] }`+"\n")
 		expectEqual(t, evalAs[[]string](t, document, nil, "a"), []string{`\101`, "\x00", "A", "A"})
 	})
 }
@@ -88,11 +88,11 @@ func TestMessagesNameOnlyTokensTheAuthorWrote(t *testing.T) {
 
 func TestManyClosingCandidatesStayCheap(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		inString := "a: \"${{ '" + strings.Repeat("}", 200_000) + "' }}\"\n"
-		repeated := "a: \"" + strings.Repeat("${{ '}}}' }} ", 5_000) + "\"\n"
-		unclosed := "a: \"${{ `" + strings.Repeat("}} ", 50_000) + "\"\n"
+		var inString = "a: \"${{ '" + strings.Repeat("}", 200_000) + "' }}\"\n"
+		var repeated = "a: \"" + strings.Repeat("${{ '}}}' }} ", 5_000) + "\"\n"
+		var unclosed = "a: \"${{ `" + strings.Repeat("}} ", 50_000) + "\"\n"
 		for name, text := range map[string]string{"in string": inString, "repeated": repeated, "unclosed": unclosed} {
-			started := time.Now()
+			var started = time.Now()
 			_, _ = sb.MakeExpressionFromJaml(t.Context(), text)
 			if took := time.Since(started); took > 10*time.Second {
 				t.Fatalf("%s took %v", name, took)
@@ -102,7 +102,7 @@ func TestManyClosingCandidatesStayCheap(t *testing.T) {
 }
 
 func TestWindowedEndSearchAgreesWithOneParseOfTheRest(t *testing.T) {
-	corpus := []string{
+	var corpus = []string{
 		" 1 }} tail }}", " '}}' }}", " {a: 1}}}", " `${ {b: '}}'}.b }` }} x }}", " /}}/.test(s) }} }}",
 		" x // }}\n }} y }}", " /* }} */ 1 }}", " a }x}}", " 1}", " ) }}", " (1 }} }}", " '}}}' }} '}}' }}",
 		" x => { return {a: '}}'} } }} }}", " [1, {b: 2}]}}}}",
@@ -130,7 +130,7 @@ func TestAValueHoldingCodeIsAtMost64KiB(t *testing.T) {
 		if _, err := compileExpression(strings.Repeat(" ", maxCodeBytes+1)+"1", dollar.value); err == nil {
 			t.Fatal("expected the recompile to refuse a long expression")
 		}
-		document := mustJaml(t, sb, "plain: \""+strings.Repeat("(", maxCodeBytes+1)+"\"\n")
+		var document = mustJaml(t, sb, "plain: \""+strings.Repeat("(", maxCodeBytes+1)+"\"\n")
 		expectEqual(t, mustResolve[string](t, t.Context(), document.At("plain")), strings.Repeat("(", maxCodeBytes+1))
 	})
 }
@@ -142,10 +142,10 @@ func TestTheWorstRecursiveConstructsUnderTheCapLeaveTheParserStackBounded(t *tes
 				if len(written) > maxCodeBytes {
 					t.Fatalf("%q: test value is %d bytes", unit, len(written))
 				}
-				c := &_Compiler{texts: map[string]_Text{}}
+				var c = &_Compiler{texts: map[string]_Text{}}
 				_, _ = c.compileText(written)
 			}
-			c := &_Compiler{texts: map[string]_Text{}}
+			var c = &_Compiler{texts: map[string]_Text{}}
 			if _, err := c.compileText(codeValue(unit, maxCodeBytes+len(unit)+1)); err == nil || !strings.Contains(err.Error(), "longer than") {
 				t.Fatalf("%q: expected the size refusal, got %v", unit, err)
 			}
@@ -156,7 +156,7 @@ func TestTheWorstRecursiveConstructsUnderTheCapLeaveTheParserStackBounded(t *tes
 func TestMillionDeepExpressionTextFailsCleanlyInsteadOfOverflowingTheParser(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		survivesInAStackCappedChild(t, func(t *testing.T) {
-			deep := strings.Repeat("(", 1_500_000)
+			var deep = strings.Repeat("(", 1_500_000)
 			for _, text := range []string{"v: ${ " + deep + " }\n", "v: \"x ${{ " + deep + "\"\n", "v: \"x ${{ '}}}' }} " + deep + "\"\n"} {
 				_, err := sb.MakeExpressionFromJaml(t.Context(), text)
 				expectError(t, err, InvalidExpression, "$.v", "longer than 65536 bytes")
@@ -171,8 +171,8 @@ func TestDistinctValuesFullOfInterpolationsMakeQuickly(t *testing.T) {
 		for value := range 10 {
 			fmt.Fprintf(&written, "v%d: '%d%s'\n", value, value, strings.Repeat("${{a}}", 10_900))
 		}
-		started := time.Now()
-		document := mustJaml(t, sb, written.String())
+		var started = time.Now()
+		var document = mustJaml(t, sb, written.String())
 		if took := time.Since(started); took > raceSlowdown*time.Second {
 			t.Fatalf("making %d bytes took %v", written.Len(), took)
 		}
@@ -182,15 +182,15 @@ func TestDistinctValuesFullOfInterpolationsMakeQuickly(t *testing.T) {
 
 func TestAnEndHiddenBehindClusteredClosersIsStillFound(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		inString := "'}}" + strings.Repeat(" ", 50_000) + strings.Repeat("}}", 5_000) + "'"
-		document := mustJaml(t, sb, "v: \"${{ "+inString+".length }}\"\n")
+		var inString = "'}}" + strings.Repeat(" ", 50_000) + strings.Repeat("}}", 5_000) + "'"
+		var document = mustJaml(t, sb, "v: \"${{ "+inString+".length }}\"\n")
 		expectEqual(t, mustResolve[string](t, t.Context(), document.At("v")), fmt.Sprint(len(inString)-2))
 	})
 }
 
 func TestAnEndSearchThatOutgrowsItsValueIsRefused(t *testing.T) {
-	after := " `}}" + strings.Repeat(" ", 1_000) + strings.Repeat("}}", 100) + "` }}"
-	search := &_EndSearch{unparsed: 4 * len(after)}
+	var after = " `}}" + strings.Repeat(" ", 1_000) + strings.Repeat("}}", 100) + "` }}"
+	var search = &_EndSearch{unparsed: 4 * len(after)}
 	if _, err := search.expressionEnd(after, dollar.interpolation); err != errCostlyEnds {
 		t.Fatalf("expected the costly-ends refusal, got %v", err)
 	}

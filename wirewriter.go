@@ -51,12 +51,12 @@ func (w *_WireWriter) mark(written byte) {
 }
 
 func (w *_WireWriter) reserve(more int) {
-	ceiling := min(w.limit, math.MaxInt-1) + 1
-	wanted := min(len(w.written)+more, ceiling)
+	var ceiling = min(w.limit, math.MaxInt-1) + 1
+	var wanted = min(len(w.written)+more, ceiling)
 	if cap(w.written) >= wanted {
 		return
 	}
-	grown := make([]byte, len(w.written), min(max(wanted, 2*cap(w.written)), ceiling))
+	var grown = make([]byte, len(w.written), min(max(wanted, 2*cap(w.written)), ceiling))
 	copy(grown, w.written)
 	w.written = grown
 }
@@ -88,12 +88,12 @@ func (w *_WireWriter) number(number float64) error {
 	if math.IsNaN(number) || math.IsInf(number, 0) {
 		return fmt.Errorf("%s is not a JSON number", strconv.FormatFloat(number, 'g', -1, 64))
 	}
-	format := byte('f')
+	var format = byte('f')
 	if magnitude := math.Abs(number); magnitude != 0 && (magnitude < 1e-6 || magnitude >= 1e21) {
 		format = 'e'
 	}
 	var digits [32]byte
-	written := strconv.AppendFloat(digits[:0], number, format, -1, 64)
+	var written = strconv.AppendFloat(digits[:0], number, format, -1, 64)
 	if end := len(written); format == 'e' && end >= 4 && written[end-4] == 'e' && written[end-3] == '-' && written[end-2] == '0' {
 		written[end-2] = written[end-1]
 		written = written[:end-1]
@@ -102,13 +102,13 @@ func (w *_WireWriter) number(number float64) error {
 }
 
 func (w *_WireWriter) quoted(text string) error {
-	length := quotedLength(text)
+	var length = quotedLength(text)
 	if len(w.written)+length > w.limit {
 		return _PastLimit{}
 	}
 	w.reserve(length + closingSlack)
 	w.written = append(w.written, '"')
-	safe := 0
+	var safe = 0
 	for index := 0; index < len(text); {
 		escape, width := escapeAt(text, index)
 		if escape != "" {
@@ -122,7 +122,7 @@ func (w *_WireWriter) quoted(text string) error {
 }
 
 func quotedLength(text string) int {
-	length := 2
+	var length = 2
 	for index := 0; index < len(text); {
 		escape, width := escapeAt(text, index)
 		length += max(len(escape), width)

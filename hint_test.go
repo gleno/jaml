@@ -12,7 +12,7 @@ func TestAnArrowWithABracedBodyThatReturnsUndefinedIsHinted(t *testing.T) {
 		OK bool `json:"ok"`
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "leaf: \"${ (d) => { ok: true } }\"\nthunk: \"${ (d) => () => { ok: true } }\"\nnamed: \"${ function (d) { } }\"\nconcise: \"${ (d) => undefined }\"\ncalled: \"${ (() => { ok: true })() }\"\n")
+		var document = mustJaml(t, sb, "leaf: \"${ (d) => { ok: true } }\"\nthunk: \"${ (d) => () => { ok: true } }\"\nnamed: \"${ function (d) { } }\"\nconcise: \"${ (d) => undefined }\"\ncalled: \"${ (() => { ok: true })() }\"\n")
 		for _, path := range []string{"leaf", "thunk"} {
 			_, err := Resolve[_Verdict](t.Context(), document.At(path), 1)
 			expectError(t, err, CoercionFailed, "$."+path+": ", "is undefined, which strict undefined coercion refuses; "+objectLiteralHint)

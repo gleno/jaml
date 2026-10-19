@@ -37,9 +37,9 @@ func (c _CountingMarshaler) MarshalJSON() ([]byte, error) {
 
 func TestBadVarsAreRefusedBeforeRendering(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		cyclic := map[string]any{}
+		var cyclic = map[string]any{}
 		cyclic["self"] = cyclic
-		cases := map[string]struct {
+		var cases = map[string]struct {
 			value    any
 			fragment string
 		}{
@@ -49,13 +49,13 @@ func TestBadVarsAreRefusedBeforeRendering(t *testing.T) {
 			"failing marshal": {_FailingMarshaler{}, `value "bad" is not JSON data`},
 			"too deep":        {nestedVar(4097), `value "bad" nests deeper than 4096`},
 		}
-		document := mustJaml(t, sb, "plain: 1\nz: ${ 1 }\n")
+		var document = mustJaml(t, sb, "plain: 1\nz: ${ 1 }\n")
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
-				vars := map[string]any{"bad": c.value}
+				var vars = map[string]any{"bad": c.value}
 				var out any
 				for _, path := range [][]string{{"plain"}, nil} {
-					err := resolveInto(valued(t.Context(), vars), &out, document.At(path...))
+					var err = resolveInto(valued(t.Context(), vars), &out, document.At(path...))
 					expectError(t, err, EvaluationFailed, c.fragment)
 					expectNoTemplatePath(t, err)
 				}
@@ -66,8 +66,8 @@ func TestBadVarsAreRefusedBeforeRendering(t *testing.T) {
 
 func TestVarsAreEncodedOncePerEval(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		calls := 0
-		document := mustJaml(t, sb, "a: ${ v }\nb: ${ v + 1 }\nc: \"${{ v }}\"\n")
+		var calls = 0
+		var document = mustJaml(t, sb, "a: ${ v }\nb: ${ v + 1 }\nc: \"${{ v }}\"\n")
 		evalAs[map[string]any](t, document, map[string]any{"v": _CountingMarshaler{calls: &calls}})
 		expectEqual(t, calls, 1)
 	})
@@ -75,7 +75,7 @@ func TestVarsAreEncodedOncePerEval(t *testing.T) {
 
 func TestListStepsAreCanonicalIndexes(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "l: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n")
+		var document = mustJaml(t, sb, "l: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\n")
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("l", "0")), 0)
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("l", "1")), 1)
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("l", "10")), 10)

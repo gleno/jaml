@@ -6,7 +6,7 @@ const panickingSource = `'\u{10FFFF}'`
 
 func TestABuildThatPanicsIsAnInvalidExpression(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		before := servingChild(t, sb)
+		var before = servingChild(t, sb)
 		_, err := sb.MakeExpression(t.Context(), panickingSource)
 		expectError(t, err, InvalidExpression, "$: the engine failed")
 		expectWellFormedAndBounded(t, err)

@@ -53,7 +53,7 @@ func (r *_Renderer) render(node any, place _Place) (any, error) {
 		}
 		return rendered, nil
 	case []any:
-		rendered := make([]any, len(typed))
+		var rendered = make([]any, len(typed))
 		for index, item := range typed {
 			value, err := r.render(item, place.item(index))
 			if err != nil {

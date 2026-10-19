@@ -20,7 +20,7 @@ func TestTargetsDecodeThroughEncodingJSON(t *testing.T) {
 			Extra  json.RawMessage   `json:"extra"`
 			Hidden string            `json:"-"`
 		}
-		parsed := mustJaml(t, sb, `
+		var parsed = mustJaml(t, sb, `
 services:
   - name: ${{prefix}}-api
     labels: {team: "${{team}}"}
@@ -28,8 +28,8 @@ services:
     extra: "${ [1, {two: 2}] }"
     Hidden: nope
 `)
-		got := evalAs[[]_Service](t, parsed, map[string]any{"prefix": "atlas", "team": "rev", "retries": 3}, "services")
-		three := 3
+		var got = evalAs[[]_Service](t, parsed, map[string]any{"prefix": "atlas", "team": "rev", "retries": 3}, "services")
+		var three = 3
 		expectEqual(t, len(got), 1)
 		expectEqual(t, got[0].Name, "atlas-api")
 		expectEqual(t, got[0].Labels, map[string]string{"team": "rev"})
@@ -60,14 +60,14 @@ type SelfEmbedding = _SelfEmbedding
 
 func TestRecursiveEmbeddingTerminates(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		got := mustResolve[SelfEmbedding](t, t.Context(), mustJaml(t, sb, "v: 1\n"))
+		var got = mustResolve[SelfEmbedding](t, t.Context(), mustJaml(t, sb, "v: 1\n"))
 		expectEqual(t, got.V, 1)
 	})
 }
 
 func TestATargetJSONCannotDecodeIntoIsRefused(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "a: 1\n")
+		var document = mustJaml(t, sb, "a: 1\n")
 		_, err := Resolve[func()](t.Context(), document)
 		expectError(t, err, InvalidTarget, "func()")
 		_, err = Resolve[chan int](t.Context(), document)
@@ -122,13 +122,13 @@ config:
 `
 
 func TestAnUnmarshalerOffsetIsNeverMappedOntoTheDocument(t *testing.T) {
-	cases := map[string]func() any{
+	var cases = map[string]func() any{
 		"wrapping":   func() any { return new(_PortsConfig[_WrappingPort]) },
 		"delegating": func() any { return new(_PortsConfig[_DelegatingPort]) },
 	}
 	for name, newOut := range cases {
 		t.Run(name, func(t *testing.T) {
-			both := _Agreement{text: portsTemplate, path: []string{"config"}}.eval(t, newOut)
+			var both = _Agreement{text: portsTemplate, path: []string{"config"}}.eval(t, newOut)
 			both.expectRefused(t, CoercionFailed, "$.config: ", "json: cannot unmarshal string")
 			for _, err := range []error{both.trusted, both.isolated} {
 				if strings.Contains(err.Error(), "$.config.") {

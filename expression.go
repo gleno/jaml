@@ -187,13 +187,13 @@ func legacyOctalEscape(node reflect.Value) *ast.StringLiteral {
 }
 
 func escapesInLegacyOctal(literal *ast.StringLiteral) *ast.StringLiteral {
-	raw := literal.Literal
+	var raw = literal.Literal
 	for i := 0; i < len(raw)-1; i++ {
 		if raw[i] != '\\' {
 			continue
 		}
 		i++
-		escaped := raw[i]
+		var escaped = raw[i]
 		if '1' <= escaped && escaped <= '9' || escaped == '0' && i+1 < len(raw) && '0' <= raw[i+1] && raw[i+1] <= '9' {
 			return literal
 		}
@@ -275,7 +275,7 @@ func occurrences(text, closer string) iter.Seq[int] {
 			if !yield(at) {
 				return
 			}
-			next := strings.Index(text[at+1:], closer)
+			var next = strings.Index(text[at+1:], closer)
 			if next < 0 {
 				return
 			}
@@ -290,15 +290,15 @@ func firstParseError(code string) (_ParseStop, bool) {
 	if !errors.As(err, &parseErrors) || len(parseErrors) == 0 {
 		return _ParseStop{}, false
 	}
-	first := parseErrors[0]
-	offset := offsetOf(expressionOpens+code, first.Position) - len(expressionOpens)
+	var first = parseErrors[0]
+	var offset = offsetOf(expressionOpens+code, first.Position) - len(expressionOpens)
 	return _ParseStop{offset: max(offset, 0), at: first.Position, message: first.Message}, true
 }
 
 func offsetOf(program string, at file.Position) int {
-	located := file.NewFile("", program, 1)
+	var located = file.NewFile("", program, 1)
 	return sort.Search(len(program)+1, func(offset int) bool {
-		here := located.Position(offset)
+		var here = located.Position(offset)
 		return here.Line > at.Line || here.Line == at.Line && here.Column >= at.Column
 	})
 }
@@ -320,15 +320,15 @@ func placeSyntaxError(source string, at file.Position, message string) error {
 }
 
 func syntaxErrorAt(source string, offset int, message string) error {
-	reason := excerpt(message, thrownExcerptLength)
+	var reason = excerpt(message, thrownExcerptLength)
 	switch {
 	case offset < 0:
 		return fmt.Errorf("syntax error in the expression: %s", reason)
 	case offset >= len(source) || strings.TrimSpace(source[offset:]) == "":
 		return fmt.Errorf("syntax error at the end of the expression: %s", reason)
 	}
-	before := source[:offset]
-	line := strings.Count(before, "\n") + 1
-	column := utf8.RuneCountInString(before[strings.LastIndexByte(before, '\n')+1:]) + 1
+	var before = source[:offset]
+	var line = strings.Count(before, "\n") + 1
+	var column = utf8.RuneCountInString(before[strings.LastIndexByte(before, '\n')+1:]) + 1
 	return fmt.Errorf("syntax error at line %d, column %d of the expression: %s at %q", line, column, reason, excerpt(source[offset:], codeExcerptLength))
 }

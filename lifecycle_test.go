@@ -19,21 +19,21 @@ import (
 
 func killChild(t *testing.T, sb *Sandbox) {
 	t.Helper()
-	child := currentChild(t, sb)
+	var child = currentChild(t, sb)
 	_ = child.cmd.Process.Kill()
 	expectDeath(t, child)
 }
 
 func TestAQueuedEvalKeepsItsDeadline(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\n")
-		spinning := make(chan error, 1)
+		var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\n")
+		var spinning = make(chan error, 1)
 		go func() {
 			var out any
 			spinning <- resolveInto(within(t, 3*time.Second), &out, document.At("spin"))
 		}()
 		time.Sleep(100 * time.Millisecond)
-		started := time.Now()
+		var started = time.Now()
 		expectError(t, evalBounded(t, document, within(t, 100*time.Millisecond), "ok"), EvaluationFailed, "cancelled", "deadline exceeded")
 		if waited := time.Since(started); waited > time.Second {
 			t.Fatalf("a queued Eval waited %s past its 100ms deadline", waited)
@@ -43,9 +43,9 @@ func TestAQueuedEvalKeepsItsDeadline(t *testing.T) {
 }
 
 func TestADoneContextLeavesTheEvaluatorAlone(t *testing.T) {
-	sb := mustIsolated(t)
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	before := childPID(t, sb)
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
+	var before = childPID(t, sb)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var out int
@@ -77,9 +77,9 @@ func impersonateAnEvaluator() bool {
 	default:
 		return false
 	}
-	requests := os.NewFile(requestsFD, "impostor-requests")
-	replies := os.NewFile(responsesFD, "impostor-replies")
-	greeting := _Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: os.Getenv(evaluatorNonce)}
+	var requests = os.NewFile(requestsFD, "impostor-requests")
+	var replies = os.NewFile(responsesFD, "impostor-replies")
+	var greeting = _Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: os.Getenv(evaluatorNonce)}
 	switch os.Getenv(evaluatorMemoryLimit) {
 	case strconv.Itoa(silentLimit):
 	case strconv.Itoa(crashAtStartLimit):
@@ -97,7 +97,7 @@ func impersonateAnEvaluator() bool {
 	case strconv.Itoa(emptyAnswerLimit):
 		answerBadly(requests, replies, greeting, "{\"job\": %d}\n")
 	case strconv.Itoa(oversizedAnswerLimit):
-		frame := `{"job": %d, "data": "` + strings.Repeat("x", (oversizedAnswerLimit/4)-len(`{"job": 2, "data": ""}`)+1) + "\"}\n"
+		var frame = `{"job": %d, "data": "` + strings.Repeat("x", (oversizedAnswerLimit/4)-len(`{"job": 2, "data": ""}`)+1) + "\"}\n"
 		answerBadly(requests, replies, greeting, frame)
 	}
 	_, _ = io.Copy(io.Discard, requests)
@@ -107,7 +107,7 @@ func impersonateAnEvaluator() bool {
 
 func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) {
 	_ = json.NewEncoder(replies).Encode(greeting)
-	incoming := json.NewDecoder(requests)
+	var incoming = json.NewDecoder(requests)
 	for {
 		var asked _Request
 		if incoming.Decode(&asked) != nil {
@@ -133,7 +133,7 @@ func TestAReplacedExecutableIsUnsupported(t *testing.T) {
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {
-	started := time.Now()
+	var started = time.Now()
 	_, err := MakeSecureSandbox(within(t, 300*time.Millisecond), WithMemoryLimit(silentLimit))
 	expectError(t, err, EvaluationFailed, "starting the evaluator", "cancelled", "deadline exceeded")
 	if waited := time.Since(started); waited > 3*time.Second {
@@ -142,7 +142,7 @@ func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 }
 
 func TestASilentExecutableEndsWithTheBuildTimeout(t *testing.T) {
-	started := time.Now()
+	var started = time.Now()
 	_, err := MakeSecureSandbox(t.Context(), WithMemoryLimit(silentLimit), WithBuildTimeout(200*time.Millisecond))
 	expectError(t, err, EvaluationFailed, "starting the evaluator", "took longer than 200ms to start")
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -154,10 +154,10 @@ func TestASilentExecutableEndsWithTheBuildTimeout(t *testing.T) {
 }
 
 func TestAMalformedAnswerKillsTheEvaluatorWithItsCause(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(malformedAnswerLimit))
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	process := currentChild(t, sb)
-	started := time.Now()
+	var sb = mustIsolated(t, WithMemoryLimit(malformedAnswerLimit))
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
+	var process = currentChild(t, sb)
+	var started = time.Now()
 	expectError(t, evalBounded(t, document, within(t, 30*time.Second), "v"), EvaluationFailed, "$.v", "reading the evaluator's answer", "invalid character")
 	if waited := time.Since(started); waited > 3*time.Second {
 		t.Fatalf("a malformed answer was noticed only after %s", waited)
@@ -166,9 +166,9 @@ func TestAMalformedAnswerKillsTheEvaluatorWithItsCause(t *testing.T) {
 }
 
 func TestAnAnswerWithNeitherDataNorFailureKillsTheEvaluator(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(emptyAnswerLimit))
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	process := currentChild(t, sb)
+	var sb = mustIsolated(t, WithMemoryLimit(emptyAnswerLimit))
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
+	var process = currentChild(t, sb)
 	expectError(t, evalBounded(t, document, within(t, 30*time.Second), "v"), EvaluationFailed, "$.v", "neither data nor a failure")
 	expectDeath(t, process)
 }
@@ -176,7 +176,7 @@ func TestAnAnswerWithNeitherDataNorFailureKillsTheEvaluator(t *testing.T) {
 func respawnAs(t *testing.T, sb *Sandbox, spec _ChildSpec) {
 	t.Helper()
 	spec.lifetime = sb.lifetime
-	d := dispatcherOf(t, sb)
+	var d = dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.start = func() (*_Life, error) { return startLife(spec) }
@@ -189,16 +189,16 @@ func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
 	respawnAs(t, sb, _ChildSpec{limit: silentLimit, buildTimeout: defaultBuildTimeout})
 	killChild(t, sb)
-	evaluating := make(chan error, 1)
+	var evaluating = make(chan error, 1)
 	go func() {
 		var out int
 		evaluating <- resolveInto(t.Context(), &out, document.At("v"))
 	}()
 	time.Sleep(200 * time.Millisecond)
-	started := time.Now()
+	var started = time.Now()
 	cancel()
 	select {
 	case err := <-evaluating:
@@ -217,7 +217,7 @@ func evaluatorCPU(t *testing.T, idle time.Duration) time.Duration {
 	if err != nil {
 		t.Fatal(err)
 	}
-	process := currentChild(t, sb)
+	var process = currentChild(t, sb)
 	time.Sleep(idle)
 	cancel()
 	expectDeath(t, process)
@@ -225,19 +225,19 @@ func evaluatorCPU(t *testing.T, idle time.Duration) time.Duration {
 }
 
 func TestAnIdleEvaluatorSleeps(t *testing.T) {
-	startup := evaluatorCPU(t, 0)
-	idling := evaluatorCPU(t, 2*time.Second)
+	var startup = evaluatorCPU(t, 0)
+	var idling = evaluatorCPU(t, 2*time.Second)
 	if spent := idling - startup; spent > 15*time.Millisecond {
 		t.Fatalf("an idle evaluator spent %s of CPU in 2s (startup alone %s)", spent, startup)
 	}
 }
 
 func TestADeathNamesItsReasonNotItsStack(t *testing.T) {
-	dump := "fatal error: runtime: out of memory\n\nruntime stack:\nruntime.throw({0x1, 0x2})\n\t/usr/local/go/src/runtime/panic.go:1101\n\ngoroutine 1 [running]:\nmain.main()\n"
-	stderr := &_HeadBuffer{limit: stderrHeadBytes}
+	var dump = "fatal error: runtime: out of memory\n\nruntime stack:\nruntime.throw({0x1, 0x2})\n\t/usr/local/go/src/runtime/panic.go:1101\n\ngoroutine 1 [running]:\nmain.main()\n"
+	var stderr = &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = stderr.Write([]byte("jaml evaluator: something first\n" + dump + strings.Repeat("goroutine 9 [chan receive]:\n", 1000)))
 	expectEqual(t, stderr.reason(), "fatal error: runtime: out of memory")
-	plain := &_HeadBuffer{limit: stderrHeadBytes}
+	var plain = &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = plain.Write([]byte("jaml evaluator: reading request: bad\n"))
 	expectEqual(t, plain.reason(), "jaml evaluator: reading request: bad")
 }
@@ -246,13 +246,13 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 	for name, limit := range map[string]int64{"foreign greeting": foreignGreetingLimit, "future protocol": futureProtocolLimit, "crash before greeting": crashAtStartLimit} {
 		t.Run(name, func(t *testing.T) {
 			_, constructed := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(limit))
-			sb := mustIsolated(t)
-			document := mustJaml(t, sb, "a: 1\n")
+			var sb = mustIsolated(t)
+			var document = mustJaml(t, sb, "a: 1\n")
 			expectEqual(t, isolatedEvalAs[int](t, document, nil, "a"), 1)
 			respawnAs(t, sb, _ChildSpec{limit: _MemoryLimit(limit), buildTimeout: defaultBuildTimeout})
 			killChild(t, sb)
 			var out any
-			respawned := resolveInto(within(t, 10*time.Second), &out, document.At("a"))
+			var respawned = resolveInto(within(t, 10*time.Second), &out, document.At("a"))
 			if name == "crash before greeting" {
 				expectError(t, respawned, EvaluationFailed, "evaluator died (exit status 3)")
 			} else {
@@ -269,15 +269,15 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 }
 
 func TestEvalsWithADoneContextStartNoEvaluator(t *testing.T) {
-	sb := mustIsolated(t)
-	document := mustJaml(t, sb, "a: 1\n")
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "a: 1\n")
 	killChild(t, sb)
-	before := liveChildren(t)
+	var before = liveChildren(t)
 	done, stop := context.WithCancel(t.Context())
 	stop()
 	var out any
 	for range 40 {
-		err := resolveInto(done, &out, document.At("a"))
+		var err = resolveInto(done, &out, document.At("a"))
 		expectError(t, err, EvaluationFailed, "cancelled")
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled in %v", err)
@@ -291,7 +291,7 @@ func TestEvalsWithADoneContextStartNoEvaluator(t *testing.T) {
 }
 
 func TestAHandshakeCutShortEndsItsEvaluator(t *testing.T) {
-	before := liveChildren(t)
+	var before = liveChildren(t)
 	for range 10 {
 		_, err := MakeSecureSandbox(within(t, 50*time.Millisecond), WithMemoryLimit(silentLimit))
 		expectError(t, err, EvaluationFailed, "cancelled")
@@ -313,7 +313,7 @@ func hostileText() string {
 }
 
 func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {
-	sb := mustIsolated(t)
+	var sb = mustIsolated(t)
 	goruntime.GC()
 	spentBefore, started := hostCPU(t), time.Now()
 	_, err := sb.MakeExpressionFromJaml(within(t, 200*time.Millisecond), hostileText())
@@ -331,8 +331,8 @@ func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {
 }
 
 func TestAHostileBuildIsBoundedByTheBuildTimeout(t *testing.T) {
-	sb := mustIsolated(t, WithBuildTimeout(200*time.Millisecond))
-	started := time.Now()
+	var sb = mustIsolated(t, WithBuildTimeout(200*time.Millisecond))
+	var started = time.Now()
 	_, err := sb.MakeExpressionFromJaml(t.Context(), hostileText())
 	expectError(t, err, EvaluationFailed, "cancelled: the build took longer than its timeout of 200ms")
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -367,13 +367,13 @@ func TestABuildPastTheLimitFailsConstruction(t *testing.T) {
 }
 
 func TestBuiltTemplatesCountAgainstTheCeiling(t *testing.T) {
-	big := "big: \"${ (() => { const held = 'x'.repeat(48 << 20); let n = 0; for (let i = 0; i < 1e6; i++) n += i; return held.length })() }\"\n"
-	alone := mustIsolated(t, WithMemoryLimit(64<<20))
-	before := childPID(t, alone)
+	var big = "big: \"${ (() => { const held = 'x'.repeat(48 << 20); let n = 0; for (let i = 0; i < 1e6; i++) n += i; return held.length })() }\"\n"
+	var alone = mustIsolated(t, WithMemoryLimit(64<<20))
+	var before = childPID(t, alone)
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, alone, big), nil, "big"), 48<<20)
 	expectEqual(t, childPID(t, alone), before)
-	crowded := mustIsolated(t, WithMemoryLimit(64<<20))
-	resident := make([]*Expression, 32)
+	var crowded = mustIsolated(t, WithMemoryLimit(64<<20))
+	var resident = make([]*Expression, 32)
 	for index := range resident {
 		resident[index] = mustJaml(t, crowded, "v: "+strings.Repeat("y", 1<<20)+"\n")
 	}
@@ -386,7 +386,7 @@ func TestBuiltTemplatesCountAgainstTheCeiling(t *testing.T) {
 }
 
 func TestTheSandboxContextEndsEverything(t *testing.T) {
-	before := liveChildren(t)
+	var before = liveChildren(t)
 	for _, kind := range sandboxKinds {
 		t.Run(kind.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -394,9 +394,9 @@ func TestTheSandboxContextEndsEverything(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			document := mustJaml(t, sb, "v: ${ 1 }\nspin: ${ (() => { while (true) {} })() }\n")
-			compiled := mustExpression(t, sb, "x => x")
-			running := make(chan error, 1)
+			var document = mustJaml(t, sb, "v: ${ 1 }\nspin: ${ (() => { while (true) {} })() }\n")
+			var compiled = mustExpression(t, sb, "x => x")
+			var running = make(chan error, 1)
 			go func() {
 				var out any
 				running <- resolveInto(t.Context(), &out, document.At("spin"))
@@ -428,8 +428,8 @@ func TestATemplateContextEndingClosesOnlyThatTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		staying := mustJaml(t, sb, "v: ${ 2 }\n")
-		running := make(chan error, 1)
+		var staying = mustJaml(t, sb, "v: ${ 2 }\n")
+		var running = make(chan error, 1)
 		go func() {
 			var out any
 			running <- resolveInto(t.Context(), &out, ending.At("spin"))
@@ -465,7 +465,7 @@ func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {
 }
 
 func dropATemplate(t *testing.T, sb *Sandbox) *_RemoteUnit {
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
 	return document.held.keep.unit.(*_RemoteUnit)
 }
 
@@ -476,11 +476,11 @@ func residencyOf(child *_Life, u *_RemoteUnit) *_Residency {
 }
 
 func TestADroppedTemplateIsForgottenByTheEvaluator(t *testing.T) {
-	sb := mustIsolated(t)
-	dropped := dropATemplate(t, sb)
-	child := currentChild(t, sb)
-	build := residencyOf(child, dropped).build
-	deadline := time.Now().Add(10 * time.Second)
+	var sb = mustIsolated(t)
+	var dropped = dropATemplate(t, sb)
+	var child = currentChild(t, sb)
+	var build = residencyOf(child, dropped).build
+	var deadline = time.Now().Add(10 * time.Second)
 	for residencyOf(child, dropped) != nil {
 		if time.Now().After(deadline) {
 			t.Fatalf("unit %d outlived its unreachable template", build)
@@ -490,7 +490,7 @@ func TestADroppedTemplateIsForgottenByTheEvaluator(t *testing.T) {
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		served := child.serve(within(t, 10*time.Second), build, _Work{})
+		var served = child.serve(within(t, 10*time.Second), build, _Work{})
 		if failed, isRefused := served.(_Refused); isRefused && errors.Is(failed.err, errMissing) {
 			return
 		}

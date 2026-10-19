@@ -11,8 +11,8 @@ import (
 
 func busyFor(t *testing.T, sb *Sandbox, busy time.Duration) <-chan error {
 	t.Helper()
-	document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
-	spinning := make(chan error, 1)
+	var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
+	var spinning = make(chan error, 1)
 	go func() {
 		var out any
 		spinning <- resolveInto(within(t, busy), &out, document.At("spin"))
@@ -23,7 +23,7 @@ func busyFor(t *testing.T, sb *Sandbox, busy time.Duration) <-chan error {
 
 func TestABuildTimeoutBoundsTheBuildNotTheWaitForItsSlot(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		spinning := busyFor(t, sb, time.Second)
+		var spinning = busyFor(t, sb, time.Second)
 		if _, err := sb.MakeExpression(within(t, 5*time.Second), "1"); err != nil {
 			t.Fatalf("a compile that waited for its slot longer than its build timeout failed: %v", err)
 		}
@@ -44,7 +44,7 @@ func manyExpressions(count int) string {
 }
 
 func TestABuildOverrunningItsTimeoutFailsAlikeInBothKinds(t *testing.T) {
-	text := manyExpressions(20000)
+	var text = manyExpressions(20000)
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for range 3 {
 			_, err := sb.MakeExpressionFromJaml(t.Context(), text)
@@ -63,7 +63,7 @@ func (_IdleUnit) serve(context.Context, _Work) _Outcome { return _Answered{data:
 
 func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	sb := &Sandbox{lifetime: t.Context(), engine: _EngineFunc(func(context.Context, _Blueprint) (_Unit, error) {
+	var sb = &Sandbox{lifetime: t.Context(), engine: _EngineFunc(func(context.Context, _Blueprint) (_Unit, error) {
 		cancel()
 		return _IdleUnit{}, nil
 	})}
@@ -74,7 +74,7 @@ func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 func TestABuildThatOutlivesItsSandboxIsClosed(t *testing.T) {
 	lifetime, end := context.WithCancel(t.Context())
 	ctx, cancel := context.WithCancel(t.Context())
-	sb := &Sandbox{lifetime: lifetime, engine: _EngineFunc(func(context.Context, _Blueprint) (_Unit, error) {
+	var sb = &Sandbox{lifetime: lifetime, engine: _EngineFunc(func(context.Context, _Blueprint) (_Unit, error) {
 		cancel()
 		end()
 		return _IdleUnit{}, nil
@@ -85,7 +85,7 @@ func TestABuildThatOutlivesItsSandboxIsClosed(t *testing.T) {
 
 func TestABuildRaceKeepsTheFirstVerdict(t *testing.T) {
 	parent, expire := context.WithCancel(t.Context())
-	finishedFirst := raceBuild(parent, time.Hour)
+	var finishedFirst = raceBuild(parent, time.Hour)
 	if !finishedFirst.finish(_Answered{}) {
 		t.Fatal("a build that finished before its deadline lost the race")
 	}
@@ -93,7 +93,7 @@ func TestABuildRaceKeepsTheFirstVerdict(t *testing.T) {
 	if _, built := finishedFirst.await().(_Answered); !built {
 		t.Fatalf("the deadline overturned a recorded completion: %#v", finishedFirst.await())
 	}
-	expiredFirst := raceBuild(t.Context(), time.Nanosecond)
+	var expiredFirst = raceBuild(t.Context(), time.Nanosecond)
 	<-expiredFirst.done()
 	if expiredFirst.finish(_Answered{}) {
 		t.Fatal("a completion overturned a recorded deadline")
@@ -107,7 +107,7 @@ func TestABuildRaceKeepsTheFirstVerdict(t *testing.T) {
 
 func TestABuildRaceRecordsExactlyOneVerdict(t *testing.T) {
 	for range 10000 {
-		race := raceBuild(t.Context(), time.Microsecond)
+		var race = raceBuild(t.Context(), time.Microsecond)
 		var won bool
 		var finishing sync.WaitGroup
 		finishing.Go(func() { won = race.finish(_Answered{}) })
@@ -121,7 +121,7 @@ func TestABuildRaceRecordsExactlyOneVerdict(t *testing.T) {
 
 func TestAPlainDecimalKeyIsSpelledAsAnIndex(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "\"0\":\n  boom: ${ (() => { throw new Error('boom') })() }\n  \"01\": 1\n")
+		var document = mustJaml(t, sb, "\"0\":\n  boom: ${ (() => { throw new Error('boom') })() }\n  \"01\": 1\n")
 		var out any
 		expectError(t, resolveInto(t.Context(), &out, document.At("0", "boom")), EvaluationFailed, "$[0].boom: ", "Error: boom")
 		expectError(t, resolveInto(t.Context(), &out, document.At("0", "nope")), MissingPath, `$[0] has no key "nope"`)
@@ -131,7 +131,7 @@ func TestAPlainDecimalKeyIsSpelledAsAnIndex(t *testing.T) {
 }
 
 func TestInvalidUTF8TemplateTextIsRefusedAlikeInBothKinds(t *testing.T) {
-	cases := map[string]string{
+	var cases = map[string]string{
 		"k: \"a\xffb\"\n":   "yaml: invalid leading UTF-8 octet",
 		"k: 1\n# \xc3":      "yaml: incomplete UTF-8 octet sequence",
 		"k: a\xc3(\n":       "yaml: invalid trailing UTF-8 octet",
@@ -159,7 +159,7 @@ func TestInvalidUTF8ExpressionSourceIsRefusedAlikeInBothKinds(t *testing.T) {
 
 func TestAnInvalidUTF8PathStepIsMissingAlikeInBothKinds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "\"�\": 1\nk: v\nlist: [1]\n")
+		var document = mustJaml(t, sb, "\"�\": 1\nk: v\nlist: [1]\n")
 		var out any
 		expectError(t, resolveInto(t.Context(), &out, document.At("\xff")), MissingPath, `$ has no key "\xff"`)
 		expectError(t, resolveInto(t.Context(), &out, document.At("k", "\xff")), MissingPath, `$.k has no key "\xff"`)

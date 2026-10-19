@@ -27,7 +27,7 @@ func excerpt(text string, limit int) string {
 }
 
 func clip(text string, limit int) string {
-	cut := 0
+	var cut = 0
 	for range limit {
 		if cut >= len(text) {
 			return text
@@ -73,9 +73,9 @@ func (r _Realm) describe(value goja.Value) string {
 }
 
 func holdsEngineValue(err error) bool {
-	pending := []error{err}
+	var pending = []error{err}
 	for len(pending) > 0 {
-		next := pending[len(pending)-1]
+		var next = pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
 		if isEngineValue(next) {
 			return true
@@ -93,7 +93,7 @@ func holdsEngineValue(err error) bool {
 }
 
 func isEngineValue(value any) bool {
-	kind := reflect.TypeOf(value)
+	var kind = reflect.TypeOf(value)
 	for kind != nil && kind.Kind() == reflect.Pointer {
 		kind = kind.Elem()
 	}
@@ -139,7 +139,7 @@ func errorText(object *goja.Object) string {
 }
 
 func primitiveField(object *goja.Object, key string) (string, bool) {
-	field := object.Get(key)
+	var field = object.Get(key)
 	if field == nil || goja.IsUndefined(field) || goja.IsNull(field) {
 		return "", false
 	}

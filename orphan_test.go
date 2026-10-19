@@ -15,15 +15,15 @@ import (
 
 func TestAnOrphanedEvaluatorExits(t *testing.T) {
 	if os.Getenv("JAML_ORPHAN_PARENT") == "1" {
-		sb := mustIsolated(t)
-		document := mustJaml(t, sb, "v: ${ (() => { while (true) {} })() }\n")
+		var sb = mustIsolated(t)
+		var document = mustJaml(t, sb, "v: ${ (() => { while (true) {} })() }\n")
 		os.Stdout.WriteString("CHILD " + strconv.Itoa(childPID(t, sb)) + "\n")
 		go func() { var out any; _ = resolveInto(context.Background(), &out, document.At("v")) }()
 		time.Sleep(200 * time.Millisecond)
 		syscall.Kill(os.Getpid(), syscall.SIGKILL)
 	}
 	self, _ := os.Executable()
-	cmd := exec.Command(self, "-test.run", "TestAnOrphanedEvaluatorExits")
+	var cmd = exec.Command(self, "-test.run", "TestAnOrphanedEvaluatorExits")
 	cmd.Env = append(os.Environ(), "JAML_ORPHAN_PARENT=1")
 	output, _ := cmd.Output()
 	var pid int
@@ -35,7 +35,7 @@ func TestAnOrphanedEvaluatorExits(t *testing.T) {
 	if pid == 0 {
 		t.Fatalf("no child pid in %q", output)
 	}
-	deadline := time.Now().Add(3 * time.Second)
+	var deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if syscall.Kill(pid, 0) != nil {
 			return

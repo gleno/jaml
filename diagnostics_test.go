@@ -10,7 +10,7 @@ import (
 
 func expectWellFormedAndBounded(t *testing.T, err error) {
 	t.Helper()
-	text := err.Error()
+	var text = err.Error()
 	if !utf8.ValidString(text) {
 		t.Fatalf("invalid UTF-8 in %q", text)
 	}
@@ -20,17 +20,17 @@ func expectWellFormedAndBounded(t *testing.T, err error) {
 }
 
 func TestAPreviewCutsBetweenCharacters(t *testing.T) {
-	long := strings.Repeat("й", 70)
-	both := evalInBothKinds(t, "v: \"${ '"+long+"' + q }\"\n", nil)
+	var long = strings.Repeat("й", 70)
+	var both = evalInBothKinds(t, "v: \"${ '"+long+"' + q }\"\n", nil)
 	both.expectRefused(t, EvaluationFailed, "$.v: ${'"+strings.Repeat("й", 59)+"…}: ReferenceError: q is not defined")
 	expectWellFormedAndBounded(t, both.trusted)
-	made := makeInBothKinds(t, "v: \"${ '"+long+"' + ) }\"\n")
+	var made = makeInBothKinds(t, "v: \"${ '"+long+"' + ) }\"\n")
 	made.expectRefused(t, InvalidExpression, "…")
 	expectWellFormedAndBounded(t, made.trusted)
 }
 
 func TestSyntaxErrorsCountCharactersAndQuoteWhereTheyPoint(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		text, expected string
 	}{
 		"accented":  {"v: \"${ \\\"ééééé\\\" + ) }\"\n", `syntax error at line 1, column 12 of the expression: Unexpected token ) at ") }"`},
@@ -46,7 +46,7 @@ func TestSyntaxErrorsCountCharactersAndQuoteWhereTheyPoint(t *testing.T) {
 }
 
 func TestThrownValuesAreNamedByTheirType(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		source, expected string
 	}{
 		"symbol":             {"throw Symbol('s')", ": threw Symbol(s): "},
@@ -70,7 +70,7 @@ func TestThrownValuesAreNamedByTheirType(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			both := evalInBothKinds(t, expressionTemplate("(() => { "+c.source+" })()"), nil)
+			var both = evalInBothKinds(t, expressionTemplate("(() => { "+c.source+" })()"), nil)
 			both.expectRefused(t, EvaluationFailed, c.expected)
 			expectWellFormedAndBounded(t, both.trusted)
 			if len(both.trusted.Error()) > 600 {
@@ -82,11 +82,11 @@ func TestThrownValuesAreNamedByTheirType(t *testing.T) {
 
 func engineValuesIn(err error) []string {
 	var found []string
-	pending := []error{err}
+	var pending = []error{err}
 	for len(pending) > 0 {
-		next := pending[len(pending)-1]
+		var next = pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		kind := reflect.TypeOf(next)
+		var kind = reflect.TypeOf(next)
 		for kind.Kind() == reflect.Pointer {
 			kind = kind.Elem()
 		}
@@ -108,7 +108,7 @@ func engineValuesIn(err error) []string {
 func TestAThrowKeepsASnapshotAsItsCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var out any
-		err := resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { throw new RangeError('far') })()")).At("v"))
+		var err = resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { throw new RangeError('far') })()")).At("v"))
 		var caught *Thrown
 		if !errors.As(err, &caught) {
 			t.Fatalf("expected a thrown snapshot in %v", err)
@@ -126,7 +126,7 @@ func TestAThrowKeepsASnapshotAsItsCause(t *testing.T) {
 
 func TestNoEngineValueEscapesAnEval(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		cases := map[string]struct {
+		var cases = map[string]struct {
 			source string
 			vars   map[string]any
 		}{
@@ -142,7 +142,7 @@ func TestNoEngineValueEscapesAnEval(t *testing.T) {
 		for name, c := range cases {
 			t.Run(name, func(t *testing.T) {
 				var out any
-				err := resolveInto(valued(t.Context(), c.vars), &out, mustJaml(t, sb, expressionTemplate(c.source)).At("v"))
+				var err = resolveInto(valued(t.Context(), c.vars), &out, mustJaml(t, sb, expressionTemplate(c.source)).At("v"))
 				expectError(t, err, EvaluationFailed)
 				if found := engineValuesIn(err); len(found) > 0 {
 					t.Fatalf("%v reaches %v", err, found)
@@ -153,7 +153,7 @@ func TestNoEngineValueEscapesAnEval(t *testing.T) {
 }
 
 func TestAThrowingGetterNamesItsResultPath(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		source, expected string
 	}{
 		"nested key":   {"({ a: { get b() { throw new Error('x') } } })", ": reading result.a.b: Error: x: "},
@@ -172,7 +172,7 @@ func TestAThrowingGetterNamesItsResultPath(t *testing.T) {
 func thrownValue(t *testing.T, sb *Sandbox, source string) any {
 	t.Helper()
 	var out any
-	err := resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { "+source+" })()")).At("v"))
+	var err = resolveInto(t.Context(), &out, mustJaml(t, sb, expressionTemplate("(() => { "+source+" })()")).At("v"))
 	var caught *Thrown
 	if !errors.As(err, &caught) {
 		t.Fatalf("expected a thrown snapshot in %v", err)
@@ -203,7 +203,7 @@ func TestAThrownValueCountsEveryListedKeyOnce(t *testing.T) {
 
 func TestAThrownValueReadsWhatJSONWouldWrite(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		got := thrownValue(t, sb, `const e = new RangeError('r'); e.status = 404; e.cycle = e; throw { list: [() => 1, undefined, Symbol('s'), NaN, 10n, '\ud800', 2], text: '\ud800', ['\udc00']: 1, f() {}, u: undefined, e, n: -0, big: 2 ** 60, p: new Proxy({}, {}) }`)
+		var got = thrownValue(t, sb, `const e = new RangeError('r'); e.status = 404; e.cycle = e; throw { list: [() => 1, undefined, Symbol('s'), NaN, 10n, '\ud800', 2], text: '\ud800', ['\udc00']: 1, f() {}, u: undefined, e, n: -0, big: 2 ** 60, p: new Proxy({}, {}) }`)
 		expectEqual(t, got, map[string]any{
 			"list": []any{nil, nil, nil, nil, nil, nil, float64(2)},
 			"text": nil,

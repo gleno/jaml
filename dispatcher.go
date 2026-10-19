@@ -63,13 +63,13 @@ type _Dispatcher struct {
 }
 
 func newDispatcher(limit int, start func() (*_Life, error), first *_Life) *_Dispatcher {
-	d := &_Dispatcher{limit: limit, start: start}
+	var d = &_Dispatcher{limit: limit, start: start}
 	d.adopt(first)
 	return d
 }
 
 func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
-	e := &_Errand{ctx: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
+	var e = &_Errand{ctx: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
 	d.mu.Lock()
 	d.waiting = append(d.waiting, e)
 	d.dispatch()
@@ -133,7 +133,7 @@ func (d *_Dispatcher) admit(e *_Errand) (_Lease, error) {
 	case <-e.ctx.Done():
 	}
 	d.mu.Lock()
-	withdrawn := d.withdraw(e)
+	var withdrawn = d.withdraw(e)
 	d.mu.Unlock()
 	if !withdrawn {
 		if admitted := <-e.answers; admitted.err == nil {
@@ -202,7 +202,7 @@ func (d *_Dispatcher) dispatch() {
 		if d.mode == recovering && d.running == 0 && len(d.suspects) == 0 {
 			d.mode = sharing
 		}
-		queue := d.eligible()
+		var queue = d.eligible()
 		if queue == nil {
 			return
 		}
@@ -214,7 +214,7 @@ func (d *_Dispatcher) dispatch() {
 			}
 			return
 		}
-		next := (*queue)[0]
+		var next = (*queue)[0]
 		*queue = (*queue)[1:]
 		d.running++
 		next.answers <- _Admission{lease: d.lend(current.life)}

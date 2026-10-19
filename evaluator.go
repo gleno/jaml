@@ -39,13 +39,13 @@ func serveEvaluations() int {
 		return exitProtocolBroken
 	}
 	adoptTheHostsZone()
-	watch := watchTheHeap(world)
+	var watch = watchTheHeap(world)
 	if watch.orphaned() {
 		return exitOrphaned
 	}
-	replies := &_ReplyWriter{out: os.NewFile(responsesFD, "jaml-responses"), frames: framesFor(world.limit)}
+	var replies = &_ReplyWriter{out: os.NewFile(responsesFD, "jaml-responses"), frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
-	serving := &_Evaluator{watch: watch, replies: replies, units: map[uint64]_Servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
+	var serving = &_Evaluator{watch: watch, replies: replies, units: map[uint64]_Servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
 	go serving.obey(json.NewDecoder(os.NewFile(controlFD, "jaml-control")))
 	return serving.follow(json.NewDecoder(os.NewFile(requestsFD, "jaml-requests")))
 }
@@ -112,7 +112,7 @@ func (e *_Evaluator) accept(incoming _Request) error {
 		if err != nil {
 			return err
 		}
-		held := e.holding(incoming.Unit)
+		var held = e.holding(incoming.Unit)
 		if held == nil {
 			e.finish(incoming.Job)
 			e.replies.write(e.replies.frames.missing(incoming.Job))
@@ -204,7 +204,7 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 
 func (e *_Evaluator) finish(job uint64) {
 	e.mu.Lock()
-	cancel := e.running[job]
+	var cancel = e.running[job]
 	delete(e.running, job)
 	e.mu.Unlock()
 	cancel()
@@ -239,7 +239,7 @@ func (w *_ReplyWriter) write(frame []byte) {
 }
 
 func adoptTheHostsZone() {
-	name := os.Getenv("TZ")
+	var name = os.Getenv("TZ")
 	if name == "" || filepath.IsAbs(name) {
 		return
 	}
@@ -261,7 +261,7 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 	if err != nil || parent <= 0 {
 		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorParent, os.Getenv(evaluatorParent))
 	}
-	nonce := os.Getenv(evaluatorNonce)
+	var nonce = os.Getenv(evaluatorNonce)
 	if nonce == "" {
 		return _EvaluatorWorld{}, fmt.Errorf("no %s", evaluatorNonce)
 	}
@@ -279,9 +279,9 @@ type _HeapWatch struct {
 
 func watchTheHeap(world _EvaluatorWorld) *_HeapWatch {
 	goruntime.GC()
-	ceiling := min(heapHeld()+uint64(world.limit), math.MaxInt64)
+	var ceiling = min(heapHeld()+uint64(world.limit), math.MaxInt64)
 	debug.SetMemoryLimit(int64(ceiling))
-	watch := &_HeapWatch{ceiling: ceiling, parent: world.parent, wake: make(chan struct{}, 1)}
+	var watch = &_HeapWatch{ceiling: ceiling, parent: world.parent, wake: make(chan struct{}, 1)}
 	go watch.patrol()
 	return watch
 }
@@ -295,7 +295,7 @@ func gcCycles() uint64 {
 }
 
 func metric(name string) uint64 {
-	samples := []metrics.Sample{{Name: name}}
+	var samples = []metrics.Sample{{Name: name}}
 	metrics.Read(samples)
 	return samples[0].Value.Uint64()
 }
@@ -345,7 +345,7 @@ func (w *_HeapWatch) working() bool {
 }
 
 func (w *_HeapWatch) inspect() {
-	held := heapHeld()
+	var held = heapHeld()
 	w.notePressure(held)
 	if held > w.ceiling {
 		w.confirmOverflow()
@@ -356,7 +356,7 @@ func (w *_HeapWatch) inspect() {
 }
 
 func (w *_HeapWatch) notePressure(held uint64) {
-	line := w.ceiling / 4 * 3
+	var line = w.ceiling / 4 * 3
 	if held <= line || gcCycles() <= w.quietUntil {
 		return
 	}

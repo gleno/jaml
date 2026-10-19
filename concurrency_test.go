@@ -8,7 +8,7 @@ import (
 
 func TestConcurrentEvalsDoNotInterfere(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 name: ${{who}}
 doubled: ${ n * 2 }
 items: "${ Array.from({length: n % 5}, (_, i) => who + i) }"
@@ -21,22 +21,22 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 			Leak    int      `json:"leak"`
 		}
 		var wait sync.WaitGroup
-		failures := make(chan error, 64)
+		var failures = make(chan error, 64)
 		for worker := range 16 {
 			wait.Go(func() {
 				for round := range 20 {
-					n := worker*100 + round
-					who := fmt.Sprintf("w%d", worker)
+					var n = worker*100 + round
+					var who = fmt.Sprintf("w%d", worker)
 					var out _Decoded
 					if err := resolveInto(valued(t.Context(), map[string]any{"who": who, "n": n}), &out, document); err != nil {
 						failures <- err
 						return
 					}
-					items := make([]string, n%5)
+					var items = make([]string, n%5)
 					for i := range items {
 						items[i] = fmt.Sprintf("%s%d", who, i)
 					}
-					want := _Decoded{Name: who, Doubled: n * 2, Items: items, Leak: 1}
+					var want = _Decoded{Name: who, Doubled: n * 2, Items: items, Leak: 1}
 					if fmt.Sprint(out) != fmt.Sprint(want) {
 						failures <- fmt.Errorf("got %+v, want %+v", out, want)
 						return
@@ -54,8 +54,8 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 
 func TestSharedVarsAreNotMutated(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "v: ${ [...shared.list, 1].length }\n")
-		vars := map[string]any{"shared": map[string]any{"list": []any{}}}
+		var document = mustJaml(t, sb, "v: ${ [...shared.list, 1].length }\n")
+		var vars = map[string]any{"shared": map[string]any{"list": []any{}}}
 		var wait sync.WaitGroup
 		for range 8 {
 			wait.Go(func() {

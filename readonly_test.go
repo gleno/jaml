@@ -36,7 +36,7 @@ func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for _, write := range writes {
 			var out any
-			err := resolveInto(withValues(t, values), &out, mustExpression(t, sb, write))
+			var err = resolveInto(withValues(t, values), &out, mustExpression(t, sb, write))
 			expectError(t, err, EvaluationFailed, "$: ", "TypeError: "+readOnlyRefusal)
 			var thrown *Thrown
 			if !errors.As(err, &thrown) || thrown.Message != "TypeError: "+readOnlyRefusal {
@@ -57,7 +57,7 @@ func TestATypeErrorThatIsNotAWriteKeepsItsMessage(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for source, message := range cases {
 			var out any
-			err := resolveInto(withValues(t, values), &out, mustExpression(t, sb, source))
+			var err = resolveInto(withValues(t, values), &out, mustExpression(t, sb, source))
 			var thrown *Thrown
 			if !errors.As(err, &thrown) || thrown.Message != message {
 				t.Fatalf("%s: want %q, got %v", source, message, err)
@@ -68,14 +68,14 @@ func TestATypeErrorThatIsNotAWriteKeepsItsMessage(t *testing.T) {
 
 func TestAFrozenWriteThatDoesNothingStillSucceeds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		got := mustResolve[[]int](t, withValues(t, map[string]any{"none": []int{}, "one": []int{1}}), mustExpression(t, sb, "[...none.sort(), ...one.reverse()]"))
+		var got = mustResolve[[]int](t, withValues(t, map[string]any{"none": []int{}, "one": []int{1}}), mustExpression(t, sb, "[...none.sort(), ...one.reverse()]"))
 		expectEqual(t, got, []int{1})
 	})
 }
 
 func TestAGuardedMethodKeepsItsNameAndLength(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		got := mustResolve[[]any](t, t.Context(), mustExpression(t, sb, "[Array.prototype.splice.name, Array.prototype.splice.length, Object.defineProperty.name, Object.defineProperty.length]"))
+		var got = mustResolve[[]any](t, t.Context(), mustExpression(t, sb, "[Array.prototype.splice.name, Array.prototype.splice.length, Object.defineProperty.name, Object.defineProperty.length]"))
 		expectEqual(t, got, []any{"splice", float64(2), "defineProperty", float64(3)})
 	})
 }

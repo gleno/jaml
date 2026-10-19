@@ -67,17 +67,17 @@ func callSlowly(t *testing.T, compiled *Expression, jobs int, scale float64) {
 
 func TestMaxConcurrencyIsHonoured(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		compiled := mustExpression(t, sb, slowCall)
-		peak := watchPeak(sb)
+		var compiled = mustExpression(t, sb, slowCall)
+		var peak = watchPeak(sb)
 		callSlowly(t, compiled, 6, 1)
 		expectEqual(t, peak(), 2)
 	}, WithMaxConcurrency(2))
 }
 
 func TestMaxConcurrencyDefaultsToGOMAXPROCS(t *testing.T) {
-	trusted := mustSandbox(t, trustedKind)
+	var trusted = mustSandbox(t, trustedKind)
 	expectEqual(t, cap(trusted.engine.(*_TrustedEngine).gate), goruntime.GOMAXPROCS(0))
-	isolated := mustIsolated(t)
+	var isolated = mustIsolated(t)
 	expectEqual(t, dispatcherOf(t, isolated).limit, goruntime.GOMAXPROCS(0))
 }
 
@@ -88,7 +88,7 @@ func TestCallPassesArgumentsAsCopies(t *testing.T) {
 			t.Fatal(err)
 		}
 		expectEqual(t, sum, map[string]any{"sum": float64(3), "keys": []any{"n"}, "missing": "undefined"})
-		shared := map[string]any{"list": []any{1}}
+		var shared = map[string]any{"list": []any{1}}
 		var length int
 		if err := resolveInto(t.Context(), &length, mustExpression(t, sb, "a => (a.list.push(9), a.list.length)"), shared); err != nil {
 			t.Fatal(err)
@@ -104,7 +104,7 @@ func TestCallPassesArgumentsAsCopies(t *testing.T) {
 }
 
 func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		source    string
 		call      bool
 		args      []any
@@ -121,9 +121,9 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var both _BothKinds
 			for _, kind := range sandboxKinds {
-				compiled := mustExpression(t, mustSandbox(t, kind), c.source)
+				var compiled = mustExpression(t, mustSandbox(t, kind), c.source)
 				var out any
-				err := resolveInto(t.Context(), &out, compiled)
+				var err = resolveInto(t.Context(), &out, compiled)
 				if c.call {
 					err = resolveInto(t.Context(), &out, compiled, c.args...)
 				}
@@ -175,12 +175,12 @@ func TestAnExpressionFollowsTheTemplateDefaults(t *testing.T) {
 }
 
 func TestAFixedClockAndSeedAreDeterministicInBothKinds(t *testing.T) {
-	source := "[Date.now(), new Date().toISOString(), Math.random(), Math.random()]"
-	at := time.Date(2026, 1, 2, 3, 4, 5, 6_000_000, time.UTC)
-	ctx := WithRandomSeed(WithFixedClock(t.Context(), at), 42)
-	results := map[string][]any{}
+	var source = "[Date.now(), new Date().toISOString(), Math.random(), Math.random()]"
+	var at = time.Date(2026, 1, 2, 3, 4, 5, 6_000_000, time.UTC)
+	var ctx = WithRandomSeed(WithFixedClock(t.Context(), at), 42)
+	var results = map[string][]any{}
 	for _, kind := range sandboxKinds {
-		compiled := mustExpression(t, mustSandbox(t, kind), source)
+		var compiled = mustExpression(t, mustSandbox(t, kind), source)
 		for range 3 {
 			var seen []any
 			if err := resolveInto(ctx, &seen, compiled); err != nil {
@@ -206,7 +206,7 @@ func TestAFixedClockAndSeedAreDeterministicInBothKinds(t *testing.T) {
 
 func TestAnUnsetClockStandsStillWithinOneEval(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		before := time.Now()
+		var before = time.Now()
 		var seen []float64
 		if err := resolveInto(t.Context(), &seen, mustExpression(t, sb, "(() => { const first = Date.now(); for (let i = 0; i < 1e5; i++); return [first, Date.now()] })()")); err != nil {
 			t.Fatal(err)
@@ -219,7 +219,7 @@ func TestAnUnsetClockStandsStillWithinOneEval(t *testing.T) {
 }
 
 func TestThrownIsReachableWithItsMessageAndValueInBothKinds(t *testing.T) {
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		source  string
 		message string
 		value   any
@@ -239,7 +239,7 @@ func TestThrownIsReachableWithItsMessageAndValueInBothKinds(t *testing.T) {
 			var both _BothKinds
 			for _, kind := range sandboxKinds {
 				var out any
-				err := resolveInto(t.Context(), &out, mustExpression(t, mustSandbox(t, kind), c.source))
+				var err = resolveInto(t.Context(), &out, mustExpression(t, mustSandbox(t, kind), c.source))
 				var caught *Thrown
 				if !errors.As(err, &caught) {
 					t.Fatalf("%s: no Thrown in %v", kind.name, err)
@@ -263,7 +263,7 @@ func TestThrownIsReachableWithItsMessageAndValueInBothKinds(t *testing.T) {
 
 func expectDeepCut(t *testing.T, value any) {
 	t.Helper()
-	depth := 0
+	var depth = 0
 	for {
 		list, isList := value.([]any)
 		if !isList {
@@ -281,7 +281,7 @@ func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
 	if err := json.Unmarshal(_Frames{limit: 1 << 20}.failure(1, "$.v", fail(EvaluationFailed, "$.v: %w", &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})), &sent); err != nil {
 		t.Fatal(err)
 	}
-	carried := sent.Failure.rebuild()
+	var carried = sent.Failure.rebuild()
 	var caught *Thrown
 	if !errors.As(carried, &caught) {
 		t.Fatalf("no Thrown in %v", carried)
@@ -305,11 +305,11 @@ func keepByValue(t *testing.T, sb *Sandbox) *_KeptByValue {
 
 func collectEverythingUnreachable(t *testing.T) {
 	t.Helper()
-	collected := make(chan struct{})
-	decoy := new([64]byte)
+	var collected = make(chan struct{})
+	var decoy = new([64]byte)
 	goruntime.AddCleanup(decoy, func(done chan struct{}) { close(done) }, collected)
 	decoy = nil
-	deadline := time.Now().Add(10 * time.Second)
+	var deadline = time.Now().Add(10 * time.Second)
 	for {
 		goruntime.GC()
 		select {
@@ -330,7 +330,7 @@ func collectEverythingUnreachable(t *testing.T) {
 
 func TestACopiedExpressionOutlivesTheDroppedOriginal(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		kept := keepByValue(t, sb)
+		var kept = keepByValue(t, sb)
 		collectEverythingUnreachable(t)
 		var two, three int
 		if err := resolveInto(t.Context(), &two, (&kept.document).At("v")); err != nil {

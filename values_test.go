@@ -19,7 +19,7 @@ func TestVarsNamedLikeJavaScriptGlobalsAreRefusedInBothKinds(t *testing.T) {
 	for _, name := range []string{"JSON", "Error", "Array", "Math", "globalThis", "undefined", "NaN", "Infinity", "eval", "Function", "Object", "parseInt", "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "__proto__"} {
 		t.Run(name, func(t *testing.T) {
 			for _, text := range []string{"a: ${ 1 }\nb: ${ 2 }\n", "plain: 1\n"} {
-				both := _Agreement{text: text, vars: map[string]any{name: 7, "fine": 1}}.eval(t, intoAny)
+				var both = _Agreement{text: text, vars: map[string]any{name: 7, "fine": 1}}.eval(t, intoAny)
 				both.expectRefused(t, EvaluationFailed, `binding values: value "`+name+`" collides with a JavaScript global`)
 				expectNoTemplatePath(t, both.trusted)
 			}
@@ -32,36 +32,36 @@ func TestVarsNamedLikeOrdinaryWordsStillBind(t *testing.T) {
 }
 
 func TestVarsHoldingInvalidUTF8AreRefusedInBothKinds(t *testing.T) {
-	cases := map[string]map[string]any{
+	var cases = map[string]map[string]any{
 		"value":      {"bad": "x\xffy"},
 		"nested key": {"bad": map[string]any{"k\xfe": 1}},
 	}
 	for name, vars := range cases {
 		t.Run(name, func(t *testing.T) {
-			both := _Agreement{text: "v: ${ 1 }\n", vars: vars}.eval(t, intoAny)
+			var both = _Agreement{text: "v: ${ 1 }\n", vars: vars}.eval(t, intoAny)
 			both.expectRefused(t, EvaluationFailed, `binding values: value "bad" holds text that is not valid UTF-8`)
 			expectNoTemplatePath(t, both.trusted)
 		})
 	}
-	both := _Agreement{text: "v: ${ 1 }\n", vars: map[string]any{"b\xffad": 1}}.eval(t, intoAny)
+	var both = _Agreement{text: "v: ${ 1 }\n", vars: map[string]any{"b\xffad": 1}}.eval(t, intoAny)
 	both.expectRefused(t, EvaluationFailed, "is not named in valid UTF-8")
 }
 
 func TestRealReplacementCharactersAndEscapedTextStillBind(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		vars := map[string]any{"real": "a�b", "written": `�`, "key": map[string]any{`�`: "�"}}
-		got := _Agreement{text: "v: ${ [real, written, Object.keys(key)[0]] }\n", vars: vars, path: []string{"v"}}
+		var vars = map[string]any{"real": "a�b", "written": `�`, "key": map[string]any{`�`: "�"}}
+		var got = _Agreement{text: "v: ${ [real, written, Object.keys(key)[0]] }\n", vars: vars, path: []string{"v"}}
 		got.eval(t, intoAny).expectAccepted(t)
 		expectEqual(t, evalAs[[]string](t, mustJaml(t, sb, "v: ${ [real, written, Object.keys(key)[0]] }\n"), vars, "v"), []string{"a�b", `�`, `�`})
 	})
 }
 
 func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothKinds(t *testing.T) {
-	deep := any(1)
+	var deep = any(1)
 	for range maxDataDepth + 1 {
 		deep = []any{deep}
 	}
-	cases := map[string]struct {
+	var cases = map[string]struct {
 		vars     map[string]any
 		fragment string
 	}{
@@ -73,7 +73,7 @@ func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothKinds(t *testing.T)
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			both := _Agreement{text: "a: 1\nb: [x, y]\nc: {d: e}\n", vars: c.vars}.eval(t, intoAny)
+			var both = _Agreement{text: "a: 1\nb: [x, y]\nc: {d: e}\n", vars: c.vars}.eval(t, intoAny)
 			both.expectRefused(t, EvaluationFailed, c.fragment)
 			expectNoTemplatePath(t, both.trusted)
 		})
@@ -82,7 +82,7 @@ func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothKinds(t *testing.T)
 
 func TestEveryGlobalOfTheEngineIsRefusedAsAVarName(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "plain: 1\n")
+		var document = mustJaml(t, sb, "plain: 1\n")
 		for _, name := range goja.New().GlobalObject().GetOwnPropertyNames() {
 			var out any
 			expectError(t, resolveInto(valued(t.Context(), map[string]any{name: 1}), &out, document), EvaluationFailed, `value "`+name+`" collides with a JavaScript global`)
@@ -92,7 +92,7 @@ func TestEveryGlobalOfTheEngineIsRefusedAsAVarName(t *testing.T) {
 
 func TestVarsBindOnceTheFirstExpressionNeedsThem(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "plain: [1, 2]\nlater: ${ answer + 1 }\n")
+		var document = mustJaml(t, sb, "plain: [1, 2]\nlater: ${ answer + 1 }\n")
 		expectEqual(t, evalAs[map[string]any](t, document, map[string]any{"answer": 41}), map[string]any{"plain": []any{float64(1), float64(2)}, "later": float64(42)})
 	})
 }
@@ -117,7 +117,7 @@ var textThatIsNotUTF8 = map[string]any{
 func TestVarsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) {
 	for name, value := range textThatIsNotUTF8 {
 		t.Run(name, func(t *testing.T) {
-			both := _Agreement{text: "v: ${ typeof bad }\n", vars: map[string]any{"bad": value}}.eval(t, intoAny)
+			var both = _Agreement{text: "v: ${ typeof bad }\n", vars: map[string]any{"bad": value}}.eval(t, intoAny)
 			both.expectRefused(t, EvaluationFailed, `binding values: value "bad" holds text that is not valid UTF-8`)
 		})
 	}
@@ -125,7 +125,7 @@ func TestVarsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) {
 
 func TestArgumentsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		compiled := mustExpression(t, sb, "(a, b) => typeof b")
+		var compiled = mustExpression(t, sb, "(a, b) => typeof b")
 		for name, value := range textThatIsNotUTF8 {
 			t.Run(name, func(t *testing.T) {
 				var out any
@@ -137,9 +137,9 @@ func TestArgumentsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) 
 
 func TestWellFormedWrittenTextStillBinds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		compiled := mustExpression(t, sb, "x => [x.pair, x.pair.length, x.real, x.plain]")
+		var compiled = mustExpression(t, sb, "x => [x.pair, x.pair.length, x.real, x.plain]")
 		var out []any
-		value := _WrittenJSON(`{"pair": "\ud83d\ude00", "real": "` + "\u00e9\ufffd" + `", "plain": "\u0041"}`)
+		var value = _WrittenJSON(`{"pair": "\ud83d\ude00", "real": "` + "\u00e9\ufffd" + `", "plain": "\u0041"}`)
 		if err := resolveInto(t.Context(), &out, compiled, value); err != nil {
 			t.Fatal(err)
 		}

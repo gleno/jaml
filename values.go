@@ -23,7 +23,7 @@ type _Datum struct {
 type _BoundValues map[string]_Datum
 
 var refusedNames = sync.OnceValue(func() map[string]bool {
-	names := map[string]bool{}
+	var names = map[string]bool{}
 	opened, err := openSession(context.Background(), _SessionPlan{})
 	if err != nil {
 		panic(err)
@@ -59,7 +59,7 @@ func admitValues(values map[string]any) (_BoundValues, error) {
 }
 
 func admitArguments(args []any) ([]_Datum, error) {
-	admitted := make([]_Datum, len(args))
+	var admitted = make([]_Datum, len(args))
 	for index, arg := range args {
 		value, err := admitDatum(fmt.Sprintf("argument %d", index+1), arg)
 		if err != nil {
@@ -71,7 +71,7 @@ func admitArguments(args []any) ([]_Datum, error) {
 }
 
 func admitName(name string) error {
-	shown := clip(name, keyExcerptLength)
+	var shown = clip(name, keyExcerptLength)
 	if !utf8.ValidString(name) {
 		return fmt.Errorf("value %q is not named in valid UTF-8", shown)
 	}
@@ -93,8 +93,8 @@ func admitDatum(named string, value any) (_Datum, error) {
 }
 
 func checkDatum(encoded []byte) error {
-	wellFormed := true
-	deepest := walkJSON(encoded, func(text []byte) { wellFormed = wellFormed && admissibleText(text) })
+	var wellFormed = true
+	var deepest = walkJSON(encoded, func(text []byte) { wellFormed = wellFormed && admissibleText(text) })
 	switch {
 	case deepest > maxDataDepth:
 		return fmt.Errorf("%s", nestsTooDeep)
@@ -139,7 +139,7 @@ func walkJSON(encoded []byte, onText func(text []byte)) int {
 	for i := 0; i < len(encoded); i++ {
 		switch encoded[i] {
 		case '"':
-			end := textEnd(encoded, i+1)
+			var end = textEnd(encoded, i+1)
 			if onText != nil {
 				onText(encoded[i+1 : end])
 			}
@@ -173,8 +173,8 @@ func admissibleText(text []byte) bool {
 	if bytes.IndexByte(text, '\\') < 0 {
 		return true
 	}
-	replaced := false
-	units := func(yield func(uint16) bool) {
+	var replaced = false
+	var units = func(yield func(uint16) bool) {
 		for i := 0; i < len(text); {
 			unit, size := nextUnit(text[i:])
 			replaced = replaced || size == len(`\ufffd`) && unit == utf8.RuneError
@@ -215,9 +215,9 @@ func nextUnit(text []byte) (uint16, int) {
 }
 
 func wellFormedUnits(units iter.Seq[uint16]) bool {
-	awaitingLow := false
+	var awaitingLow = false
 	for unit := range units {
-		low := unit >= loneLow && unit <= 0xDFFF
+		var low = unit >= loneLow && unit <= 0xDFFF
 		switch {
 		case awaitingLow && !low:
 			return false

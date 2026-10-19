@@ -6,7 +6,7 @@ import (
 
 func TestASigilChangesWhatOpensCode(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, `
+		var document = mustJaml(t, sb, `
 on: push
 jobs:
   build:
@@ -26,7 +26,7 @@ jobs:
 				Steps  []_Step `json:"steps"`
 			} `json:"jobs"`
 		}
-		got := mustResolve[_Workflow](t, withValues(t, map[string]any{"who": "ada"}), document)
+		var got = mustResolve[_Workflow](t, withValues(t, map[string]any{"who": "ada"}), document)
 		expectEqual(t, got.Jobs["build"].RunsOn, "${{ matrix.os }}")
 		expectEqual(t, got.Jobs["build"].Steps, []_Step{{Run: "echo ${{ github.sha }} ada"}, {Count: 2}})
 	})
@@ -34,7 +34,7 @@ jobs:
 
 func TestALongerSigilWorks(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "a: \"%%{ 40 + 2 }\"\nb: x %%{{ 'y' }} ${{ z }}\n", WithSigil("%%"))
+		var document = mustJaml(t, sb, "a: \"%%{ 40 + 2 }\"\nb: x %%{{ 'y' }} ${{ z }}\n", WithSigil("%%"))
 		expectEqual(t, mustResolve[map[string]any](t, t.Context(), document), map[string]any{"a": float64(42), "b": "x y ${{ z }}"})
 	})
 }

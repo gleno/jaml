@@ -11,7 +11,7 @@ func TestThePinnedClockIsTheSameInstantInBothKinds(t *testing.T) {
 	if err != nil {
 		t.Skipf("no zone data: %v", err)
 	}
-	clocks := map[string]time.Time{
+	var clocks = map[string]time.Time{
 		"year -1":           time.Date(-1, 6, 1, 0, 0, 0, 0, time.UTC),
 		"year 10000":        time.Date(10000, 6, 1, 0, 0, 0, 0, time.UTC),
 		"past the JS range": time.UnixMilli(8.64e15 + 1),
@@ -23,9 +23,9 @@ func TestThePinnedClockIsTheSameInstantInBothKinds(t *testing.T) {
 	}
 	for name, at := range clocks {
 		t.Run(name, func(t *testing.T) {
-			seen := map[string][]any{}
+			var seen = map[string][]any{}
 			for _, kind := range sandboxKinds {
-				compiled := mustExpression(t, sharedSandbox(t, kind), "[Date.now(), String(new Date())]")
+				var compiled = mustExpression(t, sharedSandbox(t, kind), "[Date.now(), String(new Date())]")
 				var drawn []any
 				if err := resolveInto(WithFixedClock(t.Context(), at), &drawn, compiled); err != nil {
 					t.Fatalf("%s: %v", kind.name, err)

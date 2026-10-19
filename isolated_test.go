@@ -29,8 +29,8 @@ func dispatcherOf(t *testing.T, sb *Sandbox) *_Dispatcher {
 
 func currentChild(t *testing.T, sb *Sandbox) *_Life {
 	t.Helper()
-	d := dispatcherOf(t, sb)
-	deadline := time.Now().Add(10 * time.Second)
+	var d = dispatcherOf(t, sb)
+	var deadline = time.Now().Add(10 * time.Second)
 	for {
 		d.mu.Lock()
 		current, isReady := d.child.(_Ready)
@@ -47,7 +47,7 @@ func currentChild(t *testing.T, sb *Sandbox) *_Life {
 
 func childPID(t *testing.T, sb *Sandbox) int {
 	t.Helper()
-	d := dispatcherOf(t, sb)
+	var d = dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if current, isReady := d.child.(_Ready); isReady {
@@ -76,7 +76,7 @@ func isolatedEvalAs[T any](t *testing.T, document *Expression, vars map[string]a
 
 func evalBounded(t *testing.T, document *Expression, ctx context.Context, path string) error {
 	t.Helper()
-	result := make(chan error, 1)
+	var result = make(chan error, 1)
 	go func() {
 		var out any
 		result <- resolveInto(ctx, &out, document.At(path))
@@ -102,7 +102,7 @@ func liveChildren(t *testing.T) int {
 
 func expectChildrenBackTo(t *testing.T, before int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	var deadline = time.Now().Add(5 * time.Second)
 	for liveChildren(t) > before {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d evaluators are still running", liveChildren(t)-before)
@@ -112,7 +112,7 @@ func expectChildrenBackTo(t *testing.T, before int) {
 }
 
 func TestTheKindsAgree(t *testing.T) {
-	text := `
+	var text = `
 config:
   value1: 123
   value2: ${1+1}
@@ -125,10 +125,10 @@ config:
 
 func TestAnInfiniteLoopEndsWithItsContext(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 + 1 }\n")
-		started := time.Now()
+		var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 + 1 }\n")
+		var started = time.Now()
 		var out any
-		err := resolveInto(within(t, 100*time.Millisecond), &out, document.At("spin"))
+		var err = resolveInto(within(t, 100*time.Millisecond), &out, document.At("spin"))
 		expectError(t, err, EvaluationFailed, "$.spin: cancelled: context deadline exceeded")
 		if elapsed := time.Since(started); elapsed > 3*time.Second {
 			t.Fatalf("the context did not stop the loop in time: %s", elapsed)
@@ -138,7 +138,7 @@ func TestAnInfiniteLoopEndsWithItsContext(t *testing.T) {
 }
 
 func TestMemoryBombsHitTheLimit(t *testing.T) {
-	bombs := map[string]string{
+	var bombs = map[string]string{
 		"one huge string":    "v: \"${ 'x'.repeat(1e9).length }\"\n",
 		"doubling":           "v: \"${ (() => { let s = 'x'; while (true) s += s })() }\"\n",
 		"growing array":      "v: \"${ (() => { const a = []; while (true) a.push({k: a.length}) })() }\"\n",
@@ -147,7 +147,7 @@ func TestMemoryBombsHitTheLimit(t *testing.T) {
 	}
 	for name, text := range bombs {
 		t.Run(name, func(t *testing.T) {
-			document := mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), text+"ok: 1\n")
+			var document = mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), text+"ok: 1\n")
 			var out any
 			expectError(t, resolveInto(within(t, 20*time.Second), &out, document.At("v")), MemoryLimit, "$.v", "exceeded the memory limit of 67108864 bytes")
 			expectEqual(t, isolatedEvalAs[int](t, document, nil, "ok"), 1)
@@ -156,9 +156,9 @@ func TestMemoryBombsHitTheLimit(t *testing.T) {
 }
 
 func TestThrownErrorsKeepTheEvaluator(t *testing.T) {
-	sb := mustIsolated(t)
-	document := mustJaml(t, sb, "bad: ${ (() => { throw new RangeError('too far') })() }\ngood: ${ 3 }\n")
-	before := childPID(t, sb)
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "bad: ${ (() => { throw new RangeError('too far') })() }\ngood: ${ 3 }\n")
+	var before = childPID(t, sb)
 	var out any
 	expectError(t, resolveInto(within(t, 10*time.Second), &out, document.At("bad")), EvaluationFailed, "$.bad", "RangeError: too far")
 	expectEqual(t, isolatedEvalAs[int](t, document, nil, "good"), 3)
@@ -166,9 +166,9 @@ func TestThrownErrorsKeepTheEvaluator(t *testing.T) {
 }
 
 func TestADeadEvaluatorIsReplaced(t *testing.T) {
-	sb := mustIsolated(t)
-	document := mustJaml(t, sb, "slow: \"${ (() => { let n = 0; for (let i = 0; i < loops; i++) n += i % 3; return 7 })() }\"\nok: ${ 4 }\n")
-	first := childPID(t, sb)
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "slow: \"${ (() => { let n = 0; for (let i = 0; i < loops; i++) n += i % 3; return 7 })() }\"\nok: ${ 4 }\n")
+	var first = childPID(t, sb)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		if running, err := os.FindProcess(first); err == nil {
@@ -183,11 +183,11 @@ func TestADeadEvaluatorIsReplaced(t *testing.T) {
 }
 
 func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T) {
-	sb := mustIsolated(t, WithMaxConcurrency(8))
-	before := liveChildren(t)
-	pid := childPID(t, sb)
-	documents := make([]*Expression, 12)
-	expressions := make([]*Expression, 12)
+	var sb = mustIsolated(t, WithMaxConcurrency(8))
+	var before = liveChildren(t)
+	var pid = childPID(t, sb)
+	var documents = make([]*Expression, 12)
+	var expressions = make([]*Expression, 12)
 	for index := range documents {
 		documents[index] = mustJaml(t, sb, fmt.Sprintf("v: ${ n * %d }\n", index))
 		expressions[index] = mustExpression(t, sb, fmt.Sprintf("x => x + %d", index))
@@ -213,7 +213,7 @@ func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T)
 
 func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 	t.Setenv("JAML_TEST_SECRET", "hunter2")
-	sb := mustIsolated(t)
+	var sb = mustIsolated(t)
 	var names []string
 	for _, entry := range currentChild(t, sb).cmd.Env {
 		name, value, _ := strings.Cut(entry, "=")
@@ -222,7 +222,7 @@ func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 			expectEqual(t, value, "268435456")
 		}
 	}
-	want := []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorNonce, evaluatorParent}
+	var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorNonce, evaluatorParent}
 	for _, entry := range zoneEnv() {
 		name, _, _ := strings.Cut(entry, "=")
 		want = append(want, name)
@@ -258,7 +258,7 @@ func TestMemoryLimitsOutsideTheirRangeAreRefused(t *testing.T) {
 
 func TestMemoryLimitsAtTheirBoundsServe(t *testing.T) {
 	for _, bytes := range []int64{16 << 20, 1 << 40} {
-		document := mustJaml(t, mustIsolated(t, WithMemoryLimit(bytes)), "v: ${ 1 }\n")
+		var document = mustJaml(t, mustIsolated(t, WithMemoryLimit(bytes)), "v: ${ 1 }\n")
 		for range 100 {
 			expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
 		}
@@ -277,20 +277,20 @@ func TestTheEvaluatorRefusesALimitOutsideTheRange(t *testing.T) {
 }
 
 func TestAnAnswerTooDeepNeverReachesTheWire(t *testing.T) {
-	sb := mustIsolated(t)
-	document := mustJaml(t, sb, "deep: ${ (() => { let a = []; for (let i = 0; i < 9999; i++) a = [a]; return a })() }\nok: ${ 5 }\n")
-	before := childPID(t, sb)
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "deep: ${ (() => { let a = []; for (let i = 0; i < 9999; i++) a = [a]; return a })() }\nok: ${ 5 }\n")
+	var before = childPID(t, sb)
 	expectError(t, evalBounded(t, document, within(t, 2*time.Second), "deep"), EvaluationFailed, "$.deep", "nests deeper than 4096")
 	expectEqual(t, isolatedEvalAs[int](t, document, nil, "ok"), 5)
 	expectEqual(t, childPID(t, sb), before)
 }
 
 func TestVarsTooDeepNeverReachTheWire(t *testing.T) {
-	sb := mustIsolated(t)
-	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	before := childPID(t, sb)
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
+	var before = childPID(t, sb)
 	var out int
-	err := resolveInto(valued(within(t, 10*time.Second), map[string]any{"deep": nestedVar(10001)}), &out, document.At("v"))
+	var err = resolveInto(valued(within(t, 10*time.Second), map[string]any{"deep": nestedVar(10001)}), &out, document.At("v"))
 	expectError(t, err, EvaluationFailed, `value "deep" nests deeper than 4096`)
 	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
 	expectEqual(t, childPID(t, sb), before)

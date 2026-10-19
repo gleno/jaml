@@ -75,7 +75,7 @@ func TestInterpolatedResultsNestAtMost4096DeepInBothKinds(t *testing.T) {
 }
 
 func TestVarsNestAtMost4096DeepInBothKinds(t *testing.T) {
-	text := "v: ${ typeof deep }\n"
+	var text = "v: ${ typeof deep }\n"
 	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4097)}).expectRefused(t, EvaluationFailed, `binding values: value "deep" nests deeper than 4096`)
 	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4096)}).expectAccepted(t)
 }
@@ -99,6 +99,6 @@ func TestTheDeepestTemplateHoldsTheDeepestResultInBothKinds(t *testing.T) {
 }
 
 func TestBracketsInsideVarStringsAreNotNesting(t *testing.T) {
-	quoted := strings.Repeat(`"[{`, 5000) + `\`
+	var quoted = strings.Repeat(`"[{`, 5000) + `\`
 	evalInBothKinds(t, "v: ${ deep[0].length }\n", map[string]any{"deep": []any{quoted, map[string]any{strings.Repeat("[", 5000): 1}}}).expectAccepted(t)
 }

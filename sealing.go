@@ -20,9 +20,9 @@ func (f _Frames) missing(job uint64) []byte {
 }
 
 func (f _Frames) answer(job uint64, result _Rendered) []byte {
-	at := result.at.String()
-	sealed := f.open(job)
-	err := sealed.answer(result)
+	var at = result.at.String()
+	var sealed = f.open(job)
+	var err = sealed.answer(result)
 	switch {
 	case errors.As(err, new(_PastLimit)):
 		return f.refusal(job, at)
@@ -33,7 +33,7 @@ func (f _Frames) answer(job uint64, result _Rendered) []byte {
 }
 
 func (f _Frames) failure(job uint64, at string, err error) []byte {
-	sealed := f.open(job)
+	var sealed = f.open(job)
 	if sealed.failure(err) != nil {
 		return f.refusal(job, at)
 	}
@@ -92,7 +92,7 @@ func (w *_WireWriter) steps(path []string) error {
 }
 
 func (w *_WireWriter) failure(err error) error {
-	described := describeFailure(err)
+	var described = describeFailure(err)
 	if err := w.raw(`,"failure":{"kind":`); err != nil {
 		return err
 	}
@@ -130,8 +130,8 @@ func (w *_WireWriter) thrown(caught *Thrown) error {
 	if err := w.raw(`,"value":`); err != nil {
 		return err
 	}
-	mark := len(w.written)
-	err := w.data(caught.Value)
+	var mark = len(w.written)
+	var err = w.data(caught.Value)
 	switch {
 	case errors.As(err, new(_PastLimit)):
 		return err

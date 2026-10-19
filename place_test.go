@@ -144,7 +144,7 @@ var errorSites = []_ErrorSite{
 		if err != nil {
 			return err
 		}
-		document := mustJaml(t, sb, "a: 1\n")
+		var document = mustJaml(t, sb, "a: 1\n")
 		end()
 		return resolveError(t.Context(), document.At("a"))
 	}},
@@ -163,7 +163,7 @@ var errorSites = []_ErrorSite{
 func TestEveryErrorLeadsWithAPath(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for _, site := range errorSites {
-			err := site.err(t, sb)
+			var err = site.err(t, sb)
 			if err == nil {
 				t.Fatalf("%s: no error", site.name)
 			}
@@ -207,7 +207,7 @@ func TestAClosedErrorNamesThePathAndTheContextThatEnded(t *testing.T) {
 			if err != nil {
 				t.Skip(err)
 			}
-			document := mustJaml(t, sb, "a:\n  b: 1\n")
+			var document = mustJaml(t, sb, "a:\n  b: 1\n")
 			kept, err := document.Copy(t.Context())
 			if err != nil {
 				t.Fatal(err)

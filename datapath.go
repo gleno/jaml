@@ -81,8 +81,8 @@ func isPlainKey(key string) bool {
 		return false
 	}
 	for i, r := range key {
-		letter := r == '_' || r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-		digit := r >= '0' && r <= '9'
+		var letter = r == '_' || r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		var digit = r >= '0' && r <= '9'
 		if !letter && !(digit && i > 0) {
 			return false
 		}

@@ -36,7 +36,7 @@ func (e *_TrustedEngine) build(ctx context.Context, plan _Blueprint) (_Unit, err
 	if err := e.enter(ctx); err != nil {
 		return nil, err
 	}
-	race := raceBuild(ctx, e.buildTimeout)
+	var race = raceBuild(ctx, e.buildTimeout)
 	var built _Servable
 	go func() {
 		defer e.leave()

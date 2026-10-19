@@ -68,7 +68,7 @@ func startLife(spec _ChildSpec) (*_Life, error) {
 	if bounded.Err() != nil {
 		return nil, startFailure(cancelled(bounded))
 	}
-	world := currentWorld(spec.limit)
+	var world = currentWorld(spec.limit)
 	born, replies, err := world.start(spec)
 	if err != nil {
 		return nil, startFailure(err)
@@ -107,7 +107,7 @@ func zoneEnv() []string {
 }
 
 func forwardableZone() string {
-	name := time.Local.String()
+	var name = time.Local.String()
 	switch {
 	case name == "Local":
 		return ""
@@ -124,7 +124,7 @@ func forwardableZone() string {
 }
 
 func (w _EvaluatorWorld) env() []string {
-	env := []string{
+	var env = []string{
 		evaluatorMarker + "=1",
 		evaluatorMemoryLimit + "=" + strconv.FormatInt(int64(w.limit), 10),
 		evaluatorNonce + "=" + w.nonce,
@@ -143,8 +143,8 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 		return nil, nil, err
 	}
 	requests, replies, control := pipes[0], pipes[1], pipes[2]
-	stderr := &_HeadBuffer{limit: stderrHeadBytes}
-	cmd := exec.Command(image)
+	var stderr = &_HeadBuffer{limit: stderrHeadBytes}
+	var cmd = exec.Command(image)
 	cmd.Env = w.env()
 	cmd.ExtraFiles = []*os.File{requests.read, replies.write, control.read}
 	cmd.Stderr = stderr
@@ -155,17 +155,17 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 		closeAll(requests.write, replies.read, control.write)
 		return nil, nil, err
 	}
-	born := &_Life{
+	var born = &_Life{
 		cmd:          cmd,
 		ended:        make(chan struct{}),
 		buildTimeout: spec.buildTimeout,
 		wire:         newWire(requests.write, control.write),
 		board:        &_Switchboard{pending: map[uint64]*_Expectation{}},
 	}
-	unbind := context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
+	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	go func() {
 		_ = cmd.Wait()
-		killedFor := born.killReason()
+		var killedFor = born.killReason()
 		closeAll(requests.write, replies.read, control.write)
 		unbind()
 		born.bury(_Exit{state: cmd.ProcessState, stderr: stderr, killedFor: killedFor, limit: w.limit})
@@ -237,7 +237,7 @@ func (l *_Life) lost() _Lost {
 
 func (l *_Life) greet(ctx context.Context, replies *_ReplyStream) (_Hello, error) {
 	var greeting _Hello
-	read := make(chan error, 1)
+	var read = make(chan error, 1)
 	go func() { read <- replies.read(&greeting) }()
 	select {
 	case err := <-read:
@@ -273,7 +273,7 @@ func (greeting _Hello) vouch(nonce string) error {
 }
 
 func (x _Exit) verdict() error {
-	reason := x.stderr.reason()
+	var reason = x.stderr.reason()
 	switch {
 	case x.state.ExitCode() == exitMemoryLimit:
 		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", x.limit))
@@ -361,7 +361,7 @@ type _HeadBuffer struct {
 func (h *_HeadBuffer) Write(written []byte) (int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	room := max(h.limit-len(h.kept), 0)
+	var room = max(h.limit-len(h.kept), 0)
 	h.kept = append(h.kept, written[:min(room, len(written))]...)
 	return len(written), nil
 }
@@ -369,7 +369,7 @@ func (h *_HeadBuffer) Write(written []byte) (int, error) {
 func (h *_HeadBuffer) reason() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	lines := slices.DeleteFunc(strings.Split(string(bytes.TrimSpace(h.kept)), "\n"), func(line string) bool { return line == pressureMarker })
+	var lines = slices.DeleteFunc(strings.Split(string(bytes.TrimSpace(h.kept)), "\n"), func(line string) bool { return line == pressureMarker })
 	for _, line := range lines {
 		if strings.HasPrefix(line, "fatal error:") || strings.HasPrefix(line, "panic:") {
 			return strings.TrimSpace(line)

@@ -19,7 +19,7 @@ func TestAnAnswerIsWrittenOnceIntoItsFrame(t *testing.T) {
 	var f = _Frames{limit: answerSize + 1<<20}
 	var answer = strings.Repeat("x", answerSize)
 	var frame []byte
-	spent := allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
+	var spent = allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
 	if len(frame) < answerSize {
 		t.Fatalf("the frame holds %d bytes, want the whole answer", len(frame))
 	}
@@ -32,7 +32,7 @@ func TestAnAnswerPastTheCapIsRefusedBeforeItIsWritten(t *testing.T) {
 	var f = _Frames{limit: answerSize / 4}
 	var answer = strings.Repeat("x", answerSize)
 	var frame []byte
-	spent := allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
+	var spent = allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
 	if !strings.Contains(string(frame), "the answer is larger than 4194304 bytes") {
 		t.Fatalf("an answer past the cap was not refused: %.200s", frame)
 	}
@@ -49,7 +49,7 @@ func TestAManyPartAnswerPastTheCapStopsNearTheCap(t *testing.T) {
 		answer[index] = part
 	}
 	var frame []byte
-	spent := allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
+	var spent = allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
 	if !strings.Contains(string(frame), "the answer is larger than 4194304 bytes") {
 		t.Fatalf("an answer past the cap was not refused: %.200s", frame)
 	}
@@ -84,19 +84,19 @@ func wireData() []any {
 func asWire(node any) any {
 	switch typed := node.(type) {
 	case *_Mapping:
-		ordered := make([]json.RawMessage, len(typed.keys))
+		var ordered = make([]json.RawMessage, len(typed.keys))
 		for index, key := range typed.keys {
-			field := map[string]any{key: asWire(typed.values[key])}
+			var field = map[string]any{key: asWire(typed.values[key])}
 			encoded, _ := wireJSON(field)
 			ordered[index] = encoded[1 : len(encoded)-1]
 		}
-		joined := "{" + string(json.RawMessage(strings.Join(rawStrings(ordered), ","))) + "}"
+		var joined = "{" + string(json.RawMessage(strings.Join(rawStrings(ordered), ","))) + "}"
 		return json.RawMessage(joined)
 	case []any:
 		if typed == nil {
 			return typed
 		}
-		converted := make([]any, len(typed))
+		var converted = make([]any, len(typed))
 		for index, item := range typed {
 			converted[index] = asWire(item)
 		}
@@ -135,9 +135,9 @@ func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		thrown := &Thrown{Message: "threw \u2028 something", Value: value}
+		var thrown = &Thrown{Message: "threw \u2028 something", Value: value}
 		err = fail(EvaluationFailed, "%w", thrown).within("$.v")
-		described := describeFailure(err)
+		var described = describeFailure(err)
 		described.Thrown = &_ThrownOnWire{Message: thrown.Message, Value: data}
 		want, marshalErr := wireJSON(_Reply{Job: 7, Failure: &described})
 		if marshalErr != nil {
@@ -170,7 +170,7 @@ func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 	var overhead = len(`{"job":1,"data":"\u2028"}`)
 	var fitting = strings.Repeat("x", f.limit-overhead) + "\u2028"
 	expectEqual(t, len(f.answer(1, _Rendered{tree: fitting})), f.limit)
-	refused := string(f.answer(1, _Rendered{tree: fitting + "x"}))
+	var refused = string(f.answer(1, _Rendered{tree: fitting + "x"}))
 	if !strings.Contains(refused, "the answer is larger than 1024 bytes") {
 		t.Fatalf("a frame one byte past the cap was sent: %.80s", refused)
 	}
@@ -179,12 +179,12 @@ func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 func TestAThrownValuePastTheCapIsRefusedAndOneUnderIsCarried(t *testing.T) {
 	var f = _Frames{limit: 1 << 10}
 	for _, size := range []int{900, 1100} {
-		err := fail(EvaluationFailed, "%w", &Thrown{Message: "threw a string", Value: strings.Repeat("x", size)})
+		var err = fail(EvaluationFailed, "%w", &Thrown{Message: "threw a string", Value: strings.Repeat("x", size)})
 		var sent _Reply
 		if decodeErr := json.Unmarshal(f.failure(1, "$", err), &sent); decodeErr != nil {
 			t.Fatal(decodeErr)
 		}
-		rebuilt := sent.Failure.rebuild()
+		var rebuilt = sent.Failure.rebuild()
 		var caught *Thrown
 		switch carried := errors.As(rebuilt, &caught); {
 		case size < f.limit && (!carried || caught.Value != strings.Repeat("x", size)):

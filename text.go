@@ -86,8 +86,8 @@ func (c *_Compiler) compileText(written string) (compiled _Text, err error) {
 			err = failure
 		}
 	}()
-	trimmed := strings.TrimSpace(written)
-	whole := strings.HasPrefix(trimmed, c.delimiters.value.opens) && !strings.HasPrefix(trimmed, c.delimiters.interpolation.opens)
+	var trimmed = strings.TrimSpace(written)
+	var whole = strings.HasPrefix(trimmed, c.delimiters.value.opens) && !strings.HasPrefix(trimmed, c.delimiters.interpolation.opens)
 	if !whole && !strings.Contains(written, c.delimiters.interpolation.opens) {
 		return _Text{}, nil
 	}
@@ -102,7 +102,7 @@ func (c *_Compiler) compileText(written string) (compiled _Text, err error) {
 
 func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 	var wholeValue = c.delimiters.value
-	after := trimmed[len(wholeValue.opens):]
+	var after = trimmed[len(wholeValue.opens):]
 	end, err := searchingEndsIn(trimmed).expressionEnd(after, wholeValue)
 	if err != nil {
 		return _Text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, excerpt(after, codeExcerptLength), err)
@@ -110,7 +110,7 @@ func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 	if end != len(after)-len(wholeValue.closes) {
 		return _Text{}, c.delimiters.notWhole()
 	}
-	code := after[:end]
+	var code = after[:end]
 	compiled, err := compileExpression(code, wholeValue)
 	if err != nil {
 		return _Text{}, fmt.Errorf("%s: %w", wholeValue.around(code), err)
@@ -121,15 +121,15 @@ func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 func (c *_Compiler) compileInterpolations(written string) (_Text, error) {
 	var interpolation = c.delimiters.interpolation
 	var compiled _Text
-	search := searchingEndsIn(written)
-	rest := written
+	var search = searchingEndsIn(written)
+	var rest = written
 	for {
-		start := strings.Index(rest, interpolation.opens)
+		var start = strings.Index(rest, interpolation.opens)
 		if start < 0 {
 			return compiled.withLiteral(rest), nil
 		}
 		compiled = compiled.withLiteral(rest[:start])
-		after := rest[start+len(interpolation.opens):]
+		var after = rest[start+len(interpolation.opens):]
 		end, err := search.expressionEnd(after, interpolation)
 		if err != nil {
 			return _Text{}, fmt.Errorf("%s%s: %w", interpolation.opens, excerpt(after, codeExcerptLength), err)

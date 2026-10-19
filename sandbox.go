@@ -139,7 +139,7 @@ func (s *Sandbox) make(ctx context.Context, plan _Blueprint) (*Expression, error
 
 func keepWithin(sandbox context.Context) *_Keep {
 	lifetime, end := context.WithCancelCause(context.Background())
-	unfollow := context.AfterFunc(sandbox, func() { end(errSandboxEnded) })
+	var unfollow = context.AfterFunc(sandbox, func() { end(errSandboxEnded) })
 	context.AfterFunc(lifetime, func() { unfollow() })
 	return &_Keep{sandbox: sandbox, lifetime: lifetime, end: end}
 }
@@ -152,12 +152,12 @@ func (k *_Keep) hold(ctx context.Context) (*_Handle, bool) {
 	}
 	k.holders++
 	lifetime, end := context.WithCancelCause(ctx)
-	unfollow := context.AfterFunc(k.lifetime, func() { end(context.Cause(k.lifetime)) })
+	var unfollow = context.AfterFunc(k.lifetime, func() { end(context.Cause(k.lifetime)) })
 	context.AfterFunc(lifetime, func() {
 		unfollow()
 		k.release()
 	})
-	held := &_Handle{lifetime: lifetime, keep: k}
+	var held = &_Handle{lifetime: lifetime, keep: k}
 	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
 	return held, true
 }
@@ -258,10 +258,10 @@ func (h *_Handle) answer(ctx context.Context, request _Work, decode func(settled
 	request.Pinned = pin(ctx)
 	job, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	unbind := context.AfterFunc(h.lifetime, func() { stop(errLifetimeOver) })
+	var unbind = context.AfterFunc(h.lifetime, func() { stop(errLifetimeOver) })
 	defer unbind()
-	result := h.keep.unit.serve(job, request)
-	at := selectedPath(request.Path).String()
+	var result = h.keep.unit.serve(job, request)
+	var at = selectedPath(request.Path).String()
 	switch {
 	case h.ended():
 		return fail(Closed, "%s ended while it ran", h.endedContext()).within(at)

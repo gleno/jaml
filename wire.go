@@ -52,7 +52,7 @@ func newWire(requests, controls *os.File) *_Wire {
 }
 
 func settledWith(result _Outcome) *_Residency {
-	settled := make(chan struct{})
+	var settled = make(chan struct{})
 	close(settled)
 	return &_Residency{settled: settled, result: result}
 }
@@ -77,15 +77,15 @@ func (l *_Life) lodge(u *_RemoteUnit) (*_Residency, bool) {
 	case !l.alive():
 		return settledWith(l.lost()), false
 	}
-	r := &_Residency{unit: u, settled: make(chan struct{})}
+	var r = &_Residency{unit: u, settled: make(chan struct{})}
 	l.wire.residents[u] = r
 	r.unbind = context.AfterFunc(u.lifetime, func() { l.evict(r) })
 	return r, true
 }
 
 func (l *_Life) build(r *_Residency, early func(_Outcome)) {
-	race := raceBuild(context.Background(), l.buildTimeout)
-	plan := r.unit.plan
+	var race = raceBuild(context.Background(), l.buildTimeout)
+	var plan = r.unit.plan
 	asked, err := l.send(race.bound, _Request{Op: opBuild, Plan: &plan})
 	if err != nil {
 		race.finish(l.unsent(err))
@@ -93,7 +93,7 @@ func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 		return
 	}
 	l.claim(r, asked.job)
-	overdue := race.done()
+	var overdue = race.done()
 	var delivered <-chan struct{}
 	var grace <-chan time.Time
 	for {
@@ -115,7 +115,7 @@ func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 			delivered = l.tell(_Request{Op: opForget, Unit: asked.job})
 		case <-delivered:
 			delivered = nil
-			timer := time.NewTimer(cancelGrace)
+			var timer = time.NewTimer(cancelGrace)
 			defer timer.Stop()
 			grace = timer.C
 		case <-grace:
@@ -147,7 +147,7 @@ func (l *_Life) settle(r *_Residency, result _Outcome) {
 
 func (l *_Life) claim(r *_Residency, build uint64) {
 	l.wire.mu.Lock()
-	resident := l.wire.residents[r.unit] == r
+	var resident = l.wire.residents[r.unit] == r
 	if resident {
 		r.build = build
 	}
@@ -188,7 +188,7 @@ func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
 	if err != nil {
 		return l.unsent(err)
 	}
-	stopped := ctx.Done()
+	var stopped = ctx.Done()
 	var delivered <-chan struct{}
 	var grace <-chan time.Time
 	for {
@@ -202,7 +202,7 @@ func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
 			delivered = l.tell(_Request{Op: opCancel, Job: sent.job})
 		case <-delivered:
 			delivered = nil
-			timer := time.NewTimer(cancelGrace)
+			var timer = time.NewTimer(cancelGrace)
 			defer timer.Stop()
 			grace = timer.C
 		case <-grace:
@@ -247,7 +247,7 @@ func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
 		return _Call{}, fmt.Errorf("writing the evaluator's request: %w", err)
 	}
 	l.wire.sent = outgoing.Job
-	replies := l.board.expect(outgoing.Job, outgoing.Op)
+	var replies = l.board.expect(outgoing.Job, outgoing.Op)
 	if _, err := l.wire.requests.Write(append(encoded, '\n')); err != nil {
 		l.end()
 		return _Call{}, errLost
@@ -256,7 +256,7 @@ func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
 }
 
 func (l *_Life) tell(outgoing _Request) <-chan struct{} {
-	delivered := make(chan struct{})
+	var delivered = make(chan struct{})
 	go func() {
 		encoded, err := wireJSON(outgoing)
 		if err != nil {
@@ -276,7 +276,7 @@ func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 func (l *_Life) listen(replies *_ReplyStream) {
 	for {
 		var incoming _Reply
-		err := replies.read(&incoming)
+		var err = replies.read(&incoming)
 		if errors.Is(err, errHungUp) {
 			return
 		}
@@ -291,7 +291,7 @@ func (l *_Life) listen(replies *_ReplyStream) {
 }
 
 func (b *_Switchboard) expect(job uint64, op _Opcode) <-chan _Reply {
-	replies := make(chan _Reply, 1)
+	var replies = make(chan _Reply, 1)
 	b.mu.Lock()
 	b.pending[job] = &_Expectation{op: op, replies: replies}
 	b.mu.Unlock()
@@ -301,7 +301,7 @@ func (b *_Switchboard) expect(job uint64, op _Opcode) <-chan _Reply {
 func (b *_Switchboard) deliver(incoming _Reply) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	waiting := b.pending[incoming.Job]
+	var waiting = b.pending[incoming.Job]
 	if waiting == nil {
 		return fmt.Errorf("the evaluator answered job %d, which is not waiting for an answer", incoming.Job)
 	}

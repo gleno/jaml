@@ -40,8 +40,8 @@ func firstInvalidByte(text string) int {
 }
 
 func encodingProblem(text string) string {
-	offset := firstInvalidByte(text)
-	leading := text[offset]
+	var offset = firstInvalidByte(text)
+	var leading = text[offset]
 	width, value := sequenceShape(leading)
 	switch {
 	case width == 0:

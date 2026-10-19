@@ -14,9 +14,9 @@ var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, Missi
 
 func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
+		var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
 		var out any
-		err := resolveInto(within(t, 100*time.Millisecond), &out, document.At("spin"))
+		var err = resolveInto(within(t, 100*time.Millisecond), &out, document.At("spin"))
 		expectError(t, err, EvaluationFailed, "$.spin", "deadline exceeded")
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected context.DeadlineExceeded in %v", err)
@@ -32,7 +32,7 @@ func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled from a cancelled construction, got %v", err)
 		}
-		cause := errors.New("the caller gave up")
+		var cause = errors.New("the caller gave up")
 		withCause, cancelWithCause := context.WithCancelCause(t.Context())
 		go func() {
 			time.Sleep(50 * time.Millisecond)
@@ -46,9 +46,9 @@ func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 }
 
 func TestAMemoryBombIsAMemoryLimit(t *testing.T) {
-	document := mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ 'x'.repeat(1e9).length }\"\n")
+	var document = mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ 'x'.repeat(1e9).length }\"\n")
 	var out any
-	err := resolveInto(within(t, 20*time.Second), &out, document.At("v"))
+	var err = resolveInto(within(t, 20*time.Second), &out, document.At("v"))
 	expectError(t, err, MemoryLimit, "$.v: exceeded the memory limit of 67108864 bytes: evaluation failed: expression error")
 	expectError(t, err, EvaluationFailed)
 }
@@ -65,7 +65,7 @@ func TestARuntimeOutOfMemoryIsAMemoryLimit(t *testing.T) {
 func TestErrorsKeepTheirMessageFormat(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var out any
-		err := resolveInto(t.Context(), &out, mustJaml(t, sb, "v: ${ nope }\n"))
+		var err = resolveInto(t.Context(), &out, mustJaml(t, sb, "v: ${ nope }\n"))
 		expectEqual(t, err.Error(), "$.v: ${nope}: ReferenceError: nope is not defined: evaluation failed: expression error")
 		_, err = sb.MakeExpressionFromJaml(t.Context(), "v: ${ 1 + }\n")
 		expectError(t, err, InvalidExpression, "$.v: ${1 +}: syntax error")
@@ -79,8 +79,8 @@ type _ShapeWithAList struct {
 }
 
 func TestACoercionFailureNamesTheFailingField(t *testing.T) {
-	text := "a:\n  b: [1, x]\nc:\n  d: {e: [1, 2, {f: 1}]}\n"
-	both := _Agreement{text: text}.eval(t, func() any { return new(_ShapeWithAList) })
+	var text = "a:\n  b: [1, x]\nc:\n  d: {e: [1, 2, {f: 1}]}\n"
+	var both = _Agreement{text: text}.eval(t, func() any { return new(_ShapeWithAList) })
 	both.expectRefused(t, CoercionFailed, "$.a.b[1]: json: cannot unmarshal string")
 	var mismatch *json.UnmarshalTypeError
 	if !errors.As(both.trusted, &mismatch) || !errors.As(both.isolated, &mismatch) {
@@ -98,7 +98,7 @@ func (*_Picky) UnmarshalJSON([]byte) error {
 }
 
 func TestACustomUnmarshalersErrorIsReachable(t *testing.T) {
-	both := _Agreement{text: "v: ${ 1 }\n", path: []string{"v"}}.eval(t, func() any { return new(_Picky) })
+	var both = _Agreement{text: "v: ${ 1 }\n", path: []string{"v"}}.eval(t, func() any { return new(_Picky) })
 	both.expectRefused(t, CoercionFailed, "$.v: picky refuses")
 	if !errors.Is(both.trusted, errPicky) || !errors.Is(both.isolated, errPicky) {
 		t.Fatalf("expected the unmarshaler's error in %v", both.trusted)
@@ -111,7 +111,7 @@ func expectTheSameChildAfter(t *testing.T, sb *Sandbox, run func()) {
 		run()
 		return
 	}
-	before := childPID(t, sb)
+	var before = childPID(t, sb)
 	run()
 	if after := childPID(t, sb); after != before {
 		t.Fatalf("the evaluator was replaced: %d became %d", before, after)
@@ -120,7 +120,7 @@ func expectTheSameChildAfter(t *testing.T, sb *Sandbox, run func()) {
 
 func evalOrHang(t *testing.T, document *Expression, ctx context.Context, vars map[string]any) error {
 	t.Helper()
-	returned := make(chan error, 1)
+	var returned = make(chan error, 1)
 	go func() {
 		var out any
 		returned <- resolveInto(valued(ctx, vars), &out, document.At("v"))
@@ -135,7 +135,7 @@ func evalOrHang(t *testing.T, document *Expression, ctx context.Context, vars ma
 }
 
 func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) {
-	cases := map[string]string{
+	var cases = map[string]string{
 		"spinning message":    "(() => { throw { get message() { for (;;) {} } } })()",
 		"spinning field":      "(() => { throw { message: 'm', get x() { for (;;) {} } } })()",
 		"spinning both":       "(() => { throw { get message() { for (;;) {} }, get x() { for (;;) {} } } })()",
@@ -144,7 +144,7 @@ func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) 
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) {
 			eachKind(t, func(t *testing.T, sb *Sandbox) {
-				document := mustJaml(t, sb, expressionTemplate(source))
+				var document = mustJaml(t, sb, expressionTemplate(source))
 				var err error
 				expectTheSameChildAfter(t, sb, func() { err = evalOrHang(t, document, within(t, 200*time.Millisecond), nil) })
 				expectError(t, err, EvaluationFailed, "deadline exceeded")
@@ -165,19 +165,19 @@ func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) 
 }
 
 func TestBindingVarsEndsWithItsContext(t *testing.T) {
-	long := json.RawMessage("[" + strings.Repeat("0,", 1<<16) + "0]")
-	vars := map[string]any{}
+	var long = json.RawMessage("[" + strings.Repeat("0,", 1<<16) + "0]")
+	var vars = map[string]any{}
 	for i := range 192 {
 		vars["v"+strconv.Itoa(i)] = long
 	}
-	cancelAt := 600 * time.Millisecond * raceSlowdown
+	var cancelAt = 600 * time.Millisecond * raceSlowdown
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		document := mustJaml(t, sb, "v: ${ 1 }\n")
+		var document = mustJaml(t, sb, "v: ${ 1 }\n")
 		expectTheSameChildAfter(t, sb, func() {
 			ctx, cancel := context.WithCancel(t.Context())
-			started := time.Now()
+			var started = time.Now()
 			time.AfterFunc(cancelAt, cancel)
-			err := evalOrHang(t, document, ctx, vars)
+			var err = evalOrHang(t, document, ctx, vars)
 			expectError(t, err, EvaluationFailed, "cancelled")
 			if took := time.Since(started); took > cancelAt+cancelAt/2 {
 				t.Fatalf("binding ran %v past its context", took-cancelAt)

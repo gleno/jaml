@@ -63,11 +63,11 @@ type _Session struct {
 }
 
 func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
-	vm := goja.New()
+	var vm = goja.New()
 	vm.SetMaxCallStackSize(maxCallStackSize)
 	vm.SetTimeSource(plan.pinned.now)
 	vm.SetRandSource(plan.pinned.random())
-	opened := &_Session{ctx: ctx, realm: captureRealm(vm)}
+	var opened = &_Session{ctx: ctx, realm: captureRealm(vm)}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
 	var freezer goja.Callable
 	if err := opened.enter(func(r _Realm) (err error) { freezer, err = r.intrinsicsFreezer(); return err }); err != nil {
@@ -99,7 +99,7 @@ func (s *_Session) enter(step func(_Realm) error) (err error) {
 	}
 	defer s.breakOnEngineFailure(&err)
 	var stepped error
-	entered := s.realm.native(func() {
+	var entered = s.realm.native(func() {
 		if exception := s.realm.vm.Try(func() { stepped = step(s.realm) }); exception != nil {
 			stepped = s.realm.explain(exception)
 		}
@@ -163,11 +163,11 @@ func (r _Realm) deepFreeze(value goja.Value) error {
 }
 
 func guardJSONParse(vm *goja.Runtime) goja.Callable {
-	json := vm.Get("JSON").ToObject(vm)
+	var json = vm.Get("JSON").ToObject(vm)
 	parse, _ := goja.AssertFunction(json.Get("parse"))
-	rangeError := vm.Get("RangeError")
-	guarded := vm.ToValue(func(call goja.FunctionCall) goja.Value {
-		text := call.Argument(0).ToString()
+	var rangeError = vm.Get("RangeError")
+	var guarded = vm.ToValue(func(call goja.FunctionCall) goja.Value {
+		var text = call.Argument(0).ToString()
 		if jsonDepth([]byte(text.String())) > maxDataDepth {
 			refusal, err := vm.New(rangeError, vm.ToValue(fmt.Sprintf("JSON text nests deeper than %d", maxDataDepth)))
 			if err != nil {
@@ -202,7 +202,7 @@ func (s *_Session) evaluate(compiled _Expression, args []_Datum) (any, error) {
 
 func (s *_Session) attempt(produce func(_Realm) (goja.Value, error)) (any, error) {
 	var result any
-	err := s.enter(func(r _Realm) error {
+	var err = s.enter(func(r _Realm) error {
 		returned, err := produce(r)
 		if err != nil {
 			return r.explain(err)
