@@ -261,8 +261,21 @@ func (r *_YamlReader) mapping(node *yaml.Node, place _DataPlace) (*_Mapping, err
 	var own = make(map[string]any, len(node.Content)/2)
 	var lines = make(map[string]int, len(node.Content)/2)
 	var written []any
+	var mergedAt = 0
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		keyNode, valueNode := node.Content[i], node.Content[i+1]
+		if isMergeKey(keyNode) {
+			if mergedAt != 0 {
+				return nil, refuse(place.path, fmt.Sprintf("line %d: a mapping takes one merge key (<<) and line %d already has it; merge several mappings with <<: [*a, *b]", keyNode.Line, mergedAt))
+			}
+			mergedAt = keyNode.Line
+			sources, err := r.mergeSources(valueNode, place)
+			if err != nil {
+				return nil, err
+			}
+			written = append(written, sources)
+			continue
+		}
 		key, err := mappingKey(keyNode, place.path)
 		if err != nil {
 			return nil, err
@@ -271,14 +284,6 @@ func (r *_YamlReader) mapping(node *yaml.Node, place _DataPlace) (*_Mapping, err
 			return nil, refuse(place.path, fmt.Sprintf("line %d: mapping key %q already defined at line %d", keyNode.Line, key, first))
 		}
 		lines[key] = keyNode.Line
-		if isMergeKey(keyNode) {
-			sources, err := r.mergeSources(valueNode, place)
-			if err != nil {
-				return nil, err
-			}
-			written = append(written, sources)
-			continue
-		}
 		value, err := r.data(valueNode, place.atKey(key))
 		if err != nil {
 			return nil, err
@@ -338,9 +343,6 @@ func isMergeKey(node *yaml.Node) bool {
 }
 
 func mappingKey(node *yaml.Node, path *_DataPath) (string, error) {
-	if isMergeKey(node) {
-		return node.Value, nil
-	}
 	var target = dealias(node)
 	if target.Kind != yaml.ScalarNode {
 		return "", refuse(path, fmt.Sprintf("the key on line %d is a collection; keys must be strings", node.Line))
@@ -350,7 +352,10 @@ func mappingKey(node *yaml.Node, path *_DataPath) (string, error) {
 		return "", err
 	}
 	name, isString := resolved.(string)
-	if !isString {
+	switch {
+	case resolved == nil:
+		return "", refuse(path, fmt.Sprintf("the key on line %d is null; keys must be strings, so quote it", node.Line))
+	case !isString:
 		return "", refuse(path, fmt.Sprintf("key %s is %s; keys must be strings, so quote it", target.Value, describeScalar(resolved)))
 	}
 	return name, nil
@@ -358,8 +363,6 @@ func mappingKey(node *yaml.Node, path *_DataPath) (string, error) {
 
 func describeScalar(value any) string {
 	switch value.(type) {
-	case nil:
-		return "a null"
 	case bool:
 		return "a bool"
 	default:

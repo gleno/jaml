@@ -249,7 +249,7 @@ inline:
 			expectError(t, err, InvalidExpression, "$.m", "merge")
 		}
 		_, err := sb.MakeExpressionFromJaml(t.Context(), "m:\n  <<: {a: 1}\n  <<: {b: 1}\n")
-		expectError(t, err, InvalidExpression, "$.m", `mapping key "<<" already defined at line 2`)
+		expectError(t, err, InvalidExpression, "$.m: line 3: a mapping takes one merge key (<<) and line 2 already has it")
 	})
 }
 
@@ -516,6 +516,36 @@ func TestResolvingASharedAnchorLeavesItForTheNextResolve(t *testing.T) {
 			var want = map[string]any{"count": float64(count), "list": []any{float64(count)}}
 			expectEqual(t, evalAs[map[string]any](t, parsed, map[string]any{"count": count}), map[string]any{"base": want, "copy": want, "merged": want})
 			expectEqual(t, evalAs[map[string]any](t, parsed, map[string]any{"count": count}, "copy"), want)
+		}
+	})
+}
+
+func TestAQuotedMergeKeyNeverCollidesWithAMerge(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var parsed = mustJaml(t, sb, `
+base: &b {x: 1, "<<": merged}
+before: {'<<': 1, <<: {b: 2}}
+after: {<<: {b: 2}, "<<": 1}
+tagged: {!!str <<: 1, <<: *b}
+brought: {<<: *b}
+own: {"<<": lit, <<: *b}
+`)
+		var got = evalAs[map[string]map[string]any](t, parsed, nil)
+		expectEqual(t, got["before"], map[string]any{"<<": float64(1), "b": float64(2)})
+		expectEqual(t, got["after"], map[string]any{"<<": float64(1), "b": float64(2)})
+		expectEqual(t, got["tagged"], map[string]any{"<<": float64(1), "x": float64(1)})
+		expectEqual(t, got["brought"], map[string]any{"<<": "merged", "x": float64(1)})
+		expectEqual(t, got["own"], map[string]any{"<<": "lit", "x": float64(1)})
+		_, err := sb.MakeExpressionFromJaml(t.Context(), "m: {'<<': 1, \"<<\": 2}\n")
+		expectError(t, err, InvalidExpression, "$.m", `mapping key "<<" already defined at line 1`)
+	})
+}
+
+func TestANullKeyIsNamedAsNull(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		for _, text := range []string{"? \nv: 1\n", "~: 1\n", "null: 1\n"} {
+			_, err := sb.MakeExpressionFromJaml(t.Context(), text)
+			expectError(t, err, InvalidExpression, "$: the key on line 1 is null; keys must be strings, so quote it")
 		}
 	})
 }
