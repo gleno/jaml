@@ -275,6 +275,10 @@ var pristineChart = sync.OnceValues(func() (*goja.Program, error) {
 	return goja.Compile(chartFile, source.String(), true)
 })
 
+func chartTheIntrinsics() {
+	_, _ = pristineChart()
+}
+
 type _Freezer struct {
 	freeze goja.Callable
 	chart  goja.Value

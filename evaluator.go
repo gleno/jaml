@@ -43,6 +43,7 @@ func serveEvaluations(answers io.Writer) int {
 	if watch.orphaned() {
 		return exitOrphaned
 	}
+	chartTheIntrinsics()
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	var serving = &_Evaluator{watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}

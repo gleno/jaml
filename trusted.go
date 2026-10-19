@@ -16,6 +16,7 @@ type _LocalUnit struct {
 }
 
 func newTrusted(configured _SandboxSettings) *_TrustedEngine {
+	chartTheIntrinsics()
 	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout}
 }
 
