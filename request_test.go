@@ -209,3 +209,23 @@ func allocatedIn(work func()) uint64 {
 	goruntime.ReadMemStats(&after)
 	return after.TotalAlloc - before.TotalAlloc
 }
+
+type _BadlyOutlined struct{ _Servable }
+
+func (_BadlyOutlined) outline() *_CodeOutline {
+	return &_CodeOutline{steps: map[string]*_CodeOutline{"a": nil}}
+}
+
+func TestAnOutlineThatCannotBeSentSaysTheUnitHoldsCode(t *testing.T) {
+	var e = &_Evaluator{replies: &_ReplyWriter{frames: _Frames{limit: 1 << 20}}}
+	var incoming _Reply
+	if err := json.Unmarshal(e.builtFrame(5, _BadlyOutlined{}), &incoming); err != nil {
+		t.Fatal(err)
+	}
+	if err := incoming.fits(opBuild); err != nil {
+		t.Fatalf("a degraded outline does not fit a build: %v", err)
+	}
+	if incoming.Code == nil || !incoming.Code.holds([]string{"anything"}) {
+		t.Fatalf("a degraded outline: %#v", incoming.Code)
+	}
+}

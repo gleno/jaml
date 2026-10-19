@@ -54,6 +54,7 @@ func (u *_RemoteUnit) request() (*_RequestBody, error) {
 }
 
 func (u *_RemoteUnit) serve(ctx context.Context, ask _Ask) _Outcome {
+	ask.codeFree = len(ask.scripts) == 0 && !u.holdsCode(ask.path)
 	written, err := writeWork(ask, u.frames.limit)
 	if err != nil {
 		return _Refused{err: err}

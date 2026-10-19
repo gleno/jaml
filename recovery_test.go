@@ -21,6 +21,7 @@ type _RequestLog struct {
 type _Logged struct {
 	life  int
 	asked _Request
+	size  int
 }
 
 type _BuiltIn struct {
@@ -47,6 +48,17 @@ func (l *_RequestLog) served(text string) []_Request {
 		}
 	}
 	return found
+}
+
+func (l *_RequestLog) lastServed() _Logged {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for index := len(l.seen) - 1; index >= 0; index-- {
+		if l.seen[index].asked.Op == opServe {
+			return l.seen[index]
+		}
+	}
+	return _Logged{}
 }
 
 func (l *_RequestLog) count(op _Opcode) int {
@@ -105,7 +117,7 @@ func tap(t *testing.T, child *_Life, log *_RequestLog) {
 			}
 			var asked _Request
 			if json.Unmarshal(frame, &asked) == nil {
-				log.note(_Logged{life: child.cmd.Process.Pid, asked: asked})
+				log.note(_Logged{life: child.cmd.Process.Pid, asked: asked, size: len(frame)})
 			}
 			if _, err := forwarded.Write(headed(frame)); err != nil {
 				return

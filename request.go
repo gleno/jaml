@@ -19,12 +19,13 @@ const (
 )
 
 type _Ask struct {
-	path    []string
-	values  map[string]any
-	scripts []string
-	args    []any
-	skips   *_Shape
-	pinned  _Pinned
+	path     []string
+	values   map[string]any
+	scripts  []string
+	args     []any
+	skips    *_Shape
+	pinned   _Pinned
+	codeFree bool
 }
 
 type _RequestBody struct {
@@ -110,6 +111,9 @@ func (ww *_WrittenWork) fill(w *_WireWriter) error {
 }
 
 func (ww *_WrittenWork) fillValues(w *_WireWriter) error {
+	if ww.ask.codeFree {
+		return ww.checkValues()
+	}
 	if len(ww.names) == 0 {
 		return nil
 	}
@@ -134,6 +138,19 @@ func (ww *_WrittenWork) fillValues(w *_WireWriter) error {
 		ww.values = append(ww.values, span)
 	}
 	return w.raw("}")
+}
+
+func (ww *_WrittenWork) checkValues() error {
+	for _, name := range ww.names {
+		if err := admitName(name); err != nil {
+			return fail(EvaluationFailed, "binding values: %w", err)
+		}
+		if _, err := unboundedWriter().admitted(fmt.Sprintf("value %q", clip(name, keyExcerptLength)), ww.ask.values[name]); err != nil {
+			return bound("binding values", err)
+		}
+	}
+	ww.names = nil
+	return nil
 }
 
 func (ww *_WrittenWork) fillArgs(w *_WireWriter) error {
@@ -232,7 +249,7 @@ func (b *_RequestBody) stamp(job, unit uint64) []byte {
 func (a _Ask) bulkiest() string {
 	var parts = map[string]int{"the path": measured(func(w *_WireWriter) error { return w.strings("", a.path) })}
 	var biggest, biggestName, values = 0, "", 0
-	for name, value := range a.values {
+	for name, value := range a.shipped() {
 		var size = measured(func(w *_WireWriter) error { return w.datum(value, 0) }) + quotedLength(name) + 2
 		values += size
 		if size > biggest {
@@ -249,6 +266,13 @@ func (a _Ask) bulkiest() string {
 		return fmt.Sprintf("value %q", clip(biggestName, keyExcerptLength))
 	}
 	return named
+}
+
+func (a _Ask) shipped() map[string]any {
+	if a.codeFree {
+		return nil
+	}
+	return a.values
 }
 
 func measured(write func(w *_WireWriter) error) int {

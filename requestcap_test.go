@@ -143,3 +143,39 @@ func TestARequestThatDecodesPastTheCeilingIsAMemoryLimit(t *testing.T) {
 	var out int
 	expectError(t, resolveInto(valued(within(t, 60*time.Second), many), &out, echo, 1), EvaluationFailed, "exceeded the memory limit of 16777216 bytes")
 }
+
+func TestValuesShipOnlyToCode(t *testing.T) {
+	var sb = mustIsolated(t)
+	var document = mustJaml(t, sb, "plain: 1\nnested:\n  quiet: 2\n  loud: ${ v.length }\n")
+	var log = recordRequests(t, sb)
+	var big = map[string]any{"v": strings.Repeat("x", 1<<20)}
+	for _, path := range [][]string{{"plain"}, {"nested", "quiet"}, {"absent"}} {
+		var out any
+		_ = resolveInto(valued(t.Context(), big), &out, document.At(path...))
+		var sent = log.lastServed()
+		if sent.size > 4<<10 || len(sent.asked.Work.Values) != 0 {
+			t.Fatalf("a code-free selection %v sent %d bytes and %d values", path, sent.size, len(sent.asked.Work.Values))
+		}
+	}
+	expectEqual(t, isolatedEvalAs[int](t, document, big, "plain"), 1)
+	for _, path := range [][]string{{"nested", "loud"}, {"nested"}, nil} {
+		var out any
+		if err := resolveInto(valued(t.Context(), big), &out, document.At(path...)); err != nil {
+			t.Fatalf("a selection with code %v: %v", path, err)
+		}
+		if sent := log.lastServed(); sent.size < 1<<20 {
+			t.Fatalf("a selection with code %v sent only %d bytes", path, sent.size)
+		}
+	}
+	expectEqual(t, isolatedEvalAs[int](t, document, big, "nested", "loud"), 1<<20)
+	var scripted int
+	if err := resolveInto(WithScript(valued(t.Context(), big), "if (v.length !== 1048576) throw new Error('no v')"), &scripted, document.At("plain")); err != nil || scripted != 1 {
+		t.Fatalf("a script on a code-free selection: %d, %v", scripted, err)
+	}
+	if sent := log.lastServed(); sent.size < 1<<20 {
+		t.Fatalf("a script on a code-free selection sent only %d bytes", sent.size)
+	}
+	var out any
+	expectError(t, resolveInto(valued(t.Context(), map[string]any{"f": func() {}}), &out, document.At("plain")), EvaluationFailed, `binding values: value "f" is not JSON data`)
+	expectError(t, resolveInto(valued(t.Context(), map[string]any{"Math": 1}), &out, document.At("plain")), EvaluationFailed, `value "Math" collides with a JavaScript global`)
+}

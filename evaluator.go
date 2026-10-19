@@ -157,9 +157,13 @@ func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
 }
 
 func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
-	frame, err := e.replies.frames.built(job, built.outline())
+	var outline = built.outline()
+	if outline != nil && outline.checked() != nil {
+		outline = &_CodeOutline{}
+	}
+	frame, err := e.replies.frames.built(job, outline)
 	if err != nil {
-		return e.replies.frames.failure(job, "", fail(InvalidExpression, "outlining its code: %w", err))
+		frame, _ = e.replies.frames.built(job, &_CodeOutline{})
 	}
 	return frame
 }
