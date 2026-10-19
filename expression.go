@@ -32,49 +32,49 @@ var (
 	errGenerator        = errors.New("a generator function returns an iterator, not data")
 )
 
-type expression struct {
+type _Expression struct {
 	source  string
-	opened  delimiter
+	opened  _Delimiter
 	program *goja.Program
 }
 
-func (e expression) written() string {
+func (e _Expression) written() string {
 	return e.opened.around(e.source)
 }
 
-type parsedCode struct {
+type _ParsedCode struct {
 	source  string
 	program *ast.Program
 }
 
-func compileExpression(source string, opened delimiter) (expression, error) {
+func compileExpression(source string, opened _Delimiter) (_Expression, error) {
 	parsed, err := parseCode(source)
 	if err != nil {
-		return expression{}, err
+		return _Expression{}, err
 	}
 	return parsed.compile(opened)
 }
 
-func parseCode(source string) (parsedCode, error) {
+func parseCode(source string) (_ParsedCode, error) {
 	if err := refuseLongCode(source); err != nil {
-		return parsedCode{}, err
+		return _ParsedCode{}, err
 	}
 	program, err := parseExpression(source)
 	if err != nil {
-		return parsedCode{}, err
+		return _ParsedCode{}, err
 	}
-	return parsedCode{source: source, program: program}, nil
+	return _ParsedCode{source: source, program: program}, nil
 }
 
-func (p parsedCode) compile(opened delimiter) (expression, error) {
+func (p _ParsedCode) compile(opened _Delimiter) (_Expression, error) {
 	program, err := goja.CompileAST(p.program, true)
 	if err != nil {
-		return expression{}, describeSyntaxError(p.source, err)
+		return _Expression{}, describeSyntaxError(p.source, err)
 	}
-	return expression{source: p.source, opened: opened, program: program}, nil
+	return _Expression{source: p.source, opened: opened, program: program}, nil
 }
 
-func (p parsedCode) written() ast.Expression {
+func (p _ParsedCode) written() ast.Expression {
 	statement, isStatement := p.program.Body[1].(*ast.ExpressionStatement)
 	if !isStatement {
 		return nil
@@ -86,7 +86,7 @@ func (p parsedCode) written() ast.Expression {
 	return sequence.Sequence[1]
 }
 
-func (e expression) undefinedHint() string {
+func (e _Expression) undefinedHint() string {
 	parsed, err := parseCode(e.source)
 	if err != nil || !endsInBracedArrow(parsed.written()) {
 		return ""
@@ -106,7 +106,7 @@ func endsInBracedArrow(written ast.Expression) bool {
 	return false
 }
 
-func (p parsedCode) refuseUnlessFunction() error {
+func (p _ParsedCode) refuseUnlessFunction() error {
 	switch literal := p.written().(type) {
 	case *ast.ArrowFunctionLiteral:
 		if literal.Async {
@@ -201,25 +201,25 @@ func escapesInLegacyOctal(literal *ast.StringLiteral) *ast.StringLiteral {
 	return nil
 }
 
-type parseStop struct {
+type _ParseStop struct {
 	offset  int
 	at      file.Position
 	message string
 }
 
-func (s parseStop) closes(after string, opened delimiter) bool {
+func (s _ParseStop) closes(after string, opened _Delimiter) bool {
 	return s.message == closerStop && strings.HasPrefix(after[s.offset:], opened.closes)
 }
 
-type endSearch struct {
+type _EndSearch struct {
 	unparsed int
 }
 
-func searchingEndsIn(value string) *endSearch {
-	return &endSearch{unparsed: endSearchParsesPerByte * len(value)}
+func searchingEndsIn(value string) *_EndSearch {
+	return &_EndSearch{unparsed: endSearchParsesPerByte * len(value)}
 }
 
-func (s *endSearch) expressionEnd(after string, opened delimiter) (int, error) {
+func (s *_EndSearch) expressionEnd(after string, opened _Delimiter) (int, error) {
 	for window := range truncatedWindows(after, opened.closes) {
 		if err := s.spend(window); err != nil {
 			return 0, err
@@ -234,7 +234,7 @@ func (s *endSearch) expressionEnd(after string, opened delimiter) (int, error) {
 	return finalEnd(after, opened)
 }
 
-func (s *endSearch) spend(parsed int) error {
+func (s *_EndSearch) spend(parsed int) error {
 	if parsed > s.unparsed {
 		return errCostlyEnds
 	}
@@ -242,7 +242,7 @@ func (s *endSearch) spend(parsed int) error {
 	return nil
 }
 
-func finalEnd(after string, opened delimiter) (int, error) {
+func finalEnd(after string, opened _Delimiter) (int, error) {
 	stop, failed := firstParseError(after)
 	switch {
 	case failed && strings.HasPrefix(after[stop.offset:], opened.closes):
@@ -284,15 +284,15 @@ func occurrences(text, closer string) iter.Seq[int] {
 	}
 }
 
-func firstParseError(code string) (parseStop, bool) {
+func firstParseError(code string) (_ParseStop, bool) {
 	_, err := parseAfterOpens(code)
 	var parseErrors parser.ErrorList
 	if !errors.As(err, &parseErrors) || len(parseErrors) == 0 {
-		return parseStop{}, false
+		return _ParseStop{}, false
 	}
 	first := parseErrors[0]
 	offset := offsetOf(expressionOpens+code, first.Position) - len(expressionOpens)
-	return parseStop{offset: max(offset, 0), at: first.Position, message: first.Message}, true
+	return _ParseStop{offset: max(offset, 0), at: first.Position, message: first.Message}, true
 }
 
 func offsetOf(program string, at file.Position) int {

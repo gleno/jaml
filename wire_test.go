@@ -11,22 +11,22 @@ import (
 	"time"
 )
 
-func unitOn(t *testing.T, text string) *remoteUnit {
+func unitOn(t *testing.T, text string) *_RemoteUnit {
 	t.Helper()
 	made, _ := endingUnitOn(t, text)
 	return made
 }
 
-func endingUnitOn(t *testing.T, text string) (*remoteUnit, context.CancelFunc) {
+func endingUnitOn(t *testing.T, text string) (*_RemoteUnit, context.CancelFunc) {
 	t.Helper()
 	ctx, end := context.WithCancel(t.Context())
 	t.Cleanup(end)
-	return &remoteUnit{plan: blueprint{Written: text, Null: Loose, Undefined: Strict}, lifetime: ctx}, end
+	return &_RemoteUnit{plan: _Blueprint{Written: text, Null: Loose, Undefined: Strict}, lifetime: ctx}, end
 }
 
-func ignoreEarly(outcome) {}
+func ignoreEarly(_Outcome) {}
 
-func residentBuild(t *testing.T, child *life, u *remoteUnit) uint64 {
+func residentBuild(t *testing.T, child *_Life, u *_RemoteUnit) uint64 {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -45,24 +45,24 @@ func residentBuild(t *testing.T, child *life, u *remoteUnit) uint64 {
 	}
 }
 
-func expectMissing(t *testing.T, child *life, build uint64) {
+func expectMissing(t *testing.T, child *_Life, build uint64) {
 	t.Helper()
-	served := child.serve(within(t, 10*time.Second), build, work{})
-	if failed, isRefused := served.(refused); !isRefused || !errors.Is(failed.err, errMissing) {
+	served := child.serve(within(t, 10*time.Second), build, _Work{})
+	if failed, isRefused := served.(_Refused); !isRefused || !errors.Is(failed.err, errMissing) {
 		t.Fatalf("the evaluator still serves build %d: %v", build, served)
 	}
 }
 
-func expectServes(t *testing.T, child *life, build uint64, want string) {
+func expectServes(t *testing.T, child *_Life, build uint64, want string) {
 	t.Helper()
-	served := child.serve(within(t, 10*time.Second), build, work{Path: []string{"v"}})
-	data, isAnswered := served.(answered)
+	served := child.serve(within(t, 10*time.Second), build, _Work{Path: []string{"v"}})
+	data, isAnswered := served.(_Answered)
 	if !isAnswered || string(data.data) != want {
 		t.Fatalf("build %d served %v, want %s", build, served, want)
 	}
 }
 
-func deliver(t *testing.T, child *life, outgoing request) {
+func deliver(t *testing.T, child *_Life, outgoing _Request) {
 	t.Helper()
 	select {
 	case <-child.tell(outgoing):
@@ -74,13 +74,13 @@ func deliver(t *testing.T, child *life, outgoing request) {
 func TestAForgetDuringItsBuildLeavesNothingServable(t *testing.T) {
 	child := currentChild(t, mustIsolated(t, WithMemoryLimit(512<<20)))
 	u, end := endingUnitOn(t, slowBuild(0.5)+"v: 1\n")
-	settled := make(chan *residency, 1)
+	settled := make(chan *_Residency, 1)
 	go func() { settled <- child.reside(u, ignoreEarly) }()
 	build := residentBuild(t, child, u)
 	time.Sleep(20 * time.Millisecond)
 	end()
 	r := <-settled
-	if _, built := r.result.(answered); built {
+	if _, built := r.result.(_Answered); built {
 		time.Sleep(50 * time.Millisecond)
 	}
 	expectMissing(t, child, build)
@@ -94,11 +94,11 @@ func TestAForgetThatOvertakesItsBuildIsHonoured(t *testing.T) {
 	child.wire.writer <- struct{}{}
 	next := child.wire.sent + 1
 	<-child.wire.writer
-	deliver(t, child, request{Op: opForget, Unit: next})
+	deliver(t, child, _Request{Op: opForget, Unit: next})
 	u := unitOn(t, "v: 1\n")
 	r := child.reside(u, ignoreEarly)
 	expectEqual(t, r.build, next)
-	if failed, isRefused := r.result.(refused); !isRefused || !strings.Contains(failed.err.Error(), "cancelled") {
+	if failed, isRefused := r.result.(_Refused); !isRefused || !strings.Contains(failed.err.Error(), "cancelled") {
 		t.Fatalf("a build forgotten before it arrived was answered %v", r.result)
 	}
 	expectMissing(t, child, next)
@@ -111,13 +111,13 @@ func TestARebuildSurvivesAStaleForget(t *testing.T) {
 	first := child.reside(u, ignoreEarly)
 	child.drop(first)
 	child.wire.mu.Lock()
-	rebuilt := make(chan *residency, 1)
+	rebuilt := make(chan *_Residency, 1)
 	go func() { rebuilt <- child.reside(u, ignoreEarly) }()
 	time.Sleep(20 * time.Millisecond)
-	deliver(t, child, request{Op: opForget, Unit: first.build})
+	deliver(t, child, _Request{Op: opForget, Unit: first.build})
 	child.wire.mu.Unlock()
 	second := <-rebuilt
-	deliver(t, child, request{Op: opForget, Unit: first.build})
+	deliver(t, child, _Request{Op: opForget, Unit: first.build})
 	if second.build == first.build {
 		t.Fatalf("a rebuild reused build id %d", first.build)
 	}
@@ -141,8 +141,8 @@ func TestAUnitTheChildLostIsBuiltAgain(t *testing.T) {
 	sb := mustIsolated(t)
 	document := mustJaml(t, sb, "v: ${ 4 }\n")
 	child := currentChild(t, sb)
-	build := residentBuild(t, child, document.held.keep.unit.(*remoteUnit))
-	deliver(t, child, request{Op: opForget, Unit: build})
+	build := residentBuild(t, child, document.held.keep.unit.(*_RemoteUnit))
+	deliver(t, child, _Request{Op: opForget, Unit: build})
 	expectMissing(t, child, build)
 	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 4)
 	expectEqual(t, currentChild(t, sb), child)
@@ -157,23 +157,23 @@ func exited(t *testing.T, script string) *exec.Cmd {
 
 func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 	ours := errors.New("cancelled: context deadline exceeded")
-	marked := &headBuffer{limit: stderrHeadBytes}
+	marked := &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = marked.Write([]byte(pressureMarker + "\n"))
-	panicked := &headBuffer{limit: stderrHeadBytes}
+	panicked := &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = panicked.Write([]byte(pressureMarker + "\npanic: boom\n\ngoroutine 1 [running]:\n"))
-	silent := &headBuffer{limit: stderrHeadBytes}
+	silent := &_HeadBuffer{limit: stderrHeadBytes}
 	cases := map[string]struct {
-		ending exit
+		ending _Exit
 		memory bool
 		want   string
 	}{
-		"an exit 86 beats our kill":         {exit{state: exited(t, "exit 86").ProcessState, stderr: silent, killedFor: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
-		"a panic beats our kill":            {exit{state: exited(t, "exit 2").ProcessState, stderr: panicked, killedFor: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
-		"our kill names its reason":         {exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, killedFor: ours, limit: 64 << 20}, false, ours.Error()},
-		"a foreign kill under pressure":     {exit{state: exited(t, "kill -9 $$").ProcessState, stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
-		"a foreign kill without pressure":   {exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
-		"a plain exit names its status":     {exit{state: exited(t, "exit 3").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},
-		"a pressure marker is not a reason": {exit{state: exited(t, "exit 5").ProcessState, stderr: marked, limit: 64 << 20}, false, "evaluator died (exit status 5)"},
+		"an exit 86 beats our kill":         {_Exit{state: exited(t, "exit 86").ProcessState, stderr: silent, killedFor: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
+		"a panic beats our kill":            {_Exit{state: exited(t, "exit 2").ProcessState, stderr: panicked, killedFor: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
+		"our kill names its reason":         {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, killedFor: ours, limit: 64 << 20}, false, ours.Error()},
+		"a foreign kill under pressure":     {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
+		"a foreign kill without pressure":   {_Exit{state: exited(t, "kill -9 $$").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
+		"a plain exit names its status":     {_Exit{state: exited(t, "exit 3").ProcessState, stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},
+		"a pressure marker is not a reason": {_Exit{state: exited(t, "exit 5").ProcessState, stderr: marked, limit: 64 << 20}, false, "evaluator died (exit status 5)"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

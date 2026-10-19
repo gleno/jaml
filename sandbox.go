@@ -15,37 +15,37 @@ var (
 	errUnjudged     = errors.New("the evaluator died under this job and nothing judged it")
 )
 
-type engine interface {
-	build(ctx context.Context, plan blueprint) (unit, error)
+type _Engine interface {
+	build(ctx context.Context, plan _Blueprint) (_Unit, error)
 }
 
-type unit interface {
-	serve(ctx context.Context, request work) outcome
+type _Unit interface {
+	serve(ctx context.Context, request _Work) _Outcome
 }
 
-type outcome interface{ isOutcome() }
+type _Outcome interface{ isOutcome() }
 
-type answered struct {
+type _Answered struct {
 	data    []byte
 	skipped [][]string
 }
 
-type refused struct{ err error }
+type _Refused struct{ err error }
 
-func (answered) isOutcome() {}
-func (refused) isOutcome()  {}
+func (_Answered) isOutcome() {}
+func (_Refused) isOutcome()  {}
 
 type Sandbox struct {
 	lifetime context.Context
-	engine   engine
+	engine   _Engine
 }
 
 type Expression struct {
-	held *handle
+	held *_Handle
 	path []string
 }
 
-type handle struct {
+type _Handle struct {
 	lifetime context.Context
 	keep     *_Keep
 }
@@ -56,7 +56,7 @@ type _Keep struct {
 	end      context.CancelCauseFunc
 	mu       sync.Mutex
 	holders  int
-	unit     unit
+	unit     _Unit
 }
 
 func MakeSecureSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
@@ -99,7 +99,7 @@ func (s *Sandbox) MakeExpressionFromJaml(ctx context.Context, jaml string, optio
 	if configured.function {
 		return nil, fail(InvalidExpression, "jaml.AsFunction applies to MakeExpression, not to MakeExpressionFromJaml")
 	}
-	return s.make(ctx, blueprint{Written: jaml, Null: configured.null, Undefined: configured.undefined, Sigil: configured.sigil})
+	return s.make(ctx, _Blueprint{Written: jaml, Null: configured.null, Undefined: configured.undefined, Sigil: configured.sigil})
 }
 
 func (s *Sandbox) MakeExpression(ctx context.Context, expression string, options ...Option) (*Expression, error) {
@@ -116,10 +116,10 @@ func (s *Sandbox) MakeExpression(ctx context.Context, expression string, options
 	if configured.sigil != defaultSigil {
 		return nil, fail(InvalidExpression, "jaml.WithSigil applies to MakeExpressionFromJaml, not to MakeExpression")
 	}
-	return s.make(ctx, blueprint{Written: expression, Null: configured.null, Undefined: configured.undefined, Raw: true, Function: configured.function})
+	return s.make(ctx, _Blueprint{Written: expression, Null: configured.null, Undefined: configured.undefined, Raw: true, Function: configured.function})
 }
 
-func (s *Sandbox) make(ctx context.Context, plan blueprint) (*Expression, error) {
+func (s *Sandbox) make(ctx context.Context, plan _Blueprint) (*Expression, error) {
 	if failure := s.framed(ctx, nil); failure != nil {
 		return nil, failure
 	}
@@ -144,7 +144,7 @@ func keepWithin(sandbox context.Context) *_Keep {
 	return &_Keep{sandbox: sandbox, lifetime: lifetime, end: end}
 }
 
-func (k *_Keep) hold(ctx context.Context) (*handle, bool) {
+func (k *_Keep) hold(ctx context.Context) (*_Handle, bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.ended() {
@@ -157,7 +157,7 @@ func (k *_Keep) hold(ctx context.Context) (*handle, bool) {
 		unfollow()
 		k.release()
 	})
-	held := &handle{lifetime: lifetime, keep: k}
+	held := &_Handle{lifetime: lifetime, keep: k}
 	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
 	return held, true
 }
@@ -166,7 +166,7 @@ func (k *_Keep) ended() bool {
 	return k.lifetime.Err() != nil || k.sandbox.Err() != nil
 }
 
-func (h *handle) ended() bool {
+func (h *_Handle) ended() bool {
 	return h.lifetime.Err() != nil || h.keep.ended()
 }
 
@@ -174,7 +174,7 @@ func (k *_Keep) sandboxEnded() bool {
 	return k.sandbox.Err() != nil || errors.Is(context.Cause(k.lifetime), errSandboxEnded)
 }
 
-func (k *_Keep) closed() expressionError {
+func (k *_Keep) closed() _ExpressionError {
 	return fail(Closed, "%s has ended", k.endedContext())
 }
 
@@ -185,7 +185,7 @@ func (k *_Keep) endedContext() string {
 	return "every context it was made or copied with"
 }
 
-func (h *handle) endedContext() string {
+func (h *_Handle) endedContext() string {
 	if h.lifetime.Err() != nil && !h.keep.sandboxEnded() {
 		return "its own context, the one it was made or copied with,"
 	}
@@ -243,7 +243,7 @@ func unmadeExpression(method string) error {
 	return fail(InvalidExpression, "%s on an expression not made by a Sandbox", method)
 }
 
-func (h *handle) admit(ctx context.Context, at string) error {
+func (h *_Handle) admit(ctx context.Context, at string) error {
 	if h.ended() {
 		return fail(Closed, "%s has ended", h.endedContext()).within(at)
 	}
@@ -253,7 +253,7 @@ func (h *handle) admit(ctx context.Context, at string) error {
 	return nil
 }
 
-func (h *handle) answer(ctx context.Context, request work, decode func(settled answered) error) error {
+func (h *_Handle) answer(ctx context.Context, request _Work, decode func(settled _Answered) error) error {
 	defer goruntime.KeepAlive(h)
 	request.Pinned = pin(ctx)
 	job, stop := context.WithCancelCause(ctx)
@@ -269,12 +269,12 @@ func (h *handle) answer(ctx context.Context, request work, decode func(settled a
 		return located(at, cancelled(ctx))
 	}
 	switch settled := result.(type) {
-	case answered:
+	case _Answered:
 		if err := decode(settled); err != nil {
 			return fail(CoercionFailed, "%w", err).within(blame(at, settled.data, err))
 		}
 		return nil
-	case refused:
+	case _Refused:
 		return located(at, settled.err)
 	}
 	return located(at, errUnjudged)

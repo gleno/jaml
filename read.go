@@ -24,9 +24,9 @@ var (
 	nestsTooDeep = fmt.Sprintf("nests deeper than %d", maxDataDepth)
 )
 
-type undefined struct{}
+type _Undefined struct{}
 
-type realm struct {
+type _Realm struct {
 	vm              *goja.Runtime
 	objectPrototype *goja.Object
 	ownKeys         goja.Callable
@@ -34,14 +34,14 @@ type realm struct {
 	parse           goja.Callable
 }
 
-func captureRealm(vm *goja.Runtime) realm {
+func captureRealm(vm *goja.Runtime) _Realm {
 	object := vm.Get("Object").ToObject(vm)
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
 	freeze, _ := goja.AssertFunction(object.Get("freeze"))
-	return realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
+	return _Realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
 }
 
-func (r realm) native(run func()) error {
+func (r _Realm) native(run func()) error {
 	native, _ := goja.AssertFunction(r.vm.ToValue(func(goja.FunctionCall) goja.Value {
 		run()
 		return goja.Undefined()
@@ -50,7 +50,7 @@ func (r realm) native(run func()) error {
 	return err
 }
 
-func (r realm) contain(run func()) error {
+func (r _Realm) contain(run func()) error {
 	err := r.native(run)
 	var interrupted *goja.InterruptedError
 	if errors.As(err, &interrupted) {
@@ -59,70 +59,70 @@ func (r realm) contain(run func()) error {
 	return err
 }
 
-func (r realm) isPlain(object *goja.Object) bool {
+func (r _Realm) isPlain(object *goja.Object) bool {
 	prototype := object.Prototype()
 	return prototype == nil || prototype.SameAs(r.objectPrototype)
 }
 
-type notData struct {
-	at      *dataPath
+type _NotData struct {
+	at      *_DataPath
 	claim   string
 	leftOut bool
 }
 
-func (n notData) refusal() error {
+func (n _NotData) refusal() error {
 	return fmt.Errorf("%s %s", describeResultAt(n.at), n.claim)
 }
 
-type readPolicy interface {
-	stranger(part notData) (any, error)
+type _ReadPolicy interface {
+	stranger(part _NotData) (any, error)
 	instance(refusal func() error) (asFields bool, err error)
 }
 
-type resultPolicy struct{}
+type _ResultPolicy struct{}
 
-func (resultPolicy) stranger(part notData) (any, error) {
+func (_ResultPolicy) stranger(part _NotData) (any, error) {
 	return nil, part.refusal()
 }
 
-func (resultPolicy) instance(refusal func() error) (bool, error) {
+func (_ResultPolicy) instance(refusal func() error) (bool, error) {
 	return false, refusal()
 }
 
-type failedRead struct {
-	at    *dataPath
+type _FailedRead struct {
+	at    *_DataPath
 	cause error
 }
 
-func (f *failedRead) Error() string {
+func (f *_FailedRead) Error() string {
 	return "reading " + describeResultAt(f.at) + ": " + f.cause.Error()
 }
 
-type dataReader struct {
-	realm     realm
-	policy    readPolicy
+type _DataReader struct {
+	realm     _Realm
+	policy    _ReadPolicy
 	ancestors map[*goja.Object]bool
 	remaining int
 }
 
-func readResult(from realm, returned goja.Value) (any, error) {
-	result, err := readData(from, returned, resultPolicy{})
-	var failed *failedRead
+func readResult(from _Realm, returned goja.Value) (any, error) {
+	result, err := readData(from, returned, _ResultPolicy{})
+	var failed *_FailedRead
 	if errors.As(err, &failed) {
 		return nil, fmt.Errorf("reading %s: %w", describeResultAt(failed.at), from.explain(failed.cause))
 	}
 	return result, err
 }
 
-func readData(from realm, value goja.Value, policy readPolicy) (any, error) {
-	reader := &dataReader{realm: from, policy: policy, ancestors: map[*goja.Object]bool{}, remaining: maxResultValues}
+func readData(from _Realm, value goja.Value, policy _ReadPolicy) (any, error) {
+	reader := &_DataReader{realm: from, policy: policy, ancestors: map[*goja.Object]bool{}, remaining: maxResultValues}
 	if err := reader.pay(1); err != nil {
 		return nil, err
 	}
 	return reader.read(value, nil)
 }
 
-func (r *dataReader) pay(values int64) error {
+func (r *_DataReader) pay(values int64) error {
 	if values > int64(r.remaining) {
 		return fmt.Errorf("result holds more than %d values", maxResultValues)
 	}
@@ -130,14 +130,14 @@ func (r *dataReader) pay(values int64) error {
 	return nil
 }
 
-func (r *dataReader) stranger(at *dataPath, claim string, leftOut bool) (any, error) {
-	return r.policy.stranger(notData{at: at, claim: claim, leftOut: leftOut})
+func (r *_DataReader) stranger(at *_DataPath, claim string, leftOut bool) (any, error) {
+	return r.policy.stranger(_NotData{at: at, claim: claim, leftOut: leftOut})
 }
 
-func (r *dataReader) read(value goja.Value, at *dataPath) (any, error) {
+func (r *_DataReader) read(value goja.Value, at *_DataPath) (any, error) {
 	switch {
 	case value == nil || goja.IsUndefined(value):
-		return undefined{}, nil
+		return _Undefined{}, nil
 	case goja.IsNull(value):
 		return nil, nil
 	}
@@ -155,7 +155,7 @@ func (r *dataReader) read(value goja.Value, at *dataPath) (any, error) {
 	return r.readPrimitive(value, at)
 }
 
-func (r *dataReader) readPrimitive(primitive goja.Value, at *dataPath) (any, error) {
+func (r *_DataReader) readPrimitive(primitive goja.Value, at *_DataPath) (any, error) {
 	switch exported := primitive.Export().(type) {
 	case bool:
 		return exported, nil
@@ -170,7 +170,7 @@ func (r *dataReader) readPrimitive(primitive goja.Value, at *dataPath) (any, err
 	}
 }
 
-func (r *dataReader) readFloat(number float64, at *dataPath) (any, error) {
+func (r *_DataReader) readFloat(number float64, at *_DataPath) (any, error) {
 	switch {
 	case math.IsNaN(number):
 		return r.stranger(at, "is NaN"+notYAML, false)
@@ -185,7 +185,7 @@ func (r *dataReader) readFloat(number float64, at *dataPath) (any, error) {
 	}
 }
 
-func (r *dataReader) readObject(object *goja.Object, at *dataPath) (any, error) {
+func (r *_DataReader) readObject(object *goja.Object, at *_DataPath) (any, error) {
 	if object.ExportType() == proxyType {
 		return r.stranger(at, "is a proxy"+notYAML, false)
 	}
@@ -213,7 +213,7 @@ func (r *dataReader) readObject(object *goja.Object, at *dataPath) (any, error) 
 	return r.readFields(object, at)
 }
 
-func (r *dataReader) refuseInstance(object *goja.Object, at *dataPath) error {
+func (r *_DataReader) refuseInstance(object *goja.Object, at *_DataPath) error {
 	var described string
 	if err := r.attempt(at, func() { described = describeInstance(object) }); err != nil {
 		return err
@@ -221,14 +221,14 @@ func (r *dataReader) refuseInstance(object *goja.Object, at *dataPath) error {
 	return fmt.Errorf("%s is %s%s", describeResultAt(at), described, notYAML)
 }
 
-func (r *dataReader) attempt(at *dataPath, run func()) error {
+func (r *_DataReader) attempt(at *_DataPath, run func()) error {
 	if exception := r.realm.vm.Try(run); exception != nil {
-		return &failedRead{at: at, cause: exception}
+		return &_FailedRead{at: at, cause: exception}
 	}
 	return nil
 }
 
-func (r *dataReader) property(object *goja.Object, key string, at *dataPath) (goja.Value, error) {
+func (r *_DataReader) property(object *goja.Object, key string, at *_DataPath) (goja.Value, error) {
 	var value goja.Value
 	err := r.attempt(at, func() { value = object.Get(key) })
 	return value, err
@@ -249,7 +249,7 @@ func describeInstance(object *goja.Object) string {
 	return "an instance of " + excerpt(name.String(), codeExcerptLength)
 }
 
-func (r *dataReader) readArray(array *goja.Object, at *dataPath) (any, error) {
+func (r *_DataReader) readArray(array *goja.Object, at *_DataPath) (any, error) {
 	length := array.Get("length").ToInteger()
 	if err := r.pay(length); err != nil {
 		return nil, err
@@ -265,14 +265,14 @@ func (r *dataReader) readArray(array *goja.Object, at *dataPath) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, isUndefined := item.(undefined); !isUndefined {
+		if _, isUndefined := item.(_Undefined); !isUndefined {
 			list[i] = item
 		}
 	}
 	return list, nil
 }
 
-func (r *dataReader) readFields(object *goja.Object, at *dataPath) (any, error) {
+func (r *_DataReader) readFields(object *goja.Object, at *_DataPath) (any, error) {
 	keys, err := r.keysOf(object, at)
 	if err != nil {
 		return nil, err
@@ -288,17 +288,17 @@ func (r *dataReader) readFields(object *goja.Object, at *dataPath) (any, error) 
 		if err != nil {
 			return nil, err
 		}
-		if _, isUndefined := item.(undefined); !isUndefined {
+		if _, isUndefined := item.(_Undefined); !isUndefined {
 			fields[key] = item
 		}
 	}
 	return fields, nil
 }
 
-func (r *dataReader) keysOf(object *goja.Object, at *dataPath) ([]string, error) {
+func (r *_DataReader) keysOf(object *goja.Object, at *_DataPath) ([]string, error) {
 	listed, err := r.realm.ownKeys(goja.Undefined(), object)
 	if err != nil {
-		return nil, &failedRead{at: at, cause: err}
+		return nil, &_FailedRead{at: at, cause: err}
 	}
 	written, isObject := listed.(*goja.Object)
 	if !isObject {
@@ -348,6 +348,6 @@ func tooDeep(what string) error {
 	return fmt.Errorf("%s %s", what, nestsTooDeep)
 }
 
-func describeResultAt(at *dataPath) string {
+func describeResultAt(at *_DataPath) string {
 	return at.spelledFrom("result")
 }

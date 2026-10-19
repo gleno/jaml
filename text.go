@@ -7,55 +7,55 @@ import (
 	"strings"
 )
 
-type text struct {
-	whole    *expression
-	segments []segment
+type _Text struct {
+	whole    *_Expression
+	segments []_Segment
 }
 
-type segment struct {
+type _Segment struct {
 	literal string
-	code    *expression
+	code    *_Expression
 }
 
-type compiler struct {
+type _Compiler struct {
 	ctx        context.Context
-	texts      map[string]text
+	texts      map[string]_Text
 	delimiters _Delimiters
 }
 
-func compileTexts(ctx context.Context, root any, delimiters _Delimiters) (map[string]text, error) {
-	var c = &compiler{ctx: ctx, texts: map[string]text{}, delimiters: delimiters}
+func compileTexts(ctx context.Context, root any, delimiters _Delimiters) (map[string]_Text, error) {
+	var c = &_Compiler{ctx: ctx, texts: map[string]_Text{}, delimiters: delimiters}
 	if err := c.visit(root, nil); err != nil {
 		return nil, err
 	}
 	return c.texts, nil
 }
 
-type delimiter struct {
+type _Delimiter struct {
 	opens  string
 	closes string
 }
 
 type _Delimiters struct {
-	value         delimiter
-	interpolation delimiter
+	value         _Delimiter
+	interpolation _Delimiter
 }
 
-var bare = delimiter{}
+var bare = _Delimiter{}
 
 func delimitersFor(sigil string) _Delimiters {
-	return _Delimiters{value: delimiter{opens: sigil + "{", closes: "}"}, interpolation: delimiter{opens: sigil + "{{", closes: "}}"}}
+	return _Delimiters{value: _Delimiter{opens: sigil + "{", closes: "}"}, interpolation: _Delimiter{opens: sigil + "{{", closes: "}}"}}
 }
 
 func (d _Delimiters) notWhole() error {
 	return fmt.Errorf("a value that starts with %s must be one whole expression; interpolate into text with %s }}", d.value.opens, d.interpolation.opens)
 }
 
-func (d delimiter) around(code string) string {
+func (d _Delimiter) around(code string) string {
 	return d.opens + excerpt(code, codeExcerptLength) + d.closes
 }
 
-func (c *compiler) visit(node any, at *dataPath) error {
+func (c *_Compiler) visit(node any, at *_DataPath) error {
 	written, isString := node.(string)
 	if !isString {
 		return eachChild(node, at, c.visit)
@@ -76,11 +76,11 @@ func (c *compiler) visit(node any, at *dataPath) error {
 	return nil
 }
 
-func (t text) holdsCode() bool {
-	return t.whole != nil || slices.ContainsFunc(t.segments, func(piece segment) bool { return piece.code != nil })
+func (t _Text) holdsCode() bool {
+	return t.whole != nil || slices.ContainsFunc(t.segments, func(piece _Segment) bool { return piece.code != nil })
 }
 
-func (c *compiler) compileText(written string) (compiled text, err error) {
+func (c *_Compiler) compileText(written string) (compiled _Text, err error) {
 	defer func() {
 		if failure := buildPanic(recover()); failure != nil {
 			err = failure
@@ -89,10 +89,10 @@ func (c *compiler) compileText(written string) (compiled text, err error) {
 	trimmed := strings.TrimSpace(written)
 	whole := strings.HasPrefix(trimmed, c.delimiters.value.opens) && !strings.HasPrefix(trimmed, c.delimiters.interpolation.opens)
 	if !whole && !strings.Contains(written, c.delimiters.interpolation.opens) {
-		return text{}, nil
+		return _Text{}, nil
 	}
 	if err := refuseLongCode(written); err != nil {
-		return text{}, err
+		return _Text{}, err
 	}
 	if whole {
 		return c.compileWhole(trimmed)
@@ -100,27 +100,27 @@ func (c *compiler) compileText(written string) (compiled text, err error) {
 	return c.compileInterpolations(written)
 }
 
-func (c *compiler) compileWhole(trimmed string) (text, error) {
+func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 	var wholeValue = c.delimiters.value
 	after := trimmed[len(wholeValue.opens):]
 	end, err := searchingEndsIn(trimmed).expressionEnd(after, wholeValue)
 	if err != nil {
-		return text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, excerpt(after, codeExcerptLength), err)
+		return _Text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, excerpt(after, codeExcerptLength), err)
 	}
 	if end != len(after)-len(wholeValue.closes) {
-		return text{}, c.delimiters.notWhole()
+		return _Text{}, c.delimiters.notWhole()
 	}
 	code := after[:end]
 	compiled, err := compileExpression(code, wholeValue)
 	if err != nil {
-		return text{}, fmt.Errorf("%s: %w", wholeValue.around(code), err)
+		return _Text{}, fmt.Errorf("%s: %w", wholeValue.around(code), err)
 	}
-	return text{whole: &compiled}, nil
+	return _Text{whole: &compiled}, nil
 }
 
-func (c *compiler) compileInterpolations(written string) (text, error) {
+func (c *_Compiler) compileInterpolations(written string) (_Text, error) {
 	var interpolation = c.delimiters.interpolation
-	var compiled text
+	var compiled _Text
 	search := searchingEndsIn(written)
 	rest := written
 	for {
@@ -132,21 +132,21 @@ func (c *compiler) compileInterpolations(written string) (text, error) {
 		after := rest[start+len(interpolation.opens):]
 		end, err := search.expressionEnd(after, interpolation)
 		if err != nil {
-			return text{}, fmt.Errorf("%s%s: %w", interpolation.opens, excerpt(after, codeExcerptLength), err)
+			return _Text{}, fmt.Errorf("%s%s: %w", interpolation.opens, excerpt(after, codeExcerptLength), err)
 		}
 		code, err := compileExpression(after[:end], interpolation)
 		if err != nil {
-			return text{}, fmt.Errorf("%s: %w", interpolation.around(after[:end]), err)
+			return _Text{}, fmt.Errorf("%s: %w", interpolation.around(after[:end]), err)
 		}
-		compiled.segments = append(compiled.segments, segment{code: &code})
+		compiled.segments = append(compiled.segments, _Segment{code: &code})
 		rest = after[end+len(interpolation.closes):]
 	}
 }
 
-func (t text) withLiteral(literal string) text {
+func (t _Text) withLiteral(literal string) _Text {
 	if literal == "" {
 		return t
 	}
-	t.segments = append(t.segments, segment{literal: literal})
+	t.segments = append(t.segments, _Segment{literal: literal})
 	return t
 }

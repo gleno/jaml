@@ -154,7 +154,7 @@ var freezerProgram = sync.OnceValue(func() *goja.Program {
 	return goja.MustCompile(freezerFile, intrinsicsFreezer, true)
 })
 
-func (r realm) intrinsicsFreezer() (goja.Callable, error) {
+func (r _Realm) intrinsicsFreezer() (goja.Callable, error) {
 	made, err := r.vm.RunProgram(freezerProgram())
 	if err != nil {
 		return nil, fmt.Errorf("preparing to freeze the built-ins: %w", r.explain(err))
@@ -163,8 +163,8 @@ func (r realm) intrinsicsFreezer() (goja.Callable, error) {
 	return freezer, nil
 }
 
-func (s *session) freezeIntrinsics(freezer goja.Callable) error {
-	return s.enter(func(r realm) error {
+func (s *_Session) freezeIntrinsics(freezer goja.Callable) error {
+	return s.enter(func(r _Realm) error {
 		if _, err := freezer(goja.Undefined(), r.vm.ToValue(readOnlyRefusal)); err != nil {
 			return fmt.Errorf("freezing the built-ins: %w", r.explain(err))
 		}

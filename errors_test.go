@@ -54,7 +54,7 @@ func TestAMemoryBombIsAMemoryLimit(t *testing.T) {
 }
 
 func TestARuntimeOutOfMemoryIsAMemoryLimit(t *testing.T) {
-	if !errors.Is(memoryExhausted("evaluator died (exit status 2): "+runtimeOutOfMemory), MemoryLimit) {
+	if !errors.Is(_MemoryExhausted("evaluator died (exit status 2): "+runtimeOutOfMemory), MemoryLimit) {
 		t.Fatal("a runtime out-of-memory death is not a MemoryLimit")
 	}
 	if errors.Is(fail(EvaluationFailed, "boom"), MemoryLimit) {
@@ -72,7 +72,7 @@ func TestErrorsKeepTheirMessageFormat(t *testing.T) {
 	})
 }
 
-type shapeWithAList struct {
+type _ShapeWithAList struct {
 	A struct {
 		B []int `json:"b"`
 	} `json:"a"`
@@ -80,25 +80,25 @@ type shapeWithAList struct {
 
 func TestACoercionFailureNamesTheFailingField(t *testing.T) {
 	text := "a:\n  b: [1, x]\nc:\n  d: {e: [1, 2, {f: 1}]}\n"
-	both := agreement{text: text}.eval(t, func() any { return new(shapeWithAList) })
+	both := _Agreement{text: text}.eval(t, func() any { return new(_ShapeWithAList) })
 	both.expectRefused(t, CoercionFailed, "$.a.b[1]: json: cannot unmarshal string")
 	var mismatch *json.UnmarshalTypeError
 	if !errors.As(both.trusted, &mismatch) || !errors.As(both.isolated, &mismatch) {
 		t.Fatalf("expected *json.UnmarshalTypeError in %v", both.trusted)
 	}
-	agreement{text: text, path: []string{"c"}}.eval(t, func() any { return new(map[string]map[string][]int) }).expectRefused(t, CoercionFailed, "$.c.d.e[2]: json: cannot unmarshal object")
+	_Agreement{text: text, path: []string{"c"}}.eval(t, func() any { return new(map[string]map[string][]int) }).expectRefused(t, CoercionFailed, "$.c.d.e[2]: json: cannot unmarshal object")
 }
 
 var errPicky = errors.New("picky refuses")
 
-type picky struct{}
+type _Picky struct{}
 
-func (*picky) UnmarshalJSON([]byte) error {
+func (*_Picky) UnmarshalJSON([]byte) error {
 	return errPicky
 }
 
 func TestACustomUnmarshalersErrorIsReachable(t *testing.T) {
-	both := agreement{text: "v: ${ 1 }\n", path: []string{"v"}}.eval(t, func() any { return new(picky) })
+	both := _Agreement{text: "v: ${ 1 }\n", path: []string{"v"}}.eval(t, func() any { return new(_Picky) })
 	both.expectRefused(t, CoercionFailed, "$.v: picky refuses")
 	if !errors.Is(both.trusted, errPicky) || !errors.Is(both.isolated, errPicky) {
 		t.Fatalf("expected the unmarshaler's error in %v", both.trusted)
@@ -107,7 +107,7 @@ func TestACustomUnmarshalersErrorIsReachable(t *testing.T) {
 
 func expectTheSameChildAfter(t *testing.T, sb *Sandbox, run func()) {
 	t.Helper()
-	if _, isIsolated := sb.engine.(*isolatedEngine); !isIsolated {
+	if _, isIsolated := sb.engine.(*_IsolatedEngine); !isIsolated {
 		run()
 		return
 	}

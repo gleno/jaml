@@ -79,7 +79,7 @@ func impersonateAnEvaluator() bool {
 	}
 	requests := os.NewFile(requestsFD, "impostor-requests")
 	replies := os.NewFile(responsesFD, "impostor-replies")
-	greeting := hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: os.Getenv(evaluatorNonce)}
+	greeting := _Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: os.Getenv(evaluatorNonce)}
 	switch os.Getenv(evaluatorMemoryLimit) {
 	case strconv.Itoa(silentLimit):
 	case strconv.Itoa(crashAtStartLimit):
@@ -105,11 +105,11 @@ func impersonateAnEvaluator() bool {
 	return true
 }
 
-func answerBadly(requests, replies *os.File, greeting hello, badAnswer string) {
+func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) {
 	_ = json.NewEncoder(replies).Encode(greeting)
 	incoming := json.NewDecoder(requests)
 	for {
-		var asked request
+		var asked _Request
 		if incoming.Decode(&asked) != nil {
 			return
 		}
@@ -173,13 +173,13 @@ func TestAnAnswerWithNeitherDataNorFailureKillsTheEvaluator(t *testing.T) {
 	expectDeath(t, process)
 }
 
-func respawnAs(t *testing.T, sb *Sandbox, spec childSpec) {
+func respawnAs(t *testing.T, sb *Sandbox, spec _ChildSpec) {
 	t.Helper()
 	spec.lifetime = sb.lifetime
 	d := dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.start = func() (*life, error) { return startLife(spec) }
+	d.start = func() (*_Life, error) { return startLife(spec) }
 }
 
 func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
@@ -190,7 +190,7 @@ func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, childSpec{limit: silentLimit, buildTimeout: defaultBuildTimeout})
+	respawnAs(t, sb, _ChildSpec{limit: silentLimit, buildTimeout: defaultBuildTimeout})
 	killChild(t, sb)
 	evaluating := make(chan error, 1)
 	go func() {
@@ -234,10 +234,10 @@ func TestAnIdleEvaluatorSleeps(t *testing.T) {
 
 func TestADeathNamesItsReasonNotItsStack(t *testing.T) {
 	dump := "fatal error: runtime: out of memory\n\nruntime stack:\nruntime.throw({0x1, 0x2})\n\t/usr/local/go/src/runtime/panic.go:1101\n\ngoroutine 1 [running]:\nmain.main()\n"
-	stderr := &headBuffer{limit: stderrHeadBytes}
+	stderr := &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = stderr.Write([]byte("jaml evaluator: something first\n" + dump + strings.Repeat("goroutine 9 [chan receive]:\n", 1000)))
 	expectEqual(t, stderr.reason(), "fatal error: runtime: out of memory")
-	plain := &headBuffer{limit: stderrHeadBytes}
+	plain := &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = plain.Write([]byte("jaml evaluator: reading request: bad\n"))
 	expectEqual(t, plain.reason(), "jaml evaluator: reading request: bad")
 }
@@ -249,7 +249,7 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 			sb := mustIsolated(t)
 			document := mustJaml(t, sb, "a: 1\n")
 			expectEqual(t, isolatedEvalAs[int](t, document, nil, "a"), 1)
-			respawnAs(t, sb, childSpec{limit: memoryLimit(limit), buildTimeout: defaultBuildTimeout})
+			respawnAs(t, sb, _ChildSpec{limit: _MemoryLimit(limit), buildTimeout: defaultBuildTimeout})
 			killChild(t, sb)
 			var out any
 			respawned := resolveInto(within(t, 10*time.Second), &out, document.At("a"))
@@ -464,12 +464,12 @@ func TestATemplateWhoseContextEndsDuringConstructionCloses(t *testing.T) {
 	})
 }
 
-func dropATemplate(t *testing.T, sb *Sandbox) *remoteUnit {
+func dropATemplate(t *testing.T, sb *Sandbox) *_RemoteUnit {
 	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	return document.held.keep.unit.(*remoteUnit)
+	return document.held.keep.unit.(*_RemoteUnit)
 }
 
-func residencyOf(child *life, u *remoteUnit) *residency {
+func residencyOf(child *_Life, u *_RemoteUnit) *_Residency {
 	child.wire.mu.Lock()
 	defer child.wire.mu.Unlock()
 	return child.wire.residents[u]
@@ -490,8 +490,8 @@ func TestADroppedTemplateIsForgottenByTheEvaluator(t *testing.T) {
 	}
 	deadline = time.Now().Add(10 * time.Second)
 	for {
-		served := child.serve(within(t, 10*time.Second), build, work{})
-		if failed, isRefused := served.(refused); isRefused && errors.Is(failed.err, errMissing) {
+		served := child.serve(within(t, 10*time.Second), build, _Work{})
+		if failed, isRefused := served.(_Refused); isRefused && errors.Is(failed.err, errMissing) {
 			return
 		}
 		if time.Now().After(deadline) {

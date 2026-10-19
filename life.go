@@ -32,37 +32,37 @@ var (
 	errRetired = errors.New("retired after replaying one job alone")
 )
 
-type evaluatorWorld struct {
-	limit  memoryLimit
+type _EvaluatorWorld struct {
+	limit  _MemoryLimit
 	nonce  string
 	parent int
 	zone   []string
 }
 
-type childSpec struct {
+type _ChildSpec struct {
 	lifetime     context.Context
-	limit        memoryLimit
+	limit        _MemoryLimit
 	buildTimeout time.Duration
 }
 
-type life struct {
+type _Life struct {
 	cmd          *exec.Cmd
 	ended        chan struct{}
 	verdict      error
 	killedFor    atomic.Pointer[error]
 	buildTimeout time.Duration
-	wire         *wire
-	board        *switchboard
+	wire         *_Wire
+	board        *_Switchboard
 }
 
-type exit struct {
+type _Exit struct {
 	state     *os.ProcessState
-	stderr    *headBuffer
+	stderr    *_HeadBuffer
 	killedFor error
-	limit     memoryLimit
+	limit     _MemoryLimit
 }
 
-func startLife(spec childSpec) (*life, error) {
+func startLife(spec _ChildSpec) (*_Life, error) {
 	bounded, stop := context.WithTimeoutCause(spec.lifetime, spec.buildTimeout, fmt.Errorf("the evaluator took longer than %s to start: %w", spec.buildTimeout, context.DeadlineExceeded))
 	defer stop()
 	if bounded.Err() != nil {
@@ -85,14 +85,14 @@ func startLife(spec childSpec) (*life, error) {
 }
 
 func startFailure(err error) error {
-	if _, isOwn := err.(expressionError); isOwn {
+	if _, isOwn := err.(_ExpressionError); isOwn {
 		return err
 	}
 	return fail(EvaluationFailed, "starting the evaluator: %w", err)
 }
 
-func currentWorld(limit memoryLimit) evaluatorWorld {
-	return evaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
+func currentWorld(limit _MemoryLimit) _EvaluatorWorld {
+	return _EvaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
 }
 
 func zoneEnv() []string {
@@ -123,7 +123,7 @@ func forwardableZone() string {
 	return name
 }
 
-func (w evaluatorWorld) env() []string {
+func (w _EvaluatorWorld) env() []string {
 	env := []string{
 		evaluatorMarker + "=1",
 		evaluatorMemoryLimit + "=" + strconv.FormatInt(int64(w.limit), 10),
@@ -133,7 +133,7 @@ func (w evaluatorWorld) env() []string {
 	return append(env, w.zone...)
 }
 
-func (w evaluatorWorld) start(spec childSpec) (*life, *replyStream, error) {
+func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 	image, err := selfImage()
 	if err != nil {
 		return nil, nil, fmt.Errorf("finding this executable: %w", err)
@@ -143,7 +143,7 @@ func (w evaluatorWorld) start(spec childSpec) (*life, *replyStream, error) {
 		return nil, nil, err
 	}
 	requests, replies, control := pipes[0], pipes[1], pipes[2]
-	stderr := &headBuffer{limit: stderrHeadBytes}
+	stderr := &_HeadBuffer{limit: stderrHeadBytes}
 	cmd := exec.Command(image)
 	cmd.Env = w.env()
 	cmd.ExtraFiles = []*os.File{requests.read, replies.write, control.read}
@@ -155,12 +155,12 @@ func (w evaluatorWorld) start(spec childSpec) (*life, *replyStream, error) {
 		closeAll(requests.write, replies.read, control.write)
 		return nil, nil, err
 	}
-	born := &life{
+	born := &_Life{
 		cmd:          cmd,
 		ended:        make(chan struct{}),
 		buildTimeout: spec.buildTimeout,
 		wire:         newWire(requests.write, control.write),
-		board:        &switchboard{pending: map[uint64]*expectation{}},
+		board:        &_Switchboard{pending: map[uint64]*_Expectation{}},
 	}
 	unbind := context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
 	go func() {
@@ -168,18 +168,18 @@ func (w evaluatorWorld) start(spec childSpec) (*life, *replyStream, error) {
 		killedFor := born.killReason()
 		closeAll(requests.write, replies.read, control.write)
 		unbind()
-		born.bury(exit{state: cmd.ProcessState, stderr: stderr, killedFor: killedFor, limit: w.limit})
+		born.bury(_Exit{state: cmd.ProcessState, stderr: stderr, killedFor: killedFor, limit: w.limit})
 	}()
-	return born, &replyStream{lines: bufio.NewReader(replies.read), frames: framesFor(w.limit)}, nil
+	return born, &_ReplyStream{lines: bufio.NewReader(replies.read), frames: framesFor(w.limit)}, nil
 }
 
-type pipe struct {
+type _Pipe struct {
 	read  *os.File
 	write *os.File
 }
 
-func openPipes(count int) ([]pipe, error) {
-	var opened []pipe
+func openPipes(count int) ([]_Pipe, error) {
+	var opened []_Pipe
 	for range count {
 		read, write, err := os.Pipe()
 		if err != nil {
@@ -188,40 +188,40 @@ func openPipes(count int) ([]pipe, error) {
 			}
 			return nil, err
 		}
-		opened = append(opened, pipe{read: read, write: write})
+		opened = append(opened, _Pipe{read: read, write: write})
 	}
 	return opened, nil
 }
 
-func (l *life) bury(ending exit) {
+func (l *_Life) bury(ending _Exit) {
 	l.verdict = ending.verdict()
 	close(l.ended)
 	l.wire.vacate()
 }
 
-func (l *life) kill(reason error) {
+func (l *_Life) kill(reason error) {
 	l.killedFor.CompareAndSwap(nil, &reason)
 	l.end()
 }
 
-func (l *life) end() {
+func (l *_Life) end() {
 	_ = l.cmd.Process.Kill()
 }
 
-func (l *life) killReason() error {
+func (l *_Life) killReason() error {
 	if reason := l.killedFor.Load(); reason != nil {
 		return *reason
 	}
 	return nil
 }
 
-func (l *life) abandon(reason error) error {
+func (l *_Life) abandon(reason error) error {
 	l.kill(reason)
 	<-l.ended
 	return reason
 }
 
-func (l *life) alive() bool {
+func (l *_Life) alive() bool {
 	select {
 	case <-l.ended:
 		return false
@@ -230,13 +230,13 @@ func (l *life) alive() bool {
 	}
 }
 
-func (l *life) lost() lost {
+func (l *_Life) lost() _Lost {
 	<-l.ended
-	return lost{cause: l.verdict}
+	return _Lost{cause: l.verdict}
 }
 
-func (l *life) greet(ctx context.Context, replies *replyStream) (hello, error) {
-	var greeting hello
+func (l *_Life) greet(ctx context.Context, replies *_ReplyStream) (_Hello, error) {
+	var greeting _Hello
 	read := make(chan error, 1)
 	go func() { read <- replies.read(&greeting) }()
 	select {
@@ -253,7 +253,7 @@ func (l *life) greet(ctx context.Context, replies *replyStream) (hello, error) {
 	}
 }
 
-func (l *life) deathBeforeGreeting(ctx context.Context) error {
+func (l *_Life) deathBeforeGreeting(ctx context.Context) error {
 	select {
 	case <-l.ended:
 		return l.verdict
@@ -262,7 +262,7 @@ func (l *life) deathBeforeGreeting(ctx context.Context) error {
 	}
 }
 
-func (greeting hello) vouch(nonce string) error {
+func (greeting _Hello) vouch(nonce string) error {
 	switch {
 	case greeting.Magic != evaluatorMagic || greeting.Nonce != nonce:
 		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): it answered with a foreign greeting")
@@ -272,17 +272,17 @@ func (greeting hello) vouch(nonce string) error {
 	return nil
 }
 
-func (x exit) verdict() error {
+func (x _Exit) verdict() error {
 	reason := x.stderr.reason()
 	switch {
 	case x.state.ExitCode() == exitMemoryLimit:
-		return memoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", x.limit))
+		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", x.limit))
 	case reason == runtimeOutOfMemory:
-		return memoryExhausted(fmt.Sprintf("evaluator died (%s): %s", x.state, reason))
+		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s): %s", x.state, reason))
 	case killedOutright(x.state) && x.killedFor != nil:
 		return x.killedFor
 	case killedOutright(x.state) && x.stderr.holds(pressureMarker):
-		return memoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", x.state, x.limit))
+		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", x.state, x.limit))
 	case killedOutright(x.state):
 		return fmt.Errorf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", x.state, peakNote(x.state))
 	case reason != "":
@@ -299,12 +299,12 @@ func peakNote(state *os.ProcessState) string {
 	return fmt.Sprintf(", after peaking at %d MB resident", peak>>20)
 }
 
-type replyStream struct {
+type _ReplyStream struct {
 	lines  *bufio.Reader
-	frames frames
+	frames _Frames
 }
 
-func (s *replyStream) read(into any) error {
+func (s *_ReplyStream) read(into any) error {
 	frame, err := s.frame()
 	if err != nil {
 		return err
@@ -315,7 +315,7 @@ func (s *replyStream) read(into any) error {
 	return nil
 }
 
-func (s *replyStream) frame() ([]byte, error) {
+func (s *_ReplyStream) frame() ([]byte, error) {
 	var frame []byte
 	for {
 		chunk, err := s.lines.ReadSlice('\n')
@@ -336,7 +336,7 @@ func (s *replyStream) frame() ([]byte, error) {
 }
 
 func located(at string, err error) error {
-	if own, isOwn := err.(expressionError); isOwn {
+	if own, isOwn := err.(_ExpressionError); isOwn {
 		return own
 	}
 	return fail(EvaluationFailed, "%w", err).within(at)
@@ -352,13 +352,13 @@ func closeAll(files ...*os.File) {
 	}
 }
 
-type headBuffer struct {
+type _HeadBuffer struct {
 	limit int
 	mu    sync.Mutex
 	kept  []byte
 }
 
-func (h *headBuffer) Write(written []byte) (int, error) {
+func (h *_HeadBuffer) Write(written []byte) (int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	room := max(h.limit-len(h.kept), 0)
@@ -366,7 +366,7 @@ func (h *headBuffer) Write(written []byte) (int, error) {
 	return len(written), nil
 }
 
-func (h *headBuffer) reason() string {
+func (h *_HeadBuffer) reason() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	lines := slices.DeleteFunc(strings.Split(string(bytes.TrimSpace(h.kept)), "\n"), func(line string) bool { return line == pressureMarker })
@@ -381,7 +381,7 @@ func (h *headBuffer) reason() string {
 	return strings.TrimSpace(lines[0])
 }
 
-func (h *headBuffer) holds(marker string) bool {
+func (h *_HeadBuffer) holds(marker string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return bytes.Contains(h.kept, []byte(marker))

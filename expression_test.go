@@ -142,10 +142,10 @@ func TestTheWorstRecursiveConstructsUnderTheCapLeaveTheParserStackBounded(t *tes
 				if len(written) > maxCodeBytes {
 					t.Fatalf("%q: test value is %d bytes", unit, len(written))
 				}
-				c := &compiler{texts: map[string]text{}}
+				c := &_Compiler{texts: map[string]_Text{}}
 				_, _ = c.compileText(written)
 			}
-			c := &compiler{texts: map[string]text{}}
+			c := &_Compiler{texts: map[string]_Text{}}
 			if _, err := c.compileText(codeValue(unit, maxCodeBytes+len(unit)+1)); err == nil || !strings.Contains(err.Error(), "longer than") {
 				t.Fatalf("%q: expected the size refusal, got %v", unit, err)
 			}
@@ -190,7 +190,7 @@ func TestAnEndHiddenBehindClusteredClosersIsStillFound(t *testing.T) {
 
 func TestAnEndSearchThatOutgrowsItsValueIsRefused(t *testing.T) {
 	after := " `}}" + strings.Repeat(" ", 1_000) + strings.Repeat("}}", 100) + "` }}"
-	search := &endSearch{unparsed: 4 * len(after)}
+	search := &_EndSearch{unparsed: 4 * len(after)}
 	if _, err := search.expressionEnd(after, dollar.interpolation); err != errCostlyEnds {
 		t.Fatalf("expected the costly-ends refusal, got %v", err)
 	}

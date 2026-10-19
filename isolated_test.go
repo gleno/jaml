@@ -18,22 +18,22 @@ func mustIsolated(t *testing.T, options ...SandboxOption) *Sandbox {
 	return mustSandbox(t, isolatedKind, options...)
 }
 
-func dispatcherOf(t *testing.T, sb *Sandbox) *dispatcher {
+func dispatcherOf(t *testing.T, sb *Sandbox) *_Dispatcher {
 	t.Helper()
-	isolated, isIsolated := sb.engine.(*isolatedEngine)
+	isolated, isIsolated := sb.engine.(*_IsolatedEngine)
 	if !isIsolated {
 		t.Fatalf("%T is not an isolated sandbox", sb.engine)
 	}
 	return isolated.dispatcher
 }
 
-func currentChild(t *testing.T, sb *Sandbox) *life {
+func currentChild(t *testing.T, sb *Sandbox) *_Life {
 	t.Helper()
 	d := dispatcherOf(t, sb)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		d.mu.Lock()
-		current, isReady := d.child.(ready)
+		current, isReady := d.child.(_Ready)
 		d.mu.Unlock()
 		if isReady && current.life.alive() {
 			return current.life
@@ -50,13 +50,13 @@ func childPID(t *testing.T, sb *Sandbox) int {
 	d := dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if current, isReady := d.child.(ready); isReady {
+	if current, isReady := d.child.(_Ready); isReady {
 		return current.life.cmd.Process.Pid
 	}
 	return 0
 }
 
-func expectDeath(t *testing.T, process *life) {
+func expectDeath(t *testing.T, process *_Life) {
 	t.Helper()
 	select {
 	case <-process.ended:
@@ -120,7 +120,7 @@ config:
   nested: "${ ({a: undefined, b: [undefined, 1.5, 'x', true, null], c: {d: -0}}) }"
   text: "n=${{ 1e21 }} ${{ [1, {z: 2, a: 1}] }}"
 `
-	agreement{text: text, vars: map[string]any{"name": "abc"}, path: []string{"config"}}.eval(t, intoAny).expectAccepted(t)
+	_Agreement{text: text, vars: map[string]any{"name": "abc"}, path: []string{"config"}}.eval(t, intoAny).expectAccepted(t)
 }
 
 func TestAnInfiniteLoopEndsWithItsContext(t *testing.T) {

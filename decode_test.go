@@ -10,13 +10,13 @@ import (
 
 func TestTargetsDecodeThroughEncodingJSON(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type limits struct {
+		type _Limits struct {
 			Retries *int `json:"retries"`
 		}
-		type service struct {
+		type _Service struct {
 			Name   string            `json:"name"`
 			Labels map[string]string `json:"labels"`
-			Limits limits            `json:"limits"`
+			Limits _Limits           `json:"limits"`
 			Extra  json.RawMessage   `json:"extra"`
 			Hidden string            `json:"-"`
 		}
@@ -28,12 +28,12 @@ services:
     extra: "${ [1, {two: 2}] }"
     Hidden: nope
 `)
-		got := evalAs[[]service](t, parsed, map[string]any{"prefix": "atlas", "team": "rev", "retries": 3}, "services")
+		got := evalAs[[]_Service](t, parsed, map[string]any{"prefix": "atlas", "team": "rev", "retries": 3}, "services")
 		three := 3
 		expectEqual(t, len(got), 1)
 		expectEqual(t, got[0].Name, "atlas-api")
 		expectEqual(t, got[0].Labels, map[string]string{"team": "rev"})
-		expectEqual(t, got[0].Limits, limits{Retries: &three})
+		expectEqual(t, got[0].Limits, _Limits{Retries: &three})
 		expectEqual(t, string(got[0].Extra), `[1,{"two":2}]`)
 		expectEqual(t, got[0].Hidden, "")
 	})
@@ -41,22 +41,22 @@ services:
 
 func TestMismatchedTypesAreCoercionErrors(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type shape struct {
+		type _Decoded struct {
 			Port int `json:"port"`
 		}
-		var out shape
-		expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, "port: ${'eighty'}\n")), CoercionFailed, "$.port: json: cannot unmarshal string into Go struct field shape.port")
+		var out _Decoded
+		expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, "port: ${'eighty'}\n")), CoercionFailed, "$.port: json: cannot unmarshal string into Go struct field _Decoded.port")
 		var text string
 		expectError(t, resolveInto(t.Context(), &text, mustJaml(t, sb, "v: ${1}\n").At("v")), CoercionFailed, "$.v")
 	})
 }
 
-type selfEmbedding struct {
-	*SelfEmbedding
+type _SelfEmbedding struct {
+	*_SelfEmbedding
 	V int `json:"v"`
 }
 
-type SelfEmbedding = selfEmbedding
+type SelfEmbedding = _SelfEmbedding
 
 func TestRecursiveEmbeddingTerminates(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
@@ -81,9 +81,9 @@ func TestATargetJSONCannotDecodeIntoIsRefused(t *testing.T) {
 	})
 }
 
-type wrappingPort struct{ N int }
+type _WrappingPort struct{ N int }
 
-func (p *wrappingPort) UnmarshalJSON(written []byte) error {
+func (p *_WrappingPort) UnmarshalJSON(written []byte) error {
 	var raw struct {
 		Number int `json:"number"`
 	}
@@ -94,16 +94,16 @@ func (p *wrappingPort) UnmarshalJSON(written []byte) error {
 	return nil
 }
 
-type delegatingPort struct{ N int }
+type _DelegatingPort struct{ N int }
 
-func (p *delegatingPort) UnmarshalJSON(written []byte) error {
+func (p *_DelegatingPort) UnmarshalJSON(written []byte) error {
 	var raw struct {
 		Number int `json:"number"`
 	}
 	return json.Unmarshal(written, &raw)
 }
 
-type portsConfig[P any] struct {
+type _PortsConfig[P any] struct {
 	Name    string `json:"name"`
 	Servers []struct {
 		Host string `json:"host"`
@@ -123,12 +123,12 @@ config:
 
 func TestAnUnmarshalerOffsetIsNeverMappedOntoTheDocument(t *testing.T) {
 	cases := map[string]func() any{
-		"wrapping":   func() any { return new(portsConfig[wrappingPort]) },
-		"delegating": func() any { return new(portsConfig[delegatingPort]) },
+		"wrapping":   func() any { return new(_PortsConfig[_WrappingPort]) },
+		"delegating": func() any { return new(_PortsConfig[_DelegatingPort]) },
 	}
 	for name, newOut := range cases {
 		t.Run(name, func(t *testing.T) {
-			both := agreement{text: portsTemplate, path: []string{"config"}}.eval(t, newOut)
+			both := _Agreement{text: portsTemplate, path: []string{"config"}}.eval(t, newOut)
 			both.expectRefused(t, CoercionFailed, "$.config: ", "json: cannot unmarshal string")
 			for _, err := range []error{both.trusted, both.isolated} {
 				if strings.Contains(err.Error(), "$.config.") {
@@ -147,12 +147,12 @@ type EmbeddedPort struct {
 	Port int `json:"port"`
 }
 
-type embeddingAndMap struct {
+type _EmbeddingAndMap struct {
 	EmbeddedPort
 	Limits map[string]int `json:"limits"`
 }
 
 func TestBlameStillReachesEmbeddedFieldsAndMapValues(t *testing.T) {
-	agreement{text: "port: x\nlimits: {cpu: 1}\n"}.eval(t, func() any { return new(embeddingAndMap) }).expectRefused(t, CoercionFailed, "$.port: json: cannot unmarshal string")
-	agreement{text: "port: 1\nlimits: {cpu: 1, mem: x}\n"}.eval(t, func() any { return new(embeddingAndMap) }).expectRefused(t, CoercionFailed, "$.limits.mem: json: cannot unmarshal string")
+	_Agreement{text: "port: x\nlimits: {cpu: 1}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.port: json: cannot unmarshal string")
+	_Agreement{text: "port: 1\nlimits: {cpu: 1, mem: x}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.limits.mem: json: cannot unmarshal string")
 }

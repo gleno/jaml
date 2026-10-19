@@ -14,50 +14,50 @@ var (
 	errMissing = errors.New("the evaluator holds no such unit")
 )
 
-type wire struct {
+type _Wire struct {
 	writer    chan struct{}
 	requests  *os.File
 	sent      uint64
 	control   sync.Mutex
 	controls  *os.File
 	mu        sync.Mutex
-	residents map[*remoteUnit]*residency
+	residents map[*_RemoteUnit]*_Residency
 }
 
-type residency struct {
-	unit    *remoteUnit
+type _Residency struct {
+	unit    *_RemoteUnit
 	build   uint64
 	settled chan struct{}
-	result  outcome
+	result  _Outcome
 	unbind  func() bool
 }
 
-type switchboard struct {
+type _Switchboard struct {
 	mu      sync.Mutex
-	pending map[uint64]*expectation
+	pending map[uint64]*_Expectation
 }
 
-type expectation struct {
-	op      opcode
-	replies chan reply
+type _Expectation struct {
+	op      _Opcode
+	replies chan _Reply
 }
 
-type call struct {
+type _Call struct {
 	job     uint64
-	replies <-chan reply
+	replies <-chan _Reply
 }
 
-func newWire(requests, controls *os.File) *wire {
-	return &wire{writer: make(chan struct{}, 1), requests: requests, controls: controls, residents: map[*remoteUnit]*residency{}}
+func newWire(requests, controls *os.File) *_Wire {
+	return &_Wire{writer: make(chan struct{}, 1), requests: requests, controls: controls, residents: map[*_RemoteUnit]*_Residency{}}
 }
 
-func settledWith(result outcome) *residency {
+func settledWith(result _Outcome) *_Residency {
 	settled := make(chan struct{})
 	close(settled)
-	return &residency{settled: settled, result: result}
+	return &_Residency{settled: settled, result: result}
 }
 
-func (l *life) reside(u *remoteUnit, early func(outcome)) *residency {
+func (l *_Life) reside(u *_RemoteUnit, early func(_Outcome)) *_Residency {
 	r, mine := l.lodge(u)
 	if mine {
 		l.build(r, early)
@@ -66,27 +66,27 @@ func (l *life) reside(u *remoteUnit, early func(outcome)) *residency {
 	return r
 }
 
-func (l *life) lodge(u *remoteUnit) (*residency, bool) {
+func (l *_Life) lodge(u *_RemoteUnit) (*_Residency, bool) {
 	l.wire.mu.Lock()
 	defer l.wire.mu.Unlock()
 	switch {
 	case l.wire.residents[u] != nil:
 		return l.wire.residents[u], false
 	case u.lifetime.Err() != nil:
-		return settledWith(refused{err: errLifetimeOver}), false
+		return settledWith(_Refused{err: errLifetimeOver}), false
 	case !l.alive():
 		return settledWith(l.lost()), false
 	}
-	r := &residency{unit: u, settled: make(chan struct{})}
+	r := &_Residency{unit: u, settled: make(chan struct{})}
 	l.wire.residents[u] = r
 	r.unbind = context.AfterFunc(u.lifetime, func() { l.evict(r) })
 	return r, true
 }
 
-func (l *life) build(r *residency, early func(outcome)) {
+func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 	race := raceBuild(context.Background(), l.buildTimeout)
 	plan := r.unit.plan
-	asked, err := l.send(race.bound, request{Op: opBuild, Plan: &plan})
+	asked, err := l.send(race.bound, _Request{Op: opBuild, Plan: &plan})
 	if err != nil {
 		race.finish(l.unsent(err))
 		l.settle(r, race.await())
@@ -100,7 +100,7 @@ func (l *life) build(r *residency, early func(outcome)) {
 		select {
 		case incoming := <-asked.replies:
 			if !race.finish(builtFrom(incoming)) && overdue != nil && incoming.Failure == nil {
-				l.tell(request{Op: opForget, Unit: asked.job})
+				l.tell(_Request{Op: opForget, Unit: asked.job})
 			}
 			l.settle(r, race.await())
 			return
@@ -112,7 +112,7 @@ func (l *life) build(r *residency, early func(outcome)) {
 			overdue = nil
 			l.settle(r, race.await())
 			early(race.await())
-			delivered = l.tell(request{Op: opForget, Unit: asked.job})
+			delivered = l.tell(_Request{Op: opForget, Unit: asked.job})
 		case <-delivered:
 			delivered = nil
 			timer := time.NewTimer(cancelGrace)
@@ -125,27 +125,27 @@ func (l *life) build(r *residency, early func(outcome)) {
 	}
 }
 
-func builtFrom(incoming reply) outcome {
+func builtFrom(incoming _Reply) _Outcome {
 	if incoming.Failure != nil {
-		return refused{err: incoming.Failure.rebuild()}
+		return _Refused{err: incoming.Failure.rebuild()}
 	}
-	return answered{}
+	return _Answered{}
 }
 
-func (l *life) settle(r *residency, result outcome) {
+func (l *_Life) settle(r *_Residency, result _Outcome) {
 	select {
 	case <-r.settled:
 		return
 	default:
 	}
-	if _, built := result.(answered); !built {
+	if _, built := result.(_Answered); !built {
 		l.drop(r)
 	}
 	r.result = result
 	close(r.settled)
 }
 
-func (l *life) claim(r *residency, build uint64) {
+func (l *_Life) claim(r *_Residency, build uint64) {
 	l.wire.mu.Lock()
 	resident := l.wire.residents[r.unit] == r
 	if resident {
@@ -153,17 +153,17 @@ func (l *life) claim(r *residency, build uint64) {
 	}
 	l.wire.mu.Unlock()
 	if !resident {
-		l.tell(request{Op: opForget, Unit: build})
+		l.tell(_Request{Op: opForget, Unit: build})
 	}
 }
 
-func (l *life) evict(r *residency) {
+func (l *_Life) evict(r *_Residency) {
 	if build := l.drop(r); build != 0 {
-		l.tell(request{Op: opForget, Unit: build})
+		l.tell(_Request{Op: opForget, Unit: build})
 	}
 }
 
-func (l *life) drop(r *residency) uint64 {
+func (l *_Life) drop(r *_Residency) uint64 {
 	l.wire.mu.Lock()
 	defer l.wire.mu.Unlock()
 	if l.wire.residents[r.unit] != r {
@@ -174,7 +174,7 @@ func (l *life) drop(r *residency) uint64 {
 	return r.build
 }
 
-func (w *wire) vacate() {
+func (w *_Wire) vacate() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, r := range w.residents {
@@ -183,8 +183,8 @@ func (w *wire) vacate() {
 	clear(w.residents)
 }
 
-func (l *life) serve(ctx context.Context, unit uint64, asked work) outcome {
-	sent, err := l.send(ctx, request{Op: opServe, Unit: unit, Work: &asked})
+func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
+	sent, err := l.send(ctx, _Request{Op: opServe, Unit: unit, Work: &asked})
 	if err != nil {
 		return l.unsent(err)
 	}
@@ -199,7 +199,7 @@ func (l *life) serve(ctx context.Context, unit uint64, asked work) outcome {
 			return l.lost()
 		case <-stopped:
 			stopped = nil
-			delivered = l.tell(request{Op: opCancel, Job: sent.job})
+			delivered = l.tell(_Request{Op: opCancel, Job: sent.job})
 		case <-delivered:
 			delivered = nil
 			timer := time.NewTimer(cancelGrace)
@@ -212,50 +212,50 @@ func (l *life) serve(ctx context.Context, unit uint64, asked work) outcome {
 	}
 }
 
-func servedFrom(incoming reply) outcome {
+func servedFrom(incoming _Reply) _Outcome {
 	switch {
 	case incoming.Failure != nil:
-		return refused{err: incoming.Failure.rebuild()}
+		return _Refused{err: incoming.Failure.rebuild()}
 	case incoming.Missing:
-		return refused{err: errMissing}
+		return _Refused{err: errMissing}
 	}
-	return answered{data: incoming.Data, skipped: incoming.Skipped}
+	return _Answered{data: incoming.Data, skipped: incoming.Skipped}
 }
 
-func (l *life) unsent(err error) outcome {
+func (l *_Life) unsent(err error) _Outcome {
 	if errors.Is(err, errLost) {
 		return l.lost()
 	}
-	return refused{err: err}
+	return _Refused{err: err}
 }
 
-func (l *life) send(ctx context.Context, outgoing request) (call, error) {
+func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
 	if ctx.Err() != nil {
-		return call{}, cancelled(ctx)
+		return _Call{}, cancelled(ctx)
 	}
 	select {
 	case l.wire.writer <- struct{}{}:
 	case <-ctx.Done():
-		return call{}, cancelled(ctx)
+		return _Call{}, cancelled(ctx)
 	case <-l.ended:
-		return call{}, errLost
+		return _Call{}, errLost
 	}
 	defer func() { <-l.wire.writer }()
 	outgoing.Job = l.wire.sent + 1
 	encoded, err := wireJSON(outgoing)
 	if err != nil {
-		return call{}, fmt.Errorf("writing the evaluator's request: %w", err)
+		return _Call{}, fmt.Errorf("writing the evaluator's request: %w", err)
 	}
 	l.wire.sent = outgoing.Job
 	replies := l.board.expect(outgoing.Job, outgoing.Op)
 	if _, err := l.wire.requests.Write(append(encoded, '\n')); err != nil {
 		l.end()
-		return call{}, errLost
+		return _Call{}, errLost
 	}
-	return call{job: outgoing.Job, replies: replies}, nil
+	return _Call{job: outgoing.Job, replies: replies}, nil
 }
 
-func (l *life) tell(outgoing request) <-chan struct{} {
+func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 	delivered := make(chan struct{})
 	go func() {
 		encoded, err := wireJSON(outgoing)
@@ -273,9 +273,9 @@ func (l *life) tell(outgoing request) <-chan struct{} {
 	return delivered
 }
 
-func (l *life) listen(replies *replyStream) {
+func (l *_Life) listen(replies *_ReplyStream) {
 	for {
-		var incoming reply
+		var incoming _Reply
 		err := replies.read(&incoming)
 		if errors.Is(err, errHungUp) {
 			return
@@ -290,15 +290,15 @@ func (l *life) listen(replies *replyStream) {
 	}
 }
 
-func (b *switchboard) expect(job uint64, op opcode) <-chan reply {
-	replies := make(chan reply, 1)
+func (b *_Switchboard) expect(job uint64, op _Opcode) <-chan _Reply {
+	replies := make(chan _Reply, 1)
 	b.mu.Lock()
-	b.pending[job] = &expectation{op: op, replies: replies}
+	b.pending[job] = &_Expectation{op: op, replies: replies}
 	b.mu.Unlock()
 	return replies
 }
 
-func (b *switchboard) deliver(incoming reply) error {
+func (b *_Switchboard) deliver(incoming _Reply) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	waiting := b.pending[incoming.Job]

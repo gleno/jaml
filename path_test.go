@@ -59,7 +59,7 @@ func TestAMissingPathIsAnErrorInBothKinds(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			agreement{text: nestedTemplate, path: c.path}.eval(t, intoAny).expectRefused(t, MissingPath, c.fragments...)
+			_Agreement{text: nestedTemplate, path: c.path}.eval(t, intoAny).expectRefused(t, MissingPath, c.fragments...)
 		})
 	}
 }

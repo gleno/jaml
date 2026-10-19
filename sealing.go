@@ -7,19 +7,19 @@ import (
 	"strconv"
 )
 
-func (f frames) open(job uint64) *_WireWriter {
+func (f _Frames) open(job uint64) *_WireWriter {
 	return &_WireWriter{written: strconv.AppendUint([]byte(`{"job":`), job, 10), limit: f.limit}
 }
 
-func (f frames) built(job uint64) []byte {
+func (f _Frames) built(job uint64) []byte {
 	return fmt.Appendf(nil, `{"job":%d,"built":true}`, job)
 }
 
-func (f frames) missing(job uint64) []byte {
+func (f _Frames) missing(job uint64) []byte {
 	return fmt.Appendf(nil, `{"job":%d,"missing":true}`, job)
 }
 
-func (f frames) answer(job uint64, result _Rendered) []byte {
+func (f _Frames) answer(job uint64, result _Rendered) []byte {
 	at := result.at.String()
 	sealed := f.open(job)
 	err := sealed.answer(result)
@@ -32,7 +32,7 @@ func (f frames) answer(job uint64, result _Rendered) []byte {
 	return sealed.written
 }
 
-func (f frames) failure(job uint64, at string, err error) []byte {
+func (f _Frames) failure(job uint64, at string, err error) []byte {
 	sealed := f.open(job)
 	if sealed.failure(err) != nil {
 		return f.refusal(job, at)
@@ -40,8 +40,8 @@ func (f frames) failure(job uint64, at string, err error) []byte {
 	return sealed.written
 }
 
-func (f frames) refusal(job uint64, at string) []byte {
-	var unbounded = frames{limit: math.MaxInt}
+func (f _Frames) refusal(job uint64, at string) []byte {
+	var unbounded = _Frames{limit: math.MaxInt}
 	return unbounded.failure(job, at, located(at, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
 }
 

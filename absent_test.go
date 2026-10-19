@@ -13,13 +13,13 @@ func TestUndefinedIsStrictAndNullLooseByDefault(t *testing.T) {
 
 func TestLooseAbsenceDecodesAsNull(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type shape struct {
+		type _Decoded struct {
 			Name  string   `json:"name"`
 			Count *int     `json:"count"`
 			Tags  []string `json:"tags"`
 		}
 		document := mustJaml(t, sb, "name: ${undefined}\ncount: ${null}\ntags: ${null}\n", WithUndefinedCoercion(Loose))
-		expectEqual(t, mustResolve[shape](t, t.Context(), document), shape{})
+		expectEqual(t, mustResolve[_Decoded](t, t.Context(), document), _Decoded{})
 	})
 }
 

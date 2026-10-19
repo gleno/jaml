@@ -14,7 +14,7 @@ doubled: ${ n * 2 }
 items: "${ Array.from({length: n % 5}, (_, i) => who + i) }"
 leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 `)
-		type shape struct {
+		type _Decoded struct {
 			Name    string   `json:"name"`
 			Doubled int      `json:"doubled"`
 			Items   []string `json:"items"`
@@ -27,7 +27,7 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 				for round := range 20 {
 					n := worker*100 + round
 					who := fmt.Sprintf("w%d", worker)
-					var out shape
+					var out _Decoded
 					if err := resolveInto(valued(t.Context(), map[string]any{"who": who, "n": n}), &out, document); err != nil {
 						failures <- err
 						return
@@ -36,7 +36,7 @@ leak: ${ globalThis.seen = (globalThis.seen || 0) + 1 }
 					for i := range items {
 						items[i] = fmt.Sprintf("%s%d", who, i)
 					}
-					want := shape{Name: who, Doubled: n * 2, Items: items, Leak: 1}
+					want := _Decoded{Name: who, Doubled: n * 2, Items: items, Leak: 1}
 					if fmt.Sprint(out) != fmt.Sprint(want) {
 						failures <- fmt.Errorf("got %+v, want %+v", out, want)
 						return

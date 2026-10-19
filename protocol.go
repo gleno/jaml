@@ -22,30 +22,30 @@ const (
 	controlFD            = 5
 )
 
-type hello struct {
+type _Hello struct {
 	Magic   string `json:"magic"`
 	Version int    `json:"version"`
 	Nonce   string `json:"nonce"`
 }
 
-type opcode string
+type _Opcode string
 
 const (
-	opBuild  opcode = "build"
-	opServe  opcode = "serve"
-	opCancel opcode = "cancel"
-	opForget opcode = "forget"
+	opBuild  _Opcode = "build"
+	opServe  _Opcode = "serve"
+	opCancel _Opcode = "cancel"
+	opForget _Opcode = "forget"
 )
 
-type request struct {
-	Op   opcode     `json:"op"`
-	Job  uint64     `json:"job,omitempty"`
-	Unit uint64     `json:"unit,omitempty"`
-	Plan *blueprint `json:"plan,omitempty"`
-	Work *work      `json:"work,omitempty"`
+type _Request struct {
+	Op   _Opcode     `json:"op"`
+	Job  uint64      `json:"job,omitempty"`
+	Unit uint64      `json:"unit,omitempty"`
+	Plan *_Blueprint `json:"plan,omitempty"`
+	Work *_Work      `json:"work,omitempty"`
 }
 
-type blueprint struct {
+type _Blueprint struct {
 	Written   string   `json:"written"`
 	Null      Coercion `json:"null"`
 	Undefined Coercion `json:"undefined"`
@@ -54,30 +54,30 @@ type blueprint struct {
 	Sigil     string   `json:"sigil,omitempty"`
 }
 
-type work struct {
-	Path    []string    `json:"path,omitempty"`
-	Values  boundValues `json:"values,omitempty"`
-	Scripts []string    `json:"scripts,omitempty"`
-	Args    []datum     `json:"args,omitempty"`
-	Skips   *_Shape     `json:"skips,omitempty"`
-	Pinned  pinned      `json:"pinned"`
+type _Work struct {
+	Path    []string     `json:"path,omitempty"`
+	Values  _BoundValues `json:"values,omitempty"`
+	Scripts []string     `json:"scripts,omitempty"`
+	Args    []_Datum     `json:"args,omitempty"`
+	Skips   *_Shape      `json:"skips,omitempty"`
+	Pinned  _Pinned      `json:"pinned"`
 }
 
-type reply struct {
+type _Reply struct {
 	Job     uint64          `json:"job"`
 	Built   bool            `json:"built,omitempty"`
 	Data    json.RawMessage `json:"data,omitempty"`
 	Skipped [][]string      `json:"skipped,omitempty"`
-	Failure *failure        `json:"failure,omitempty"`
+	Failure *_Failure       `json:"failure,omitempty"`
 	Missing bool            `json:"missing,omitempty"`
 }
 
-type frames struct {
+type _Frames struct {
 	limit int
 }
 
-func framesFor(limit memoryLimit) frames {
-	return frames{limit: int(min(int64(limit)/4, math.MaxInt))}
+func framesFor(limit _MemoryLimit) _Frames {
+	return _Frames{limit: int(min(int64(limit)/4, math.MaxInt))}
 }
 
 func wireJSON(value any) ([]byte, error) {
@@ -90,28 +90,28 @@ func wireJSON(value any) ([]byte, error) {
 	return bytes.TrimSuffix(encoded.Bytes(), []byte("\n")), nil
 }
 
-func (f frames) oversized() error {
+func (f _Frames) oversized() error {
 	return fmt.Errorf("the evaluator sent a reply larger than %d bytes", f.limit)
 }
 
-type failure struct {
-	Kind    string        `json:"kind"`
-	At      string        `json:"at,omitempty"`
-	Message string        `json:"message"`
-	Thrown  *thrownOnWire `json:"thrown,omitempty"`
+type _Failure struct {
+	Kind    string         `json:"kind"`
+	At      string         `json:"at,omitempty"`
+	Message string         `json:"message"`
+	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
 }
 
-type thrownOnWire struct {
+type _ThrownOnWire struct {
 	Message string          `json:"message"`
 	Value   json.RawMessage `json:"value"`
 }
 
-type failureKind struct {
+type _FailureKind struct {
 	name     string
 	sentinel error
 }
 
-var failureKinds = []failureKind{
+var failureKinds = []_FailureKind{
 	{"InvalidExpression", InvalidExpression},
 	{"InvalidTarget", InvalidTarget},
 	{"MissingPath", MissingPath},
@@ -121,7 +121,7 @@ var failureKinds = []failureKind{
 	{"Unsupported", Unsupported},
 }
 
-func (b blueprint) build(ctx context.Context) (built servable, err error) {
+func (b _Blueprint) build(ctx context.Context) (built _Servable, err error) {
 	defer func() {
 		if failure := buildPanic(recover()); failure != nil {
 			err = fail(InvalidExpression, "%w", failure)
@@ -140,7 +140,7 @@ func (b blueprint) build(ctx context.Context) (built servable, err error) {
 	return makeDocument(ctx, b.Written, configured)
 }
 
-func (b blueprint) options() []Option {
+func (b _Blueprint) options() []Option {
 	var options = []Option{WithNullCoercion(b.Null), WithUndefinedCoercion(b.Undefined)}
 	if b.Function {
 		options = append(options, AsFunction())
@@ -159,12 +159,12 @@ func buildPanic(recovered any) error {
 	return errors.New(excerpt(failure.Error(), thrownExcerptLength))
 }
 
-func describeFailure(err error) failure {
-	failed, isOwn := err.(expressionError)
+func describeFailure(err error) _Failure {
+	failed, isOwn := err.(_ExpressionError)
 	if !isOwn {
-		failed = expressionError{kind: EvaluationFailed, cause: err}
+		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
 	}
-	described := failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error()}
+	described := _Failure{Kind: "EvaluationFailed", At: failed.at, Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
@@ -173,7 +173,7 @@ func describeFailure(err error) failure {
 	return described
 }
 
-func (r reply) outcomes() int {
+func (r _Reply) outcomes() int {
 	count := 0
 	for _, present := range [...]bool{r.Built, len(r.Data) != 0, r.Failure != nil, r.Missing} {
 		if present {
@@ -183,7 +183,7 @@ func (r reply) outcomes() int {
 	return count
 }
 
-func (r reply) fits(op opcode) error {
+func (r _Reply) fits(op _Opcode) error {
 	switch {
 	case r.outcomes() > 1:
 		return errors.New("the evaluator answered with more than one outcome")
@@ -201,7 +201,7 @@ func (r reply) fits(op opcode) error {
 	return nil
 }
 
-func (f failure) kind() error {
+func (f _Failure) kind() error {
 	for _, kind := range failureKinds {
 		if kind.name == f.Kind {
 			return kind.sentinel
@@ -210,31 +210,31 @@ func (f failure) kind() error {
 	return nil
 }
 
-func (f failure) rebuild() error {
+func (f _Failure) rebuild() error {
 	kind := f.kind()
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return expressionError{kind: kind, at: f.At, cause: carriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+	return _ExpressionError{kind: kind, at: f.At, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
 }
 
-func (t *thrownOnWire) rebuild() *Thrown {
+func (t *_ThrownOnWire) rebuild() *Thrown {
 	if t == nil {
 		return nil
 	}
 	return newThrown(t.Message, t.Value)
 }
 
-type carriedCause struct {
+type _CarriedCause struct {
 	message string
 	thrown  *Thrown
 }
 
-func (c carriedCause) Error() string {
+func (c _CarriedCause) Error() string {
 	return c.message
 }
 
-func (c carriedCause) Unwrap() error {
+func (c _CarriedCause) Unwrap() error {
 	if c.thrown == nil {
 		return nil
 	}

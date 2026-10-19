@@ -24,11 +24,11 @@ type KeyPointed struct {
 	A int `json:"a"`
 }
 
-type keyHidden struct {
+type _KeyHidden struct {
 	H int
 }
 
-type keyTricky struct {
+type _KeyTricky struct {
 	X1         int `json:"x"`
 	X2         int `json:"X"`
 	Name       int
@@ -43,10 +43,10 @@ type keyTricky struct {
 	KeyEmbedded
 	KeyOther
 	*KeyPointed
-	keyHidden
+	_KeyHidden
 }
 
-type keyDeep struct {
+type _KeyDeep struct {
 	Outer int `json:"c"`
 	KeyOther
 }
@@ -88,7 +88,7 @@ func TestKeysResolveToTheFieldEncodingJSONPicks(t *testing.T) {
 		"Inner", "inner", "we ird!", "WE IRD!", "Kelvin", "kelvin", "Kelvin", "missing", "",
 	}
 	picked := 0
-	for _, target := range []reflect.Type{reflect.TypeFor[keyTricky](), reflect.TypeFor[keyDeep]()} {
+	for _, target := range []reflect.Type{reflect.TypeFor[_KeyTricky](), reflect.TypeFor[_KeyDeep]()} {
 		for _, key := range keys {
 			want := jsonPicks(target, key)
 			if want != nil {
@@ -110,11 +110,11 @@ func TestKeysResolveToTheFieldEncodingJSONPicks(t *testing.T) {
 
 func TestAnExactKeyWinsOverAFoldedExpressionField(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type target struct {
+		type _Target struct {
 			Later *Expression `json:"x"`
 			Now   any         `json:"X"`
 		}
-		got := mustResolve[target](t, t.Context(), mustJaml(t, sb, "x: ${ 1 }\nX: ${ 2 }\n"))
+		got := mustResolve[_Target](t, t.Context(), mustJaml(t, sb, "x: ${ 1 }\nX: ${ 2 }\n"))
 		expectEqual(t, got.Now, any(float64(2)))
 		expectEqual(t, mustResolve[int](t, t.Context(), got.Later), 1)
 	})
@@ -122,16 +122,16 @@ func TestAnExactKeyWinsOverAFoldedExpressionField(t *testing.T) {
 
 func TestTheLastKeyInTheDocumentWins(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type plain struct {
+		type _Plain struct {
 			Run any
 		}
-		type held struct {
+		type _Held struct {
 			Run *Expression
 		}
 		for text, want := range map[string]float64{"run: ${1}\nRun: ${2}\n": 2, "Run: ${2}\nrun: ${1}\n": 1} {
 			document := mustJaml(t, sb, text)
-			expectEqual(t, mustResolve[plain](t, t.Context(), document).Run, any(want))
-			expectEqual(t, mustResolve[float64](t, t.Context(), mustResolve[held](t, t.Context(), document).Run), want)
+			expectEqual(t, mustResolve[_Plain](t, t.Context(), document).Run, any(want))
+			expectEqual(t, mustResolve[float64](t, t.Context(), mustResolve[_Held](t, t.Context(), document).Run), want)
 		}
 	})
 }

@@ -53,19 +53,19 @@ func TestABuildOverrunningItsTimeoutFailsAlikeInBothKinds(t *testing.T) {
 	}, WithBuildTimeout(30*time.Millisecond))
 }
 
-type engineFunc func(ctx context.Context, plan blueprint) (unit, error)
+type _EngineFunc func(ctx context.Context, plan _Blueprint) (_Unit, error)
 
-func (f engineFunc) build(ctx context.Context, plan blueprint) (unit, error) { return f(ctx, plan) }
+func (f _EngineFunc) build(ctx context.Context, plan _Blueprint) (_Unit, error) { return f(ctx, plan) }
 
-type idleUnit struct{}
+type _IdleUnit struct{}
 
-func (idleUnit) serve(context.Context, work) outcome { return answered{data: []byte("1")} }
+func (_IdleUnit) serve(context.Context, _Work) _Outcome { return _Answered{data: []byte("1")} }
 
 func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	sb := &Sandbox{lifetime: t.Context(), engine: engineFunc(func(context.Context, blueprint) (unit, error) {
+	sb := &Sandbox{lifetime: t.Context(), engine: _EngineFunc(func(context.Context, _Blueprint) (_Unit, error) {
 		cancel()
-		return idleUnit{}, nil
+		return _IdleUnit{}, nil
 	})}
 	_, err := sb.MakeExpressionFromJaml(ctx, "v: 1\n")
 	expectError(t, err, EvaluationFailed, "building: cancelled: context canceled")
@@ -74,10 +74,10 @@ func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 func TestABuildThatOutlivesItsSandboxIsClosed(t *testing.T) {
 	lifetime, end := context.WithCancel(t.Context())
 	ctx, cancel := context.WithCancel(t.Context())
-	sb := &Sandbox{lifetime: lifetime, engine: engineFunc(func(context.Context, blueprint) (unit, error) {
+	sb := &Sandbox{lifetime: lifetime, engine: _EngineFunc(func(context.Context, _Blueprint) (_Unit, error) {
 		cancel()
 		end()
-		return idleUnit{}, nil
+		return _IdleUnit{}, nil
 	})}
 	_, err := sb.MakeExpression(ctx, "1")
 	expectError(t, err, Closed)
@@ -86,19 +86,19 @@ func TestABuildThatOutlivesItsSandboxIsClosed(t *testing.T) {
 func TestABuildRaceKeepsTheFirstVerdict(t *testing.T) {
 	parent, expire := context.WithCancel(t.Context())
 	finishedFirst := raceBuild(parent, time.Hour)
-	if !finishedFirst.finish(answered{}) {
+	if !finishedFirst.finish(_Answered{}) {
 		t.Fatal("a build that finished before its deadline lost the race")
 	}
 	expire()
-	if _, built := finishedFirst.await().(answered); !built {
+	if _, built := finishedFirst.await().(_Answered); !built {
 		t.Fatalf("the deadline overturned a recorded completion: %#v", finishedFirst.await())
 	}
 	expiredFirst := raceBuild(t.Context(), time.Nanosecond)
 	<-expiredFirst.done()
-	if expiredFirst.finish(answered{}) {
+	if expiredFirst.finish(_Answered{}) {
 		t.Fatal("a completion overturned a recorded deadline")
 	}
-	failed, isRefused := expiredFirst.await().(refused)
+	failed, isRefused := expiredFirst.await().(_Refused)
 	if !isRefused {
 		t.Fatalf("an expired build was not refused: %#v", expiredFirst.await())
 	}
@@ -110,9 +110,9 @@ func TestABuildRaceRecordsExactlyOneVerdict(t *testing.T) {
 		race := raceBuild(t.Context(), time.Microsecond)
 		var won bool
 		var finishing sync.WaitGroup
-		finishing.Go(func() { won = race.finish(answered{}) })
+		finishing.Go(func() { won = race.finish(_Answered{}) })
 		finishing.Wait()
-		_, built := race.await().(answered)
+		_, built := race.await().(_Answered)
 		if built != won {
 			t.Fatalf("the race recorded %#v while finish reported winning=%v", race.await(), won)
 		}

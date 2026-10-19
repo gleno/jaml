@@ -6,50 +6,50 @@ import (
 	"strings"
 )
 
-type dataPath struct {
-	parent *dataPath
+type _DataPath struct {
+	parent *_DataPath
 	key    string
 	index  int
 	keyed  bool
 	levels int
 }
 
-func (p *dataPath) atKey(key string) *dataPath {
-	return &dataPath{parent: p, key: key, keyed: true, levels: p.depth() + 1}
+func (p *_DataPath) atKey(key string) *_DataPath {
+	return &_DataPath{parent: p, key: key, keyed: true, levels: p.depth() + 1}
 }
 
-func (p *dataPath) atIndex(index int) *dataPath {
-	return &dataPath{parent: p, index: index, levels: p.depth() + 1}
+func (p *_DataPath) atIndex(index int) *_DataPath {
+	return &_DataPath{parent: p, index: index, levels: p.depth() + 1}
 }
 
-func selectedPath(path []string) *dataPath {
-	var selected *dataPath
+func selectedPath(path []string) *_DataPath {
+	var selected *_DataPath
 	for _, step := range path {
 		selected = selected.atStep(step)
 	}
 	return selected
 }
 
-func (p *dataPath) atStep(step string) *dataPath {
+func (p *_DataPath) atStep(step string) *_DataPath {
 	if index, err := strconv.Atoi(step); err == nil && index >= 0 && strconv.Itoa(index) == step {
 		return p.atIndex(index)
 	}
 	return p.atKey(step)
 }
 
-func (p *dataPath) depth() int {
+func (p *_DataPath) depth() int {
 	if p == nil {
 		return 0
 	}
 	return p.levels
 }
 
-func (p *dataPath) String() string {
+func (p *_DataPath) String() string {
 	return p.spelledFrom("$")
 }
 
-func (p *dataPath) spelledFrom(root string) string {
-	var steps []*dataPath
+func (p *_DataPath) spelledFrom(root string) string {
+	var steps []*_DataPath
 	for step := p; step != nil; step = step.parent {
 		steps = append(steps, step)
 	}

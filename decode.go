@@ -32,7 +32,7 @@ func holdsKind(token json.Token, kind string) bool {
 	return false
 }
 
-func namesField(found *dataPath, field string) bool {
+func namesField(found *_DataPath, field string) bool {
 	if field == "" {
 		return true
 	}
@@ -45,18 +45,18 @@ func namesField(found *dataPath, field string) bool {
 	return false
 }
 
-type jsonFrame struct {
-	at        *dataPath
+type _JsonFrame struct {
+	at        *_DataPath
 	object    bool
 	key       string
 	expectKey bool
 	index     int
 }
 
-func mismatchedValue(encoded []byte, offset int64) (*dataPath, json.Token, bool) {
-	var root *dataPath
+func mismatchedValue(encoded []byte, offset int64) (*_DataPath, json.Token, bool) {
+	var root *_DataPath
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	var open []*jsonFrame
+	var open []*_JsonFrame
 	for {
 		token, err := decoder.Token()
 		if err != nil {
@@ -85,7 +85,7 @@ func mismatchedValue(encoded []byte, offset int64) (*dataPath, json.Token, bool)
 			return valueAt, token, true
 		}
 		if isDelim {
-			open = append(open, &jsonFrame{at: valueAt, object: delim == '{', expectKey: true})
+			open = append(open, &_JsonFrame{at: valueAt, object: delim == '{', expectKey: true})
 		}
 	}
 }

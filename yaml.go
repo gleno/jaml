@@ -41,8 +41,8 @@ func parseYAML(ctx context.Context, source string) (any, error) {
 	if document.Kind == 0 || len(document.Content) == 0 {
 		return nil, nil
 	}
-	reader := &yamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
-	return reader.data(document.Content[0], dataAt{})
+	reader := &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
+	return reader.data(document.Content[0], _DataAt{})
 }
 
 func readOneDocument(source string) (*yaml.Node, error) {
@@ -74,31 +74,31 @@ func isEmptyDocument(document *yaml.Node) bool {
 	return content.Kind == yaml.ScalarNode && content.Style == 0 && content.Value == ""
 }
 
-type dataAt struct {
-	path    *dataPath
+type _DataAt struct {
+	path    *_DataPath
 	aliased bool
 }
 
-func (a dataAt) atKey(key string) dataAt {
-	return dataAt{path: a.path.atKey(key), aliased: a.aliased}
+func (a _DataAt) atKey(key string) _DataAt {
+	return _DataAt{path: a.path.atKey(key), aliased: a.aliased}
 }
 
-func (a dataAt) atIndex(index int) dataAt {
-	return dataAt{path: a.path.atIndex(index), aliased: a.aliased}
+func (a _DataAt) atIndex(index int) _DataAt {
+	return _DataAt{path: a.path.atIndex(index), aliased: a.aliased}
 }
 
-type yamlReader struct {
+type _YamlReader struct {
 	ctx       context.Context
 	expanding map[*yaml.Node]bool
-	budget    aliasBudget
+	budget    _AliasBudget
 }
 
-type aliasBudget struct {
+type _AliasBudget struct {
 	decoded int
 	aliased int
 }
 
-func (b *aliasBudget) spend(aliased bool) error {
+func (b *_AliasBudget) spend(aliased bool) error {
 	b.decoded++
 	if !aliased {
 		return nil
@@ -124,7 +124,7 @@ func allowedAliasRatio(decoded int) float64 {
 	return generousAliasRatio - (generousAliasRatio-strictAliasRatio)*progress
 }
 
-func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
+func (r *_YamlReader) data(node *yaml.Node, at _DataAt) (any, error) {
 	if r.ctx.Err() != nil {
 		return nil, cancelled(r.ctx)
 	}
@@ -153,7 +153,7 @@ func (r *yamlReader) data(node *yaml.Node, at dataAt) (any, error) {
 	return nil, refuse(at.path, fmt.Sprintf("line %d holds a YAML node of unknown kind %d", node.Line, node.Kind))
 }
 
-func (r *yamlReader) alias(node *yaml.Node, at dataAt) (any, error) {
+func (r *_YamlReader) alias(node *yaml.Node, at _DataAt) (any, error) {
 	if r.expanding[node.Alias] {
 		return nil, refuse(at.path, fmt.Sprintf("alias *%s refers to a node that contains it", node.Value))
 	}
@@ -161,7 +161,7 @@ func (r *yamlReader) alias(node *yaml.Node, at dataAt) (any, error) {
 	return r.data(node.Alias, at)
 }
 
-func (r *yamlReader) sequence(node *yaml.Node, at dataAt) ([]any, error) {
+func (r *_YamlReader) sequence(node *yaml.Node, at _DataAt) ([]any, error) {
 	data := make([]any, len(node.Content))
 	for index, item := range node.Content {
 		converted, err := r.data(item, at.atIndex(index))
@@ -186,7 +186,7 @@ func (m *_Mapping) with(key string, value any) {
 	m.values[key] = value
 }
 
-func (r *yamlReader) mapping(node *yaml.Node, at dataAt) (*_Mapping, error) {
+func (r *_YamlReader) mapping(node *yaml.Node, at _DataAt) (*_Mapping, error) {
 	var own = make(map[string]any, len(node.Content)/2)
 	lines := make(map[string]int, len(node.Content)/2)
 	var written []any
@@ -233,7 +233,7 @@ func (r *yamlReader) mapping(node *yaml.Node, at dataAt) (*_Mapping, error) {
 	return data, nil
 }
 
-func (r *yamlReader) mergeSources(node *yaml.Node, at dataAt) ([]*_Mapping, error) {
+func (r *_YamlReader) mergeSources(node *yaml.Node, at _DataAt) ([]*_Mapping, error) {
 	items := []*yaml.Node{node}
 	if node.Kind == yaml.SequenceNode {
 		items = node.Content
@@ -266,7 +266,7 @@ func isMergeKey(node *yaml.Node) bool {
 	return node.Style == 0 || node.Style == yaml.TaggedStyle && node.Tag == "!!merge"
 }
 
-func mappingKey(node *yaml.Node, at *dataPath) (string, error) {
+func mappingKey(node *yaml.Node, at *_DataPath) (string, error) {
 	if isMergeKey(node) {
 		return node.Value, nil
 	}
@@ -296,7 +296,7 @@ func describeScalar(value any) string {
 	}
 }
 
-func resolveScalar(node *yaml.Node, at *dataPath) (any, error) {
+func resolveScalar(node *yaml.Node, at *_DataPath) (any, error) {
 	value, err := scalarValue(node)
 	if err != nil {
 		return nil, refuse(at, err.Error())
@@ -410,31 +410,31 @@ func notFinite(written string) error {
 	return fmt.Errorf("%s is not a finite number, which JSON cannot carry", written)
 }
 
-type numeral struct {
+type _Numeral struct {
 	written string
 	digits  string
 }
 
-func readNumeral(written string) (numeral, error) {
+func readNumeral(written string) (_Numeral, error) {
 	if !strings.Contains(written, "_") || strings.HasPrefix(strings.TrimLeft(written, "+-"), "_") {
-		return numeral{written: written, digits: written}, nil
+		return _Numeral{written: written, digits: written}, nil
 	}
-	number := numeral{written: written, digits: strings.ReplaceAll(written, "_", "")}
+	number := _Numeral{written: written, digits: strings.ReplaceAll(written, "_", "")}
 	if (number.isInteger() || number.isDecimal()) && !number.underscoresSeparateDigits() {
-		return numeral{}, fmt.Errorf("%s has an underscore that does not sit between two digits", shown(written))
+		return _Numeral{}, fmt.Errorf("%s has an underscore that does not sit between two digits", shown(written))
 	}
 	return number, nil
 }
 
-func (n numeral) isInteger() bool {
+func (n _Numeral) isInteger() bool {
 	return integerShape.MatchString(n.digits)
 }
 
-func (n numeral) isDecimal() bool {
+func (n _Numeral) isDecimal() bool {
 	return decimalShape.MatchString(n.digits)
 }
 
-func (n numeral) underscoresSeparateDigits() bool {
+func (n _Numeral) underscoresSeparateDigits() bool {
 	digits := decimalDigits
 	if strings.HasPrefix(strings.TrimLeft(n.digits, "+-"), "0x") {
 		digits = hexDigits
@@ -455,7 +455,7 @@ func (n numeral) underscoresSeparateDigits() bool {
 	return true
 }
 
-func (n numeral) integer() (any, error) {
+func (n _Numeral) integer() (any, error) {
 	number, err := strconv.ParseInt(n.digits, 0, 64)
 	switch {
 	case err == nil:
@@ -467,7 +467,7 @@ func (n numeral) integer() (any, error) {
 	}
 }
 
-func (n numeral) float() (any, error) {
+func (n _Numeral) float() (any, error) {
 	number, err := strconv.ParseFloat(n.digits, 64)
 	if errors.Is(err, strconv.ErrRange) && math.IsInf(number, 0) {
 		return nil, fmt.Errorf("%s is out of the range of a 64-bit float; quote it to keep it as text", shown(n.written))
@@ -478,6 +478,6 @@ func (n numeral) float() (any, error) {
 	return number, nil
 }
 
-func refuse(at *dataPath, message string) error {
+func refuse(at *_DataPath, message string) error {
 	return fail(InvalidExpression, "%s", message).within(at.String())
 }

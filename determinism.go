@@ -7,35 +7,35 @@ import (
 	"time"
 )
 
-type fixedClockKey struct{}
+type _FixedClockKey struct{}
 
-type randomSeedKey struct{}
+type _RandomSeedKey struct{}
 
 const seedStream = 0x6a616d6c
 
-type pinned struct {
+type _Pinned struct {
 	Millis int64  `json:"clock"`
 	Seed   uint64 `json:"seed"`
 }
 
 func WithFixedClock(ctx context.Context, time time.Time) context.Context {
-	return context.WithValue(ctx, fixedClockKey{}, time)
+	return context.WithValue(ctx, _FixedClockKey{}, time)
 }
 
 func WithRandomSeed(ctx context.Context, seed uint64) context.Context {
-	return context.WithValue(ctx, randomSeedKey{}, seed)
+	return context.WithValue(ctx, _RandomSeedKey{}, seed)
 }
 
-func pin(ctx context.Context) pinned {
-	clock, fixed := ctx.Value(fixedClockKey{}).(time.Time)
+func pin(ctx context.Context) _Pinned {
+	clock, fixed := ctx.Value(_FixedClockKey{}).(time.Time)
 	if !fixed {
 		clock = time.Now()
 	}
-	seed, seeded := ctx.Value(randomSeedKey{}).(uint64)
+	seed, seeded := ctx.Value(_RandomSeedKey{}).(uint64)
 	if !seeded {
 		seed = rand.Uint64()
 	}
-	return pinned{Millis: unixMillis(clock), Seed: seed}
+	return _Pinned{Millis: unixMillis(clock), Seed: seed}
 }
 
 func unixMillis(at time.Time) int64 {
@@ -48,10 +48,10 @@ func unixMillis(at time.Time) int64 {
 	return at.UnixMilli()
 }
 
-func (p pinned) now() time.Time {
+func (p _Pinned) now() time.Time {
 	return time.UnixMilli(p.Millis)
 }
 
-func (p pinned) random() func() float64 {
+func (p _Pinned) random() func() float64 {
 	return rand.New(rand.NewPCG(p.Seed, seedStream)).Float64
 }

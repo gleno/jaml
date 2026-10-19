@@ -132,13 +132,13 @@ kept: |
   line one ${{name}}
   line two
 `)
-		type shape struct {
+		type _Decoded struct {
 			Literal []int  `json:"literal"`
 			Folded  string `json:"folded"`
 			Kept    string `json:"kept"`
 		}
-		got := mustResolve[shape](t, valued(t.Context(), map[string]any{"name": "ada"}), parsed)
-		expectEqual(t, got, shape{Literal: []int{4, 6}, Folded: "hello ada\n", Kept: "line one ada\nline two\n"})
+		got := mustResolve[_Decoded](t, valued(t.Context(), map[string]any{"name": "ada"}), parsed)
+		expectEqual(t, got, _Decoded{Literal: []int{4, 6}, Folded: "hello ada\n", Kept: "line one ada\nline two\n"})
 	})
 }
 
@@ -151,12 +151,12 @@ servers:
   - name: b-${{names[1]}}
     ports: ${[base + 2]}
 `)
-		type server struct {
+		type _Server struct {
 			Name  string `json:"name"`
 			Ports []int  `json:"ports"`
 		}
-		got := evalAs[[]server](t, parsed, map[string]any{"names": []string{"a", "b"}, "base": 8000}, "servers")
-		expectEqual(t, got, []server{{Name: "a", Ports: []int{80, 8001}}, {Name: "b-b", Ports: []int{8002}}})
+		got := evalAs[[]_Server](t, parsed, map[string]any{"names": []string{"a", "b"}, "base": 8000}, "servers")
+		expectEqual(t, got, []_Server{{Name: "a", Ports: []int{80, 8001}}, {Name: "b-b", Ports: []int{8002}}})
 	})
 }
 
@@ -175,12 +175,12 @@ func TestValuesAreFrozenCopiesAnExpressionCannotMutate(t *testing.T) {
 
 func TestVarsAreMarshalledAsJSON(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type user struct {
+		type _User struct {
 			Name   string `json:"name"`
 			Secret string `json:"-"`
 		}
 		parsed := mustJaml(t, sb, "a: ${ [u.name, u.Secret === undefined] }\n")
-		got := evalAs[[]any](t, parsed, map[string]any{"u": user{Name: "ada", Secret: "x"}}, "a")
+		got := evalAs[[]any](t, parsed, map[string]any{"u": _User{Name: "ada", Secret: "x"}}, "a")
 		expectEqual(t, got, []any{"ada", true})
 	})
 }

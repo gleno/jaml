@@ -5,21 +5,21 @@ import (
 	"time"
 )
 
-type trustedEngine struct {
+type _TrustedEngine struct {
 	gate         chan struct{}
 	buildTimeout time.Duration
 }
 
-type localUnit struct {
-	engine *trustedEngine
-	built  servable
+type _LocalUnit struct {
+	engine *_TrustedEngine
+	built  _Servable
 }
 
-func newTrusted(configured _SandboxSettings) *trustedEngine {
-	return &trustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout}
+func newTrusted(configured _SandboxSettings) *_TrustedEngine {
+	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout}
 }
 
-func (e *trustedEngine) enter(ctx context.Context) error {
+func (e *_TrustedEngine) enter(ctx context.Context) error {
 	select {
 	case e.gate <- struct{}{}:
 		return nil
@@ -28,48 +28,48 @@ func (e *trustedEngine) enter(ctx context.Context) error {
 	}
 }
 
-func (e *trustedEngine) leave() {
+func (e *_TrustedEngine) leave() {
 	<-e.gate
 }
 
-func (e *trustedEngine) build(ctx context.Context, plan blueprint) (unit, error) {
+func (e *_TrustedEngine) build(ctx context.Context, plan _Blueprint) (_Unit, error) {
 	if err := e.enter(ctx); err != nil {
 		return nil, err
 	}
 	race := raceBuild(ctx, e.buildTimeout)
-	var built servable
+	var built _Servable
 	go func() {
 		defer e.leave()
 		made, err := plan.build(race.bound)
 		if err != nil {
-			race.finish(refused{err: err})
+			race.finish(_Refused{err: err})
 			return
 		}
 		built = made
-		race.finish(answered{})
+		race.finish(_Answered{})
 	}()
-	if failed, isRefused := race.await().(refused); isRefused {
+	if failed, isRefused := race.await().(_Refused); isRefused {
 		return nil, failed.err
 	}
-	return &localUnit{engine: e, built: built}, nil
+	return &_LocalUnit{engine: e, built: built}, nil
 }
 
-func (u *localUnit) serve(ctx context.Context, request work) outcome {
+func (u *_LocalUnit) serve(ctx context.Context, request _Work) _Outcome {
 	if err := u.engine.enter(ctx); err != nil {
-		return refused{err: err}
+		return _Refused{err: err}
 	}
 	defer u.engine.leave()
 	run, err := u.built.prepare(request)
 	if err != nil {
-		return refused{err: err}
+		return _Refused{err: err}
 	}
 	result, err := run(ctx)
 	if err != nil {
-		return refused{err: err}
+		return _Refused{err: err}
 	}
 	data, err := encodeResult(result)
 	if err != nil {
-		return refused{err: err}
+		return _Refused{err: err}
 	}
-	return answered{data: data, skipped: result.skipped}
+	return _Answered{data: data, skipped: result.skipped}
 }

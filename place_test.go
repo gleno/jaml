@@ -175,8 +175,8 @@ func TestEveryErrorLeadsWithAPath(t *testing.T) {
 }
 
 func TestAnErrorWithoutAPlaceIsAtTheRoot(t *testing.T) {
-	expectEqual(t, expressionError{kind: EvaluationFailed, cause: errors.New("boom")}.Error(), "$: boom: evaluation failed: expression error")
-	expectEqual(t, failure{Kind: "EvaluationFailed", Message: "boom"}.rebuild().Error(), "$: boom: evaluation failed: expression error")
+	expectEqual(t, _ExpressionError{kind: EvaluationFailed, cause: errors.New("boom")}.Error(), "$: boom: evaluation failed: expression error")
+	expectEqual(t, _Failure{Kind: "EvaluationFailed", Message: "boom"}.rebuild().Error(), "$: boom: evaluation failed: expression error")
 	expectEqual(t, describeFailure(fail(CoercionFailed, "boom").within("$.a")).rebuild().Error(), "$.a: boom: coercion failed: expression error")
 }
 

@@ -23,26 +23,26 @@ func newThrown(message string, encoded json.RawMessage) *Thrown {
 	return &Thrown{Message: message, Value: value}
 }
 
-type thrownPolicy struct{}
+type _ThrownPolicy struct{}
 
-func (thrownPolicy) stranger(part notData) (any, error) {
+func (_ThrownPolicy) stranger(part _NotData) (any, error) {
 	if part.leftOut {
-		return undefined{}, nil
+		return _Undefined{}, nil
 	}
 	return nil, nil
 }
 
-func (thrownPolicy) instance(func() error) (bool, error) {
+func (_ThrownPolicy) instance(func() error) (bool, error) {
 	return true, nil
 }
 
-func (r realm) snapshot(thrown goja.Value) any {
+func (r _Realm) snapshot(thrown goja.Value) any {
 	var taken any
 	var err error
-	if contained := r.contain(func() { taken, err = readData(r, thrown, thrownPolicy{}) }); contained != nil || err != nil {
+	if contained := r.contain(func() { taken, err = readData(r, thrown, _ThrownPolicy{}) }); contained != nil || err != nil {
 		return nil
 	}
-	if _, isUndefined := taken.(undefined); isUndefined {
+	if _, isUndefined := taken.(_Undefined); isUndefined {
 		return nil
 	}
 	return asDecoded(taken)

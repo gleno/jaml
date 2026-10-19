@@ -10,13 +10,13 @@ import (
 
 const answerSize = 16 << 20
 
-func sealedAnswer(t *testing.T, f frames, tree any) []byte {
+func sealedAnswer(t *testing.T, f _Frames, tree any) []byte {
 	t.Helper()
 	return f.answer(1, _Rendered{tree: tree})
 }
 
 func TestAnAnswerIsWrittenOnceIntoItsFrame(t *testing.T) {
-	var f = frames{limit: answerSize + 1<<20}
+	var f = _Frames{limit: answerSize + 1<<20}
 	var answer = strings.Repeat("x", answerSize)
 	var frame []byte
 	spent := allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
@@ -29,7 +29,7 @@ func TestAnAnswerIsWrittenOnceIntoItsFrame(t *testing.T) {
 }
 
 func TestAnAnswerPastTheCapIsRefusedBeforeItIsWritten(t *testing.T) {
-	var f = frames{limit: answerSize / 4}
+	var f = _Frames{limit: answerSize / 4}
 	var answer = strings.Repeat("x", answerSize)
 	var frame []byte
 	spent := allocatedBy(func() { frame = sealedAnswer(t, f, answer) })
@@ -42,7 +42,7 @@ func TestAnAnswerPastTheCapIsRefusedBeforeItIsWritten(t *testing.T) {
 }
 
 func TestAManyPartAnswerPastTheCapStopsNearTheCap(t *testing.T) {
-	var f = frames{limit: answerSize / 4}
+	var f = _Frames{limit: answerSize / 4}
 	var part = strings.Repeat("y", 1<<10)
 	var answer = make([]any, answerSize/len(part))
 	for index := range answer {
@@ -114,13 +114,13 @@ func rawStrings(raws []json.RawMessage) []string {
 }
 
 func TestAnAnswerFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
-	var f = frames{limit: 1 << 20}
+	var f = _Frames{limit: 1 << 20}
 	for _, value := range wireData() {
 		data, err := wireJSON(asWire(value))
 		if err != nil {
 			t.Fatalf("wireJSON(%#v): %v", value, err)
 		}
-		want, err := wireJSON(reply{Job: 42, Data: data, Skipped: [][]string{{"a", "\u2028"}, {}}})
+		want, err := wireJSON(_Reply{Job: 42, Data: data, Skipped: [][]string{{"a", "\u2028"}, {}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestAnAnswerFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 }
 
 func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
-	var f = frames{limit: 1 << 20}
+	var f = _Frames{limit: 1 << 20}
 	for _, value := range wireData() {
 		data, err := wireJSON(asWire(value))
 		if err != nil {
@@ -138,8 +138,8 @@ func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 		thrown := &Thrown{Message: "threw \u2028 something", Value: value}
 		err = fail(EvaluationFailed, "%w", thrown).within("$.v")
 		described := describeFailure(err)
-		described.Thrown = &thrownOnWire{Message: thrown.Message, Value: data}
-		want, marshalErr := wireJSON(reply{Job: 7, Failure: &described})
+		described.Thrown = &_ThrownOnWire{Message: thrown.Message, Value: data}
+		want, marshalErr := wireJSON(_Reply{Job: 7, Failure: &described})
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
@@ -148,14 +148,14 @@ func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 }
 
 func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
-	var f = frames{limit: 1 << 20}
+	var f = _Frames{limit: 1 << 20}
 	for _, sent := range []struct {
 		sealed []byte
-		reply  reply
+		reply  _Reply
 	}{
-		{f.built(3), reply{Job: 3, Built: true}},
-		{f.missing(4), reply{Job: 4, Missing: true}},
-		{f.failure(5, "", errors.New("plain")), reply{Job: 5, Failure: &failure{Kind: "EvaluationFailed", Message: "plain"}}},
+		{f.built(3), _Reply{Job: 3, Built: true}},
+		{f.missing(4), _Reply{Job: 4, Missing: true}},
+		{f.failure(5, "", errors.New("plain")), _Reply{Job: 5, Failure: &_Failure{Kind: "EvaluationFailed", Message: "plain"}}},
 	} {
 		want, err := wireJSON(sent.reply)
 		if err != nil {
@@ -166,7 +166,7 @@ func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
 }
 
 func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
-	var f = frames{limit: 1 << 10}
+	var f = _Frames{limit: 1 << 10}
 	var overhead = len(`{"job":1,"data":"\u2028"}`)
 	var fitting = strings.Repeat("x", f.limit-overhead) + "\u2028"
 	expectEqual(t, len(f.answer(1, _Rendered{tree: fitting})), f.limit)
@@ -177,10 +177,10 @@ func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 }
 
 func TestAThrownValuePastTheCapIsRefusedAndOneUnderIsCarried(t *testing.T) {
-	var f = frames{limit: 1 << 10}
+	var f = _Frames{limit: 1 << 10}
 	for _, size := range []int{900, 1100} {
 		err := fail(EvaluationFailed, "%w", &Thrown{Message: "threw a string", Value: strings.Repeat("x", size)})
-		var sent reply
+		var sent _Reply
 		if decodeErr := json.Unmarshal(f.failure(1, "$", err), &sent); decodeErr != nil {
 			t.Fatal(decodeErr)
 		}

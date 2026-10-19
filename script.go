@@ -156,20 +156,20 @@ func exports(names []string) string {
 	return strings.Join(written, ", ")
 }
 
-func (s *session) run(sources []string, values boundValues) error {
+func (s *_Session) run(sources []string, values _BoundValues) error {
 	for index, source := range sources {
 		compiled, err := scripts.compile(source)
 		if err != nil {
 			return fail(InvalidExpression, "script %d: %w", index+1, err)
 		}
-		if err := s.enter(func(r realm) error { return r.runScript(compiled, values) }); err != nil {
+		if err := s.enter(func(r _Realm) error { return r.runScript(compiled, values) }); err != nil {
 			return fail(EvaluationFailed, "script %d: %w", index+1, err)
 		}
 	}
 	return nil
 }
 
-func (r realm) runScript(compiled _Script, values boundValues) error {
+func (r _Realm) runScript(compiled _Script, values _BoundValues) error {
 	wrapper, err := r.vm.RunProgram(compiled.program)
 	if err != nil {
 		return r.explain(err)

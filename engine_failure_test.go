@@ -150,7 +150,7 @@ func TestAPanickedSessionRunsNothingMore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := openSession(t.Context(), sessionPlan{values: vars})
+	opened, err := openSession(t.Context(), _SessionPlan{values: vars})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,17 +179,17 @@ func TestTheGuardedJSONParseLooksLikeTheBuiltIn(t *testing.T) {
 
 func TestASessionRefusesEveryEntryOnceItsContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	opened, err := openSession(ctx, sessionPlan{})
+	opened, err := openSession(ctx, _SessionPlan{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer opened.close()
-	if err := opened.enter(func(realm) error { return nil }); err != nil {
+	if err := opened.enter(func(_Realm) error { return nil }); err != nil {
 		t.Fatalf("a live session refused: %v", err)
 	}
 	cancel()
 	ran := false
-	err = opened.enter(func(realm) error {
+	err = opened.enter(func(_Realm) error {
 		ran = true
 		return nil
 	})

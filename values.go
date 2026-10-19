@@ -16,20 +16,20 @@ import (
 
 const loneLow = 0xDC00
 
-type datum struct {
+type _Datum struct {
 	encoded json.RawMessage
 }
 
-type boundValues map[string]datum
+type _BoundValues map[string]_Datum
 
 var refusedNames = sync.OnceValue(func() map[string]bool {
 	names := map[string]bool{}
-	opened, err := openSession(context.Background(), sessionPlan{})
+	opened, err := openSession(context.Background(), _SessionPlan{})
 	if err != nil {
 		panic(err)
 	}
 	defer opened.close()
-	err = opened.enter(func(r realm) error {
+	err = opened.enter(func(r _Realm) error {
 		for object := r.vm.GlobalObject(); object != nil; object = object.Prototype() {
 			for _, name := range object.GetOwnPropertyNames() {
 				names[name] = true
@@ -43,8 +43,8 @@ var refusedNames = sync.OnceValue(func() map[string]bool {
 	return names
 })
 
-func admitValues(values map[string]any) (boundValues, error) {
-	var admitted = make(boundValues, len(values))
+func admitValues(values map[string]any) (_BoundValues, error) {
+	var admitted = make(_BoundValues, len(values))
 	for _, name := range slices.Sorted(maps.Keys(values)) {
 		if err := admitName(name); err != nil {
 			return nil, err
@@ -58,8 +58,8 @@ func admitValues(values map[string]any) (boundValues, error) {
 	return admitted, nil
 }
 
-func admitArguments(args []any) ([]datum, error) {
-	admitted := make([]datum, len(args))
+func admitArguments(args []any) ([]_Datum, error) {
+	admitted := make([]_Datum, len(args))
 	for index, arg := range args {
 		value, err := admitDatum(fmt.Sprintf("argument %d", index+1), arg)
 		if err != nil {
@@ -81,15 +81,15 @@ func admitName(name string) error {
 	return nil
 }
 
-func admitDatum(named string, value any) (datum, error) {
+func admitDatum(named string, value any) (_Datum, error) {
 	encoded, err := wireJSON(value)
 	if err != nil {
-		return datum{}, fmt.Errorf("%s is not JSON data: %w", named, err)
+		return _Datum{}, fmt.Errorf("%s is not JSON data: %w", named, err)
 	}
 	if err := checkDatum(encoded); err != nil {
-		return datum{}, fmt.Errorf("%s %w", named, err)
+		return _Datum{}, fmt.Errorf("%s %w", named, err)
 	}
-	return datum{encoded: encoded}, nil
+	return _Datum{encoded: encoded}, nil
 }
 
 func checkDatum(encoded []byte) error {
@@ -104,11 +104,11 @@ func checkDatum(encoded []byte) error {
 	return nil
 }
 
-func (d datum) MarshalJSON() ([]byte, error) {
+func (d _Datum) MarshalJSON() ([]byte, error) {
 	return d.encoded, nil
 }
 
-func (d *datum) UnmarshalJSON(written []byte) error {
+func (d *_Datum) UnmarshalJSON(written []byte) error {
 	if err := checkDatum(written); err != nil {
 		return fmt.Errorf("a datum %w", err)
 	}
@@ -116,8 +116,8 @@ func (d *datum) UnmarshalJSON(written []byte) error {
 	return nil
 }
 
-func (v *boundValues) UnmarshalJSON(written []byte) error {
-	var decoded map[string]datum
+func (v *_BoundValues) UnmarshalJSON(written []byte) error {
+	var decoded map[string]_Datum
 	if err := json.Unmarshal(written, &decoded); err != nil {
 		return err
 	}

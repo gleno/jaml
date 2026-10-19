@@ -46,8 +46,8 @@ func (e *Expression) resolve(ctx context.Context, into any, args []any) error {
 	if err != nil {
 		return fail(EvaluationFailed, "binding arguments: %w", err)
 	}
-	var request = work{Path: e.path, Values: values, Scripts: scripts, Args: arguments, Skips: skips}
-	return e.held.answer(ctx, request, func(settled answered) error {
+	var request = _Work{Path: e.path, Values: values, Scripts: scripts, Args: arguments, Skips: skips}
+	return e.held.answer(ctx, request, func(settled _Answered) error {
 		if err := json.Unmarshal(settled.data, into); err != nil {
 			return err
 		}

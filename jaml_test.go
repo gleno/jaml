@@ -10,15 +10,15 @@ import (
 	"time"
 )
 
-type sandboxKind struct {
+type _SandboxKind struct {
 	name string
 	make func(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
 }
 
 var (
-	trustedKind  = sandboxKind{name: "trusted", make: MakeTrustedSandbox}
-	isolatedKind = sandboxKind{name: "isolated", make: MakeSecureSandbox}
-	sandboxKinds = []sandboxKind{trustedKind, isolatedKind}
+	trustedKind  = _SandboxKind{name: "trusted", make: MakeTrustedSandbox}
+	isolatedKind = _SandboxKind{name: "isolated", make: MakeSecureSandbox}
+	sandboxKinds = []_SandboxKind{trustedKind, isolatedKind}
 )
 
 func eachKind(t *testing.T, body func(t *testing.T, sb *Sandbox), options ...SandboxOption) {
@@ -30,7 +30,7 @@ func eachKind(t *testing.T, body func(t *testing.T, sb *Sandbox), options ...San
 	}
 }
 
-func mustSandbox(t *testing.T, kind sandboxKind, options ...SandboxOption) *Sandbox {
+func mustSandbox(t *testing.T, kind _SandboxKind, options ...SandboxOption) *Sandbox {
 	t.Helper()
 	if kind.name == isolatedKind.name && isolationSupported() != nil {
 		t.Skip(isolationSupported())
@@ -42,16 +42,16 @@ func mustSandbox(t *testing.T, kind sandboxKind, options ...SandboxOption) *Sand
 	return sb
 }
 
-type testKind struct {
+type _TestKind struct {
 	test *testing.T
 	kind string
 }
 
 var sharedSandboxes sync.Map
 
-func sharedSandbox(t *testing.T, kind sandboxKind) *Sandbox {
+func sharedSandbox(t *testing.T, kind _SandboxKind) *Sandbox {
 	t.Helper()
-	key := testKind{test: t, kind: kind.name}
+	key := _TestKind{test: t, kind: kind.name}
 	if shared, found := sharedSandboxes.Load(key); found {
 		return shared.(*Sandbox)
 	}
@@ -152,13 +152,13 @@ config:
   value2: ${1+1}
   value3: "some string ${{name}}"
 `, WithNullCoercion(Strict), WithUndefinedCoercion(Loose))
-		type config struct {
+		type _Config struct {
 			Value1 int    `json:"value1"`
 			Value2 int    `json:"value2"`
 			Value3 string `json:"value3"`
 		}
-		got := mustResolve[config](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
-		expectEqual(t, got, config{Value1: 123, Value2: 2, Value3: "some string abc"})
+		got := mustResolve[_Config](t, withValues(t, map[string]any{"name": "abc"}), document.At("config"))
+		expectEqual(t, got, _Config{Value1: 123, Value2: 2, Value3: "some string abc"})
 	})
 }
 

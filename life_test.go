@@ -175,7 +175,7 @@ func TestACallCancelledWhileQueuedNamesItsPath(t *testing.T) {
 func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 	sb := mustIsolated(t, WithMaxConcurrency(8))
 	document := mustJaml(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, childSpec{limit: silentLimit, buildTimeout: 300 * time.Millisecond})
+	respawnAs(t, sb, _ChildSpec{limit: silentLimit, buildTimeout: 300 * time.Millisecond})
 	killChild(t, sb)
 	started := time.Now()
 	failures := make(chan error, 6)
@@ -208,7 +208,7 @@ func TestAChildKilledMidRequestIsNamedByTheReaper(t *testing.T) {
 	}
 	sent := make(chan error, 1)
 	go func() {
-		_, err := process.send(t.Context(), request{Op: opBuild, Plan: &blueprint{Written: strings.Repeat("x", 4<<20)}})
+		_, err := process.send(t.Context(), _Request{Op: opBuild, Plan: &_Blueprint{Written: strings.Repeat("x", 4<<20)}})
 		sent <- err
 	}()
 	time.Sleep(100 * time.Millisecond)

@@ -17,19 +17,19 @@ const (
 
 var errInterrupted = errors.New("interrupted")
 
-type sessionPlan struct {
-	values  boundValues
+type _SessionPlan struct {
+	values  _BoundValues
 	scripts []string
-	pinned  pinned
+	pinned  _Pinned
 }
 
-type lazySession struct {
+type _LazySession struct {
 	ctx    context.Context
-	plan   sessionPlan
-	opened *session
+	plan   _SessionPlan
+	opened *_Session
 }
 
-func (l *lazySession) open() (*session, error) {
+func (l *_LazySession) open() (*_Session, error) {
 	if l.opened != nil {
 		return l.opened, nil
 	}
@@ -41,7 +41,7 @@ func (l *lazySession) open() (*session, error) {
 	return opened, nil
 }
 
-func (l *lazySession) warm() error {
+func (l *_LazySession) warm() error {
 	if len(l.plan.scripts) == 0 {
 		return nil
 	}
@@ -49,28 +49,28 @@ func (l *lazySession) warm() error {
 	return err
 }
 
-func (l *lazySession) close() {
+func (l *_LazySession) close() {
 	if l.opened != nil {
 		l.opened.close()
 	}
 }
 
-type session struct {
+type _Session struct {
 	ctx     context.Context
-	realm   realm
+	realm   _Realm
 	broken  error
 	release func() bool
 }
 
-func openSession(ctx context.Context, plan sessionPlan) (*session, error) {
+func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	vm := goja.New()
 	vm.SetMaxCallStackSize(maxCallStackSize)
 	vm.SetTimeSource(plan.pinned.now)
 	vm.SetRandSource(plan.pinned.random())
-	opened := &session{ctx: ctx, realm: captureRealm(vm)}
+	opened := &_Session{ctx: ctx, realm: captureRealm(vm)}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
 	var freezer goja.Callable
-	if err := opened.enter(func(r realm) (err error) { freezer, err = r.intrinsicsFreezer(); return err }); err != nil {
+	if err := opened.enter(func(r _Realm) (err error) { freezer, err = r.intrinsicsFreezer(); return err }); err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "%w", err)
 	}
@@ -89,11 +89,11 @@ func openSession(ctx context.Context, plan sessionPlan) (*session, error) {
 	return opened, nil
 }
 
-func (s *session) close() {
+func (s *_Session) close() {
 	s.release()
 }
 
-func (s *session) enter(step func(realm) error) (err error) {
+func (s *_Session) enter(step func(_Realm) error) (err error) {
 	if halted := s.halted(); halted != nil {
 		return halted
 	}
@@ -113,7 +113,7 @@ func (s *session) enter(step func(realm) error) (err error) {
 	return stepped
 }
 
-func (s *session) halted() error {
+func (s *_Session) halted() error {
 	switch {
 	case s.broken != nil:
 		return fmt.Errorf("an earlier expression broke the engine: %w", s.broken)
@@ -123,16 +123,16 @@ func (s *session) halted() error {
 	return nil
 }
 
-func (s *session) bind(values boundValues) error {
+func (s *_Session) bind(values _BoundValues) error {
 	for _, name := range slices.Sorted(maps.Keys(values)) {
-		if err := s.enter(func(r realm) error { return r.bindValue(name, values[name]) }); err != nil {
+		if err := s.enter(func(r _Realm) error { return r.bindValue(name, values[name]) }); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r realm) bindValue(name string, value datum) error {
+func (r _Realm) bindValue(name string, value _Datum) error {
 	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(value.encoded)))
 	if err != nil {
 		return fmt.Errorf("value %q: %w", clip(name, keyExcerptLength), r.explain(err))
@@ -146,7 +146,7 @@ func (r realm) bindValue(name string, value datum) error {
 	return nil
 }
 
-func (r realm) deepFreeze(value goja.Value) error {
+func (r _Realm) deepFreeze(value goja.Value) error {
 	object, isObject := value.(*goja.Object)
 	if !isObject {
 		return nil
@@ -193,16 +193,16 @@ func guardJSONParse(vm *goja.Runtime) goja.Callable {
 	return callable
 }
 
-func (s *session) evaluate(compiled expression, args []datum) (any, error) {
-	return s.attempt(func(r realm) (goja.Value, error) {
+func (s *_Session) evaluate(compiled _Expression, args []_Datum) (any, error) {
+	return s.attempt(func(r _Realm) (goja.Value, error) {
 		settled, err := r.settle(compiled, args)
 		return settled, r.explainWrite(compiled, err)
 	})
 }
 
-func (s *session) attempt(produce func(realm) (goja.Value, error)) (any, error) {
+func (s *_Session) attempt(produce func(_Realm) (goja.Value, error)) (any, error) {
 	var result any
-	err := s.enter(func(r realm) error {
+	err := s.enter(func(r _Realm) error {
 		returned, err := produce(r)
 		if err != nil {
 			return r.explain(err)
@@ -213,7 +213,7 @@ func (s *session) attempt(produce func(realm) (goja.Value, error)) (any, error) 
 	return result, err
 }
 
-func (r realm) settle(compiled expression, args []datum) (goja.Value, error) {
+func (r _Realm) settle(compiled _Expression, args []_Datum) (goja.Value, error) {
 	value, err := r.vm.RunProgram(compiled.program)
 	for calls := 0; err == nil; calls++ {
 		function, isFunction := goja.AssertFunction(value)
@@ -235,7 +235,7 @@ func (r realm) settle(compiled expression, args []datum) (goja.Value, error) {
 	return nil, err
 }
 
-func (r realm) arguments(args []datum) ([]goja.Value, error) {
+func (r _Realm) arguments(args []_Datum) ([]goja.Value, error) {
 	var values = make([]goja.Value, len(args))
 	for index, arg := range args {
 		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(string(arg.encoded)))
@@ -247,7 +247,7 @@ func (r realm) arguments(args []datum) ([]goja.Value, error) {
 	return values, nil
 }
 
-func (s *session) breakOnEngineFailure(err *error) {
+func (s *_Session) breakOnEngineFailure(err *error) {
 	if failure := engineFailure(recover()); failure != nil {
 		s.broken, *err = failure, failure
 	}

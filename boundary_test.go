@@ -22,15 +22,15 @@ func TestCoercionsAreCheckedNullFirst(t *testing.T) {
 	})
 }
 
-type failingMarshaler struct{}
+type _FailingMarshaler struct{}
 
-func (failingMarshaler) MarshalJSON() ([]byte, error) {
+func (_FailingMarshaler) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("refuses")
 }
 
-type countingMarshaler struct{ calls *int }
+type _CountingMarshaler struct{ calls *int }
 
-func (c countingMarshaler) MarshalJSON() ([]byte, error) {
+func (c _CountingMarshaler) MarshalJSON() ([]byte, error) {
 	*c.calls++
 	return []byte("1"), nil
 }
@@ -46,7 +46,7 @@ func TestBadVarsAreRefusedBeforeRendering(t *testing.T) {
 			"channel":         {make(chan int), `value "bad" is not JSON data`},
 			"nan":             {math.NaN(), `value "bad" is not JSON data`},
 			"cyclic":          {cyclic, `value "bad" is not JSON data`},
-			"failing marshal": {failingMarshaler{}, `value "bad" is not JSON data`},
+			"failing marshal": {_FailingMarshaler{}, `value "bad" is not JSON data`},
 			"too deep":        {nestedVar(4097), `value "bad" nests deeper than 4096`},
 		}
 		document := mustJaml(t, sb, "plain: 1\nz: ${ 1 }\n")
@@ -68,7 +68,7 @@ func TestVarsAreEncodedOncePerEval(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		calls := 0
 		document := mustJaml(t, sb, "a: ${ v }\nb: ${ v + 1 }\nc: \"${{ v }}\"\n")
-		evalAs[map[string]any](t, document, map[string]any{"v": countingMarshaler{calls: &calls}})
+		evalAs[map[string]any](t, document, map[string]any{"v": _CountingMarshaler{calls: &calls}})
 		expectEqual(t, calls, 1)
 	})
 }

@@ -15,20 +15,20 @@ jobs:
       - run: echo ${{ github.sha }} @{{ who }}
       - count: "@{ 1 + 1 }"
 `, WithSigil("@"))
-		type step struct {
+		type _Step struct {
 			Run   string `json:"run"`
 			Count int    `json:"count"`
 		}
-		type workflow struct {
+		type _Workflow struct {
 			On   string `json:"on"`
 			Jobs map[string]struct {
-				RunsOn string `json:"runs-on"`
-				Steps  []step `json:"steps"`
+				RunsOn string  `json:"runs-on"`
+				Steps  []_Step `json:"steps"`
 			} `json:"jobs"`
 		}
-		got := mustResolve[workflow](t, withValues(t, map[string]any{"who": "ada"}), document)
+		got := mustResolve[_Workflow](t, withValues(t, map[string]any{"who": "ada"}), document)
 		expectEqual(t, got.Jobs["build"].RunsOn, "${{ matrix.os }}")
-		expectEqual(t, got.Jobs["build"].Steps, []step{{Run: "echo ${{ github.sha }} ada"}, {Count: 2}})
+		expectEqual(t, got.Jobs["build"].Steps, []_Step{{Run: "echo ${{ github.sha }} ada"}, {Count: 2}})
 	})
 }
 

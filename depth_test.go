@@ -7,24 +7,24 @@ import (
 	"testing"
 )
 
-type bothKinds struct {
+type _BothKinds struct {
 	trusted  error
 	isolated error
 }
 
-func makeInBothKinds(t *testing.T, text string) bothKinds {
+func makeInBothKinds(t *testing.T, text string) _BothKinds {
 	t.Helper()
 	_, trusted := sharedSandbox(t, trustedKind).MakeExpressionFromJaml(t.Context(), text)
 	_, isolated := sharedSandbox(t, isolatedKind).MakeExpressionFromJaml(t.Context(), text)
-	return bothKinds{trusted: trusted, isolated: isolated}
+	return _BothKinds{trusted: trusted, isolated: isolated}
 }
 
-func evalInBothKinds(t *testing.T, text string, vars map[string]any) bothKinds {
+func evalInBothKinds(t *testing.T, text string, vars map[string]any) _BothKinds {
 	t.Helper()
-	return agreement{text: text, vars: vars}.eval(t, intoAny)
+	return _Agreement{text: text, vars: vars}.eval(t, intoAny)
 }
 
-func (b bothKinds) expectRefused(t *testing.T, sentinel error, fragments ...string) {
+func (b _BothKinds) expectRefused(t *testing.T, sentinel error, fragments ...string) {
 	t.Helper()
 	expectError(t, b.trusted, sentinel, fragments...)
 	expectError(t, b.isolated, sentinel, fragments...)
@@ -38,7 +38,7 @@ func (b bothKinds) expectRefused(t *testing.T, sentinel error, fragments ...stri
 	}
 }
 
-func (b bothKinds) expectAccepted(t *testing.T) {
+func (b _BothKinds) expectAccepted(t *testing.T) {
 	t.Helper()
 	if b.trusted != nil {
 		t.Fatalf("trusted: %.300s", b.trusted)

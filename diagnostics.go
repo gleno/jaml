@@ -41,7 +41,7 @@ func clip(text string, limit int) string {
 	return text[:cut] + "…"
 }
 
-func (r realm) explain(err error) error {
+func (r _Realm) explain(err error) error {
 	var exception *goja.Exception
 	if errors.As(err, &exception) {
 		return r.describeException(exception)
@@ -60,11 +60,11 @@ func uncatchable(err error) error {
 	return err
 }
 
-func (r realm) describeException(exception *goja.Exception) *Thrown {
+func (r _Realm) describeException(exception *goja.Exception) *Thrown {
 	return &Thrown{Message: r.describe(exception.Value()), Value: r.snapshot(exception.Value())}
 }
 
-func (r realm) describe(value goja.Value) string {
+func (r _Realm) describe(value goja.Value) string {
 	var text string
 	if err := r.contain(func() { text = r.describeThrown(value) }); err != nil {
 		return unreadableThrow
@@ -100,7 +100,7 @@ func isEngineValue(value any) bool {
 	return kind != nil && strings.HasPrefix(kind.PkgPath(), enginePackage)
 }
 
-func (r realm) describeThrown(value goja.Value) string {
+func (r _Realm) describeThrown(value goja.Value) string {
 	object, isObject := value.(*goja.Object)
 	switch {
 	case isEmptyString(value):
@@ -116,7 +116,7 @@ func (r realm) describeThrown(value goja.Value) string {
 	return "threw " + r.describeObject(object)
 }
 
-func (r realm) describeObject(object *goja.Object) string {
+func (r _Realm) describeObject(object *goja.Object) string {
 	if _, isFunction := goja.AssertFunction(object); isFunction {
 		return "a function"
 	}

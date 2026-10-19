@@ -22,7 +22,7 @@ func TestABuildThatPanicsIsAnInvalidExpression(t *testing.T) {
 
 func servingChild(t *testing.T, sb *Sandbox) int {
 	t.Helper()
-	if _, isIsolated := sb.engine.(*isolatedEngine); !isIsolated {
+	if _, isIsolated := sb.engine.(*_IsolatedEngine); !isIsolated {
 		return 0
 	}
 	return childPID(t, sb)

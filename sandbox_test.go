@@ -18,11 +18,11 @@ func slowLoops(scale float64) int {
 
 func inFlight(sb *Sandbox) int {
 	switch engine := sb.engine.(type) {
-	case *isolatedEngine:
+	case *_IsolatedEngine:
 		engine.dispatcher.mu.Lock()
 		defer engine.dispatcher.mu.Unlock()
 		return engine.dispatcher.running
-	case *trustedEngine:
+	case *_TrustedEngine:
 		return len(engine.gate)
 	}
 	return 0
@@ -76,7 +76,7 @@ func TestMaxConcurrencyIsHonoured(t *testing.T) {
 
 func TestMaxConcurrencyDefaultsToGOMAXPROCS(t *testing.T) {
 	trusted := mustSandbox(t, trustedKind)
-	expectEqual(t, cap(trusted.engine.(*trustedEngine).gate), goruntime.GOMAXPROCS(0))
+	expectEqual(t, cap(trusted.engine.(*_TrustedEngine).gate), goruntime.GOMAXPROCS(0))
 	isolated := mustIsolated(t)
 	expectEqual(t, dispatcherOf(t, isolated).limit, goruntime.GOMAXPROCS(0))
 }
@@ -119,7 +119,7 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			var both bothKinds
+			var both _BothKinds
 			for _, kind := range sandboxKinds {
 				compiled := mustExpression(t, mustSandbox(t, kind), c.source)
 				var out any
@@ -236,7 +236,7 @@ func TestThrownIsReachableWithItsMessageAndValueInBothKinds(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			var both bothKinds
+			var both _BothKinds
 			for _, kind := range sandboxKinds {
 				var out any
 				err := resolveInto(t.Context(), &out, mustExpression(t, mustSandbox(t, kind), c.source))
@@ -277,8 +277,8 @@ func expectDeepCut(t *testing.T, value any) {
 }
 
 func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
-	var sent reply
-	if err := json.Unmarshal(frames{limit: 1 << 20}.failure(1, "$.v", fail(EvaluationFailed, "$.v: %w", &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})), &sent); err != nil {
+	var sent _Reply
+	if err := json.Unmarshal(_Frames{limit: 1 << 20}.failure(1, "$.v", fail(EvaluationFailed, "$.v: %w", &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})), &sent); err != nil {
 		t.Fatal(err)
 	}
 	carried := sent.Failure.rebuild()
@@ -294,13 +294,13 @@ func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
 	expectEqual(t, string(encoded), `{"kind":"EvaluationFailed","message":"plain"}`)
 }
 
-type keptByValue struct {
+type _KeptByValue struct {
 	document   Expression
 	expression Expression
 }
 
-func keepByValue(t *testing.T, sb *Sandbox) *keptByValue {
-	return &keptByValue{document: *mustJaml(t, sb, "v: ${ 1 + 1 }\n"), expression: *mustExpression(t, sb, "x => x + 1")}
+func keepByValue(t *testing.T, sb *Sandbox) *_KeptByValue {
+	return &_KeptByValue{document: *mustJaml(t, sb, "v: ${ 1 + 1 }\n"), expression: *mustExpression(t, sb, "x => x + 1")}
 }
 
 func collectEverythingUnreachable(t *testing.T) {

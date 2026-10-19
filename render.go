@@ -6,22 +6,22 @@ import (
 	"strings"
 )
 
-type renderer struct {
-	texts    map[string]text
+type _Renderer struct {
+	texts    map[string]_Text
 	settings _ExpressionSettings
-	engine   *lazySession
-	args     []datum
+	engine   *_LazySession
+	args     []_Datum
 	skips    *_Shape
 	depth    int
 	skipped  [][]string
 }
 
 type _Place struct {
-	at    *dataPath
+	at    *_DataPath
 	skips *_ShapeCursor
 }
 
-func (r *renderer) place(at *dataPath) _Place {
+func (r *_Renderer) place(at *_DataPath) _Place {
 	if r.skips == nil {
 		return _Place{at: at}
 	}
@@ -36,7 +36,7 @@ func (p _Place) item(index int) _Place {
 	return _Place{at: p.at.atIndex(index), skips: p.skips.item()}
 }
 
-func (r *renderer) render(node any, place _Place) (any, error) {
+func (r *_Renderer) render(node any, place _Place) (any, error) {
 	if place.skips.skips() {
 		r.skipped = append(r.skipped, r.relative(place.at))
 		return map[string]any{}, nil
@@ -73,7 +73,7 @@ func (r *renderer) render(node any, place _Place) (any, error) {
 	}
 }
 
-func (r *renderer) relative(at *dataPath) []string {
+func (r *_Renderer) relative(at *_DataPath) []string {
 	var steps []string
 	for step := at; step.depth() > r.depth; step = step.parent {
 		if step.keyed {
@@ -86,7 +86,7 @@ func (r *renderer) relative(at *dataPath) []string {
 	return steps
 }
 
-func (r *renderer) renderText(compiled text, at *dataPath) (any, error) {
+func (r *_Renderer) renderText(compiled _Text, at *_DataPath) (any, error) {
 	if compiled.whole != nil {
 		result, err := r.evaluate(*compiled.whole, at)
 		if err != nil {
@@ -117,12 +117,12 @@ func (r *renderer) renderText(compiled text, at *dataPath) (any, error) {
 	return rendered.String(), nil
 }
 
-func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, error) {
+func (r *_Renderer) admit(result any, compiled _Expression, at *_DataPath) (any, error) {
 	absent, coercion := "", Loose
 	switch result.(type) {
 	case nil:
 		absent, coercion = "null", r.settings.null
-	case undefined:
+	case _Undefined:
 		absent, coercion = "undefined", r.settings.undefined
 	default:
 		return result, nil
@@ -133,14 +133,14 @@ func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, er
 	return nil, nil
 }
 
-func hintFor(absent string, compiled expression) string {
+func hintFor(absent string, compiled _Expression) string {
 	if absent != "undefined" {
 		return ""
 	}
 	return compiled.undefinedHint()
 }
 
-func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {
+func (r *_Renderer) evaluate(compiled _Expression, at *_DataPath) (any, error) {
 	session, err := r.engine.open()
 	if err != nil {
 		return nil, err

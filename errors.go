@@ -4,49 +4,49 @@ import "fmt"
 
 const rootPlace = "$"
 
-type expressionError struct {
+type _ExpressionError struct {
 	kind  error
 	at    string
 	cause error
 }
 
-func fail(kind error, format string, args ...any) expressionError {
-	return expressionError{kind: kind, cause: fmt.Errorf(format, args...)}
+func fail(kind error, format string, args ...any) _ExpressionError {
+	return _ExpressionError{kind: kind, cause: fmt.Errorf(format, args...)}
 }
 
-func (e expressionError) within(at string) expressionError {
+func (e _ExpressionError) within(at string) _ExpressionError {
 	e.at = at
 	return e
 }
 
-func (e expressionError) place() string {
+func (e _ExpressionError) place() string {
 	if e.at == "" {
 		return rootPlace
 	}
 	return e.at
 }
 
-func (e expressionError) Error() string {
+func (e _ExpressionError) Error() string {
 	return e.place() + e.joint() + e.cause.Error() + ": " + e.kind.Error()
 }
 
-func (e expressionError) joint() string {
+func (e _ExpressionError) joint() string {
 	if e.kind == MissingPath {
 		return " "
 	}
 	return ": "
 }
 
-func (e expressionError) Unwrap() []error {
+func (e _ExpressionError) Unwrap() []error {
 	return []error{e.kind, e.cause}
 }
 
-type memoryExhausted string
+type _MemoryExhausted string
 
-func (m memoryExhausted) Error() string {
+func (m _MemoryExhausted) Error() string {
 	return string(m)
 }
 
-func (m memoryExhausted) Is(target error) bool {
+func (m _MemoryExhausted) Is(target error) bool {
 	return target == MemoryLimit
 }

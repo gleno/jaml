@@ -6,70 +6,70 @@ import (
 	"sync"
 )
 
-type mode int
+type _Mode int
 
 const (
-	sharing mode = iota
+	sharing _Mode = iota
 	recovering
 )
 
-type lost struct{ cause error }
+type _Lost struct{ cause error }
 
-func (lost) isOutcome() {}
+func (_Lost) isOutcome() {}
 
-type availability interface{ isAvailability() }
+type _Availability interface{ isAvailability() }
 
-type absent struct{}
+type _Absent struct{}
 
-type starting struct{}
+type _Starting struct{}
 
-type ready struct{ life *life }
+type _Ready struct{ life *_Life }
 
-func (absent) isAvailability()   {}
-func (starting) isAvailability() {}
-func (ready) isAvailability()    {}
+func (_Absent) isAvailability()   {}
+func (_Starting) isAvailability() {}
+func (_Ready) isAvailability()    {}
 
-type lease interface{ held() *life }
+type _Lease interface{ held() *_Life }
 
-type shared struct{ life *life }
+type _Shared struct{ life *_Life }
 
-type owned struct{ life *life }
+type _Owned struct{ life *_Life }
 
-func (s shared) held() *life { return s.life }
-func (o owned) held() *life  { return o.life }
+func (s _Shared) held() *_Life { return s.life }
+func (o _Owned) held() *_Life  { return o.life }
 
-type admission struct {
-	lease lease
+type _Admission struct {
+	lease _Lease
 	err   error
 }
 
-type errand struct {
+type _Errand struct {
 	ctx     context.Context
-	answers chan admission
-	reports chan outcome
+	answers chan _Admission
+	reports chan _Outcome
 }
 
-type attempt func(e *errand, l *life) outcome
+type _Attempt func(e *_Errand, l *_Life) _Outcome
 
-type dispatcher struct {
+type _Dispatcher struct {
 	limit    int
-	start    func() (*life, error)
+	start    func() (*_Life, error)
 	mu       sync.Mutex
-	mode     mode
-	child    availability
+	mode     _Mode
+	child    _Availability
 	running  int
-	waiting  []*errand
-	suspects []*errand
+	waiting  []*_Errand
+	suspects []*_Errand
 }
 
-func newDispatcher(limit int, start func() (*life, error), first *life) *dispatcher {
-	d := &dispatcher{limit: limit, start: start}
+func newDispatcher(limit int, start func() (*_Life, error), first *_Life) *_Dispatcher {
+	d := &_Dispatcher{limit: limit, start: start}
 	d.adopt(first)
 	return d
 }
 
-func (d *dispatcher) carry(ctx context.Context, work attempt) outcome {
-	e := &errand{ctx: ctx, answers: make(chan admission, 1), reports: make(chan outcome, 1)}
+func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
+	e := &_Errand{ctx: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
 	d.mu.Lock()
 	d.waiting = append(d.waiting, e)
 	d.dispatch()
@@ -79,15 +79,15 @@ func (d *dispatcher) carry(ctx context.Context, work attempt) outcome {
 	case result := <-e.reports:
 		return result
 	case <-ctx.Done():
-		return refused{err: cancelled(ctx)}
+		return _Refused{err: cancelled(ctx)}
 	}
 }
 
-func (d *dispatcher) run(e *errand, work attempt) {
+func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 	for {
 		held, err := d.admit(e)
 		if err != nil {
-			e.report(refused{err: err})
+			e.report(_Refused{err: err})
 			return
 		}
 		final, replay := e.judge(held, work(e, held.held()))
@@ -101,28 +101,28 @@ func (d *dispatcher) run(e *errand, work attempt) {
 	}
 }
 
-func (e *errand) report(result outcome) {
+func (e *_Errand) report(result _Outcome) {
 	select {
 	case e.reports <- result:
 	default:
 	}
 }
 
-func (e *errand) judge(held lease, result outcome) (outcome, bool) {
-	died, isLost := result.(lost)
+func (e *_Errand) judge(held _Lease, result _Outcome) (_Outcome, bool) {
+	died, isLost := result.(_Lost)
 	switch {
 	case !isLost:
 		return result, false
 	case e.ctx.Err() != nil:
-		return refused{err: cancelled(e.ctx)}, false
+		return _Refused{err: cancelled(e.ctx)}, false
 	}
-	if _, alone := held.(owned); alone {
-		return refused{err: died.cause}, false
+	if _, alone := held.(_Owned); alone {
+		return _Refused{err: died.cause}, false
 	}
 	return result, true
 }
 
-func (d *dispatcher) admit(e *errand) (lease, error) {
+func (d *_Dispatcher) admit(e *_Errand) (_Lease, error) {
 	select {
 	case admitted := <-e.answers:
 		if admitted.err != nil || e.ctx.Err() == nil {
@@ -143,8 +143,8 @@ func (d *dispatcher) admit(e *errand) (lease, error) {
 	return nil, cancelled(e.ctx)
 }
 
-func (d *dispatcher) release(held lease) {
-	if alone, isOwned := held.(owned); isOwned {
+func (d *_Dispatcher) release(held _Lease) {
+	if alone, isOwned := held.(_Owned); isOwned {
 		alone.life.kill(errRetired)
 	}
 	d.mu.Lock()
@@ -153,7 +153,7 @@ func (d *dispatcher) release(held lease) {
 	d.dispatch()
 }
 
-func (d *dispatcher) suspect(e *errand) {
+func (d *_Dispatcher) suspect(e *_Errand) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.running--
@@ -162,8 +162,8 @@ func (d *dispatcher) suspect(e *errand) {
 	d.dispatch()
 }
 
-func (d *dispatcher) withdraw(e *errand) bool {
-	for _, queue := range []*[]*errand{&d.waiting, &d.suspects} {
+func (d *_Dispatcher) withdraw(e *_Errand) bool {
+	for _, queue := range []*[]*_Errand{&d.waiting, &d.suspects} {
 		if index := slices.Index(*queue, e); index >= 0 {
 			*queue = slices.Delete(*queue, index, index+1)
 			d.dispatch()
@@ -173,8 +173,8 @@ func (d *dispatcher) withdraw(e *errand) bool {
 	return false
 }
 
-func (d *dispatcher) adopt(l *life) {
-	d.child = ready{life: l}
+func (d *_Dispatcher) adopt(l *_Life) {
+	d.child = _Ready{life: l}
 	go func() {
 		<-l.ended
 		d.mu.Lock()
@@ -184,19 +184,19 @@ func (d *dispatcher) adopt(l *life) {
 	}()
 }
 
-func (d *dispatcher) lose(l *life) {
-	if d.child != (ready{life: l}) {
+func (d *_Dispatcher) lose(l *_Life) {
+	if d.child != (_Ready{life: l}) {
 		return
 	}
-	d.child = absent{}
+	d.child = _Absent{}
 	if d.running > 0 {
 		d.mode = recovering
 	}
 }
 
-func (d *dispatcher) dispatch() {
+func (d *_Dispatcher) dispatch() {
 	for {
-		if current, isReady := d.child.(ready); isReady && !current.life.alive() {
+		if current, isReady := d.child.(_Ready); isReady && !current.life.alive() {
 			d.lose(current.life)
 		}
 		if d.mode == recovering && d.running == 0 && len(d.suspects) == 0 {
@@ -206,10 +206,10 @@ func (d *dispatcher) dispatch() {
 		if queue == nil {
 			return
 		}
-		current, isReady := d.child.(ready)
+		current, isReady := d.child.(_Ready)
 		if !isReady {
-			if d.child == (absent{}) {
-				d.child = starting{}
+			if d.child == (_Absent{}) {
+				d.child = _Starting{}
 				go d.begin()
 			}
 			return
@@ -217,19 +217,19 @@ func (d *dispatcher) dispatch() {
 		next := (*queue)[0]
 		*queue = (*queue)[1:]
 		d.running++
-		next.answers <- admission{lease: d.lend(current.life)}
+		next.answers <- _Admission{lease: d.lend(current.life)}
 	}
 }
 
-func (d *dispatcher) lend(l *life) lease {
+func (d *_Dispatcher) lend(l *_Life) _Lease {
 	if d.mode == sharing {
-		return shared{life: l}
+		return _Shared{life: l}
 	}
-	d.child = absent{}
-	return owned{life: l}
+	d.child = _Absent{}
+	return _Owned{life: l}
 }
 
-func (d *dispatcher) eligible() *[]*errand {
+func (d *_Dispatcher) eligible() *[]*_Errand {
 	switch {
 	case d.mode == recovering && d.running == 0:
 		return &d.suspects
@@ -239,12 +239,12 @@ func (d *dispatcher) eligible() *[]*errand {
 	return nil
 }
 
-func (d *dispatcher) begin() {
+func (d *_Dispatcher) begin() {
 	started, err := d.start()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err != nil {
-		d.child = absent{}
+		d.child = _Absent{}
 		d.refuseEveryone(err)
 	} else {
 		d.adopt(started)
@@ -252,9 +252,9 @@ func (d *dispatcher) begin() {
 	d.dispatch()
 }
 
-func (d *dispatcher) refuseEveryone(err error) {
+func (d *_Dispatcher) refuseEveryone(err error) {
 	for _, e := range slices.Concat(d.waiting, d.suspects) {
-		e.answers <- admission{err: err}
+		e.answers <- _Admission{err: err}
 	}
 	d.waiting, d.suspects = nil, nil
 }

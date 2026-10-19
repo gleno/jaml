@@ -21,7 +21,7 @@ const (
 
 var engineWriteRefusal = regexp.MustCompile(`^(|Cannot assign to read only property '.*'|Cannot add property .*, object is not extensible|Cannot set property .*, object is not extensible|Cannot delete property '.*' of .*|length is not writable|.* is not extensible)$`)
 
-func (r realm) explainWrite(compiled expression, err error) error {
+func (r _Realm) explainWrite(compiled _Expression, err error) error {
 	var exception *goja.Exception
 	if !errors.As(err, &exception) || !compiled.writesWhere(exception) || !r.refusesWrite(exception.Value()) {
 		return err
@@ -29,7 +29,7 @@ func (r realm) explainWrite(compiled expression, err error) error {
 	return &Thrown{Message: "TypeError: " + readOnlyRefusal, Value: r.snapshot(exception.Value())}
 }
 
-func (r realm) refusesWrite(thrown goja.Value) bool {
+func (r _Realm) refusesWrite(thrown goja.Value) bool {
 	object, isObject := thrown.(*goja.Object)
 	if !isObject || object.ExportType() == proxyType || object.ClassName() != "Error" {
 		return false
@@ -45,7 +45,7 @@ func (r realm) refusesWrite(thrown goja.Value) bool {
 	return refuses
 }
 
-func (e expression) writesWhere(exception *goja.Exception) bool {
+func (e _Expression) writesWhere(exception *goja.Exception) bool {
 	stack := exception.Stack()
 	if len(stack) == 0 || stack[0].SrcName() != expressionFile {
 		return false

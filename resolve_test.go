@@ -34,11 +34,11 @@ thunk: ${ (u) => () => () => u.id * 2 }
 plain: ${ 7 }
 receiver: ${ function () { return this === globalThis } }
 `)
-		type state struct {
+		type _State struct {
 			Name string `json:"name"`
 			Age  int    `json:"age"`
 		}
-		expectEqual(t, mustResolve[state](t, t.Context(), document.At("rename"), state{Name: "bob", Age: 3}, "!"), state{Name: "bob!", Age: 3})
+		expectEqual(t, mustResolve[_State](t, t.Context(), document.At("rename"), _State{Name: "bob", Age: 3}, "!"), _State{Name: "bob!", Age: 3})
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("thunk"), map[string]any{"id": 21}), 42)
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("plain"), "ignored"), 7)
 		expectEqual(t, mustResolve[bool](t, t.Context(), document.At("receiver")), true)
@@ -58,14 +58,14 @@ config:
     - ${ (u) => 1 }
     - ${ (u) => u.name }
 `)
-		type config struct {
+		type _Config struct {
 			Team  string                 `json:"team"`
 			Names *Expression            `json:"names"`
 			Later map[string]*Expression `json:"later"`
 			Each  []*Expression          `json:"each"`
 		}
 		ctx := withValues(t, map[string]any{"user": map[string]any{"team": "core"}})
-		got := mustResolve[config](t, ctx, document.At("config"))
+		got := mustResolve[_Config](t, ctx, document.At("config"))
 		expectEqual(t, got.Team, "core")
 		other := map[string]any{"name": "ada"}
 		expectEqual(t, mustResolve[[]string](t, ctx, got.Names, other), []string{"ada", "core"})
@@ -79,12 +79,12 @@ config:
 func TestAnExpressionFieldBindsWhereverTheDocumentHasThePath(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		document := mustJaml(t, sb, "present: ~\nNamed: ${ 'folded' }\n")
-		type target struct {
+		type _Target struct {
 			Present *Expression `json:"present"`
 			Missing *Expression `json:"missing"`
 			Named   *Expression `json:"named"`
 		}
-		got := mustResolve[target](t, t.Context(), document)
+		got := mustResolve[_Target](t, t.Context(), document)
 		if got.Missing != nil {
 			t.Fatalf("a path the document lacks bound %v", got.Missing)
 		}
@@ -93,30 +93,30 @@ func TestAnExpressionFieldBindsWhereverTheDocumentHasThePath(t *testing.T) {
 	})
 }
 
-type observing struct {
+type _Observing struct {
 	raw string
 }
 
-func (o *observing) UnmarshalJSON(written []byte) error {
+func (o *_Observing) UnmarshalJSON(written []byte) error {
 	o.raw = string(written)
 	return nil
 }
 
-type observed struct {
+type _Observed struct {
 	Later *Expression `json:"later"`
-	Rest  observing   `json:"rest"`
+	Rest  _Observing  `json:"rest"`
 }
 
 func TestTheTargetNeverObservesAPlaceholder(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		document := mustJaml(t, sb, "later: ${ (x) => x + 1 }\nrest:\n  inner: ${ (x) => x * 10 }\n")
-		got := mustResolve[observed](t, t.Context(), document, 4)
+		got := mustResolve[_Observed](t, t.Context(), document, 4)
 		expectEqual(t, got.Rest.raw, `{"inner":40}`)
 		expectEqual(t, mustResolve[int](t, t.Context(), got.Later, 1), 2)
-		type raw struct {
+		type _Raw struct {
 			Later json.RawMessage `json:"later"`
 		}
-		expectEqual(t, string(mustResolve[raw](t, t.Context(), document, 4).Later), "5")
+		expectEqual(t, string(mustResolve[_Raw](t, t.Context(), document, 4).Later), "5")
 		expectEqual(t, mustResolve[map[string]any](t, t.Context(), document, 4), map[string]any{"later": float64(5), "rest": map[string]any{"inner": float64(40)}})
 	})
 }

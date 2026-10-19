@@ -7,28 +7,28 @@ import (
 	"time"
 )
 
-type buildRace struct {
+type _BuildRace struct {
 	bound   context.Context
 	stop    context.CancelFunc
 	once    sync.Once
 	settled chan struct{}
-	verdict outcome
+	verdict _Outcome
 }
 
-func raceBuild(parent context.Context, timeout time.Duration) *buildRace {
+func raceBuild(parent context.Context, timeout time.Duration) *_BuildRace {
 	bound, stop := context.WithTimeoutCause(parent, timeout, fmt.Errorf("the build took longer than its timeout of %s: %w", timeout, context.DeadlineExceeded))
-	race := &buildRace{bound: bound, stop: stop, settled: make(chan struct{})}
-	context.AfterFunc(bound, func() { race.record(refused{err: cancelled(bound)}) })
+	race := &_BuildRace{bound: bound, stop: stop, settled: make(chan struct{})}
+	context.AfterFunc(bound, func() { race.record(_Refused{err: cancelled(bound)}) })
 	return race
 }
 
-func (r *buildRace) finish(result outcome) bool {
+func (r *_BuildRace) finish(result _Outcome) bool {
 	won := r.record(result)
 	r.stop()
 	return won
 }
 
-func (r *buildRace) record(result outcome) bool {
+func (r *_BuildRace) record(result _Outcome) bool {
 	won := false
 	r.once.Do(func() {
 		r.verdict, won = result, true
@@ -37,11 +37,11 @@ func (r *buildRace) record(result outcome) bool {
 	return won
 }
 
-func (r *buildRace) done() <-chan struct{} {
+func (r *_BuildRace) done() <-chan struct{} {
 	return r.settled
 }
 
-func (r *buildRace) await() outcome {
+func (r *_BuildRace) await() _Outcome {
 	<-r.settled
 	return r.verdict
 }

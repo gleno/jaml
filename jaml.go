@@ -32,7 +32,7 @@ const (
 const (
 	smallestMemoryLimit = 16 << 20
 	largestMemoryLimit  = 1 << 40
-	defaultMemoryLimit  = memoryLimit(256 << 20)
+	defaultMemoryLimit  = _MemoryLimit(256 << 20)
 	defaultBuildTimeout = 5 * time.Second
 )
 
@@ -50,18 +50,18 @@ type _ExpressionSettings struct {
 type SandboxOption func(*_SandboxSettings) error
 
 type _SandboxSettings struct {
-	memoryLimit    memoryLimit
+	memoryLimit    _MemoryLimit
 	maxConcurrency int
 	buildTimeout   time.Duration
 }
 
-type memoryLimit int64
+type _MemoryLimit int64
 
-func makeMemoryLimit(bytes int64) (memoryLimit, error) {
+func makeMemoryLimit(bytes int64) (_MemoryLimit, error) {
 	if bytes < smallestMemoryLimit || bytes > largestMemoryLimit {
 		return 0, fail(InvalidExpression, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)
 	}
-	return memoryLimit(bytes), nil
+	return _MemoryLimit(bytes), nil
 }
 
 func WithNullCoercion(coercion Coercion) Option {
@@ -161,7 +161,7 @@ func configureSandbox(options []SandboxOption) (_SandboxSettings, error) {
 	return configured, nil
 }
 
-func (s _SandboxSettings) memoryLimitOrDefault() memoryLimit {
+func (s _SandboxSettings) memoryLimitOrDefault() _MemoryLimit {
 	if s.memoryLimit == 0 {
 		return defaultMemoryLimit
 	}

@@ -43,26 +43,26 @@ func serveEvaluations() int {
 	if watch.orphaned() {
 		return exitOrphaned
 	}
-	replies := &replyWriter{out: os.NewFile(responsesFD, "jaml-responses"), frames: framesFor(world.limit)}
-	replies.greet(hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
-	serving := &evaluator{watch: watch, replies: replies, units: map[uint64]servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
+	replies := &_ReplyWriter{out: os.NewFile(responsesFD, "jaml-responses"), frames: framesFor(world.limit)}
+	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
+	serving := &_Evaluator{watch: watch, replies: replies, units: map[uint64]_Servable{}, running: map[uint64]context.CancelFunc{}, ended: map[uint64]struct{}{}}
 	go serving.obey(json.NewDecoder(os.NewFile(controlFD, "jaml-control")))
 	return serving.follow(json.NewDecoder(os.NewFile(requestsFD, "jaml-requests")))
 }
 
-type evaluator struct {
-	watch   *heapWatch
-	replies *replyWriter
+type _Evaluator struct {
+	watch   *_HeapWatch
+	replies *_ReplyWriter
 	mu      sync.Mutex
 	arrived uint64
-	units   map[uint64]servable
+	units   map[uint64]_Servable
 	running map[uint64]context.CancelFunc
 	ended   map[uint64]struct{}
 }
 
-func (e *evaluator) follow(requests *json.Decoder) int {
+func (e *_Evaluator) follow(requests *json.Decoder) int {
 	for {
-		var incoming request
+		var incoming _Request
 		if err := requests.Decode(&incoming); err != nil {
 			if errors.Is(err, io.EOF) {
 				return 0
@@ -77,9 +77,9 @@ func (e *evaluator) follow(requests *json.Decoder) int {
 	}
 }
 
-func (e *evaluator) obey(control *json.Decoder) {
+func (e *_Evaluator) obey(control *json.Decoder) {
 	for {
-		var incoming request
+		var incoming _Request
 		if err := control.Decode(&incoming); err != nil {
 			if errors.Is(err, io.EOF) {
 				return
@@ -99,7 +99,7 @@ func (e *evaluator) obey(control *json.Decoder) {
 	}
 }
 
-func (e *evaluator) accept(incoming request) error {
+func (e *_Evaluator) accept(incoming _Request) error {
 	switch {
 	case incoming.Op == opBuild && incoming.Plan != nil:
 		ctx, err := e.begin(incoming.Job)
@@ -125,7 +125,7 @@ func (e *evaluator) accept(incoming request) error {
 	return nil
 }
 
-func (e *evaluator) begin(job uint64) (context.Context, error) {
+func (e *_Evaluator) begin(job uint64) (context.Context, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if job <= e.arrived {
@@ -141,13 +141,13 @@ func (e *evaluator) begin(job uint64) (context.Context, error) {
 	return ctx, nil
 }
 
-func (e *evaluator) holding(unit uint64) servable {
+func (e *_Evaluator) holding(unit uint64) _Servable {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.units[unit]
 }
 
-func (e *evaluator) end(job uint64) {
+func (e *_Evaluator) end(job uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if cancel := e.running[job]; cancel != nil {
@@ -159,15 +159,15 @@ func (e *evaluator) end(job uint64) {
 	}
 }
 
-func (e *evaluator) forget(unit uint64) {
+func (e *_Evaluator) forget(unit uint64) {
 	e.mu.Lock()
 	delete(e.units, unit)
 	e.mu.Unlock()
 	e.end(unit)
 }
 
-func (e *evaluator) build(ctx context.Context, job uint64, plan blueprint) {
-	var built servable
+func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
+	var built _Servable
 	var err error
 	e.watch.during(func() { built, err = plan.build(ctx) })
 	e.mu.Lock()
@@ -183,7 +183,7 @@ func (e *evaluator) build(ctx context.Context, job uint64, plan blueprint) {
 	e.replies.write(e.replies.frames.built(job))
 }
 
-func (e *evaluator) serve(ctx context.Context, job uint64, held servable, request work) {
+func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {
 	defer e.finish(job)
 	run, err := held.prepare(request)
 	if err != nil {
@@ -202,7 +202,7 @@ func (e *evaluator) serve(ctx context.Context, job uint64, held servable, reques
 	e.replies.write(sealed)
 }
 
-func (e *evaluator) finish(job uint64) {
+func (e *_Evaluator) finish(job uint64) {
 	e.mu.Lock()
 	cancel := e.running[job]
 	delete(e.running, job)
@@ -210,13 +210,13 @@ func (e *evaluator) finish(job uint64) {
 	cancel()
 }
 
-type replyWriter struct {
+type _ReplyWriter struct {
 	mu     sync.Mutex
 	out    *os.File
-	frames frames
+	frames _Frames
 }
 
-func (w *replyWriter) greet(greeting hello) {
+func (w *_ReplyWriter) greet(greeting _Hello) {
 	encoded, err := wireJSON(greeting)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing the greeting: %v\n", err)
@@ -225,7 +225,7 @@ func (w *replyWriter) greet(greeting hello) {
 	w.write(encoded)
 }
 
-func (w *replyWriter) write(frame []byte) {
+func (w *_ReplyWriter) write(frame []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, err := w.out.Write(frame); err != nil {
@@ -248,27 +248,27 @@ func adoptTheHostsZone() {
 	}
 }
 
-func worldFromEnv() (evaluatorWorld, error) {
+func worldFromEnv() (_EvaluatorWorld, error) {
 	written, err := strconv.ParseInt(os.Getenv(evaluatorMemoryLimit), 10, 64)
 	if err != nil {
-		return evaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorMemoryLimit, os.Getenv(evaluatorMemoryLimit))
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorMemoryLimit, os.Getenv(evaluatorMemoryLimit))
 	}
 	limit, err := makeMemoryLimit(written)
 	if err != nil {
-		return evaluatorWorld{}, fmt.Errorf("bad %s: %w", evaluatorMemoryLimit, err)
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %w", evaluatorMemoryLimit, err)
 	}
 	parent, err := strconv.Atoi(os.Getenv(evaluatorParent))
 	if err != nil || parent <= 0 {
-		return evaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorParent, os.Getenv(evaluatorParent))
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorParent, os.Getenv(evaluatorParent))
 	}
 	nonce := os.Getenv(evaluatorNonce)
 	if nonce == "" {
-		return evaluatorWorld{}, fmt.Errorf("no %s", evaluatorNonce)
+		return _EvaluatorWorld{}, fmt.Errorf("no %s", evaluatorNonce)
 	}
-	return evaluatorWorld{limit: limit, nonce: nonce, parent: parent}, nil
+	return _EvaluatorWorld{limit: limit, nonce: nonce, parent: parent}, nil
 }
 
-type heapWatch struct {
+type _HeapWatch struct {
 	ceiling    uint64
 	parent     int
 	wake       chan struct{}
@@ -277,11 +277,11 @@ type heapWatch struct {
 	busy       int
 }
 
-func watchTheHeap(world evaluatorWorld) *heapWatch {
+func watchTheHeap(world _EvaluatorWorld) *_HeapWatch {
 	goruntime.GC()
 	ceiling := min(heapHeld()+uint64(world.limit), math.MaxInt64)
 	debug.SetMemoryLimit(int64(ceiling))
-	watch := &heapWatch{ceiling: ceiling, parent: world.parent, wake: make(chan struct{}, 1)}
+	watch := &_HeapWatch{ceiling: ceiling, parent: world.parent, wake: make(chan struct{}, 1)}
 	go watch.patrol()
 	return watch
 }
@@ -300,7 +300,7 @@ func metric(name string) uint64 {
 	return samples[0].Value.Uint64()
 }
 
-func (w *heapWatch) during(work func()) {
+func (w *_HeapWatch) during(work func()) {
 	w.mu.Lock()
 	w.busy++
 	if w.busy == 1 {
@@ -318,7 +318,7 @@ func (w *heapWatch) during(work func()) {
 	work()
 }
 
-func (w *heapWatch) patrol() {
+func (w *_HeapWatch) patrol() {
 	for range w.wake {
 		for w.inspect(); w.working(); w.inspect() {
 			time.Sleep(memoryCheckEvery)
@@ -331,20 +331,20 @@ func liveHeap() uint64 {
 	return heapHeld()
 }
 
-func (w *heapWatch) confirmOverflow() {
+func (w *_HeapWatch) confirmOverflow() {
 	if held := liveHeap(); held > w.ceiling {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: live heap reached %d bytes, over its starting heap plus the limit, %d\n", held, w.ceiling)
 		os.Exit(exitMemoryLimit)
 	}
 }
 
-func (w *heapWatch) working() bool {
+func (w *_HeapWatch) working() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.busy > 0
 }
 
-func (w *heapWatch) inspect() {
+func (w *_HeapWatch) inspect() {
 	held := heapHeld()
 	w.notePressure(held)
 	if held > w.ceiling {
@@ -355,7 +355,7 @@ func (w *heapWatch) inspect() {
 	}
 }
 
-func (w *heapWatch) notePressure(held uint64) {
+func (w *_HeapWatch) notePressure(held uint64) {
 	line := w.ceiling / 4 * 3
 	if held <= line || gcCycles() <= w.quietUntil {
 		return
@@ -368,6 +368,6 @@ func (w *heapWatch) notePressure(held uint64) {
 	w.quietUntil = gcCycles()
 }
 
-func (w *heapWatch) orphaned() bool {
+func (w *_HeapWatch) orphaned() bool {
 	return os.Getppid() != w.parent
 }

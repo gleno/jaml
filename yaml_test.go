@@ -60,15 +60,15 @@ func TestDuplicateKeysAreRefused(t *testing.T) {
 
 func TestDatesKeepTheirSpelling(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type shape struct {
+		type _Decoded struct {
 			At     time.Time `json:"at"`
 			Plain  string    `json:"plain"`
 			Quoted string    `json:"quoted"`
 			Tagged string    `json:"tagged"`
 		}
 		parsed := mustJaml(t, sb, "at: 2026-10-18T10:00:00Z\nplain: 2026-10-18\nquoted: \"2026-10-18\"\ntagged: !!timestamp 2026-10-18 10:00:00\n")
-		got := mustResolve[shape](t, t.Context(), parsed)
-		expectEqual(t, got, shape{
+		got := mustResolve[_Decoded](t, t.Context(), parsed)
+		expectEqual(t, got, _Decoded{
 			At:     time.Date(2026, time.October, 18, 10, 0, 0, 0, time.UTC),
 			Plain:  "2026-10-18",
 			Quoted: "2026-10-18",
@@ -405,11 +405,11 @@ func TestTheFirstErrorInDocumentOrderIsReported(t *testing.T) {
 }
 
 func TestAliasesExpandToAtMostAMillionValues(t *testing.T) {
-	budget := aliasBudget{decoded: 2 * maxAliasedValues, aliased: maxAliasedValues}
+	budget := _AliasBudget{decoded: 2 * maxAliasedValues, aliased: maxAliasedValues}
 	if err := budget.spend(true); err == nil || !strings.Contains(err.Error(), "aliases expand to more than 1048576 values") {
 		t.Fatalf("got %v", err)
 	}
-	unaliased := aliasBudget{decoded: 2 * maxAliasedValues, aliased: maxAliasedValues}
+	unaliased := _AliasBudget{decoded: 2 * maxAliasedValues, aliased: maxAliasedValues}
 	if err := unaliased.spend(false); err != nil {
 		t.Fatal(err)
 	}

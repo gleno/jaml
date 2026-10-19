@@ -13,44 +13,44 @@ import (
 	"time"
 )
 
-type requestLog struct {
+type _RequestLog struct {
 	mu     sync.Mutex
-	seen   []logged
-	builds map[builtIn]string
+	seen   []_Logged
+	builds map[_BuiltIn]string
 }
 
-type logged struct {
+type _Logged struct {
 	life  int
-	asked request
+	asked _Request
 }
 
-type builtIn struct {
+type _BuiltIn struct {
 	life int
 	job  uint64
 }
 
-func (l *requestLog) note(entry logged) {
+func (l *_RequestLog) note(entry _Logged) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seen = append(l.seen, entry)
 	if entry.asked.Op == opBuild {
-		l.builds[builtIn{life: entry.life, job: entry.asked.Job}] = entry.asked.Plan.Written
+		l.builds[_BuiltIn{life: entry.life, job: entry.asked.Job}] = entry.asked.Plan.Written
 	}
 }
 
-func (l *requestLog) served(text string) []request {
+func (l *_RequestLog) served(text string) []_Request {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var found []request
+	var found []_Request
 	for _, entry := range l.seen {
-		if entry.asked.Op == opServe && l.builds[builtIn{life: entry.life, job: entry.asked.Unit}] == text {
+		if entry.asked.Op == opServe && l.builds[_BuiltIn{life: entry.life, job: entry.asked.Unit}] == text {
 			found = append(found, entry.asked)
 		}
 	}
 	return found
 }
 
-func (l *requestLog) count(op opcode) int {
+func (l *_RequestLog) count(op _Opcode) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	counted := 0
@@ -62,15 +62,15 @@ func (l *requestLog) count(op opcode) int {
 	return counted
 }
 
-func recordRequests(t *testing.T, sb *Sandbox) *requestLog {
+func recordRequests(t *testing.T, sb *Sandbox) *_RequestLog {
 	t.Helper()
-	log := &requestLog{builds: map[builtIn]string{}}
+	log := &_RequestLog{builds: map[_BuiltIn]string{}}
 	tap(t, currentChild(t, sb), log)
 	d := dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	start := d.start
-	d.start = func() (*life, error) {
+	d.start = func() (*_Life, error) {
 		started, err := start()
 		if err == nil {
 			tap(t, started, log)
@@ -80,7 +80,7 @@ func recordRequests(t *testing.T, sb *Sandbox) *requestLog {
 	return log
 }
 
-func tap(t *testing.T, child *life, log *requestLog) {
+func tap(t *testing.T, child *_Life, log *_RequestLog) {
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func tap(t *testing.T, child *life, log *requestLog) {
 	child.wire.mu.Lock()
 	log.mu.Lock()
 	for u, r := range child.wire.residents {
-		log.builds[builtIn{life: child.cmd.Process.Pid, job: r.build}] = u.plan.Written
+		log.builds[_BuiltIn{life: child.cmd.Process.Pid, job: r.build}] = u.plan.Written
 	}
 	log.mu.Unlock()
 	child.wire.mu.Unlock()
@@ -104,9 +104,9 @@ func tap(t *testing.T, child *life, log *requestLog) {
 			if err != nil {
 				return
 			}
-			var asked request
+			var asked _Request
 			if json.Unmarshal(line, &asked) == nil {
-				log.note(logged{life: child.cmd.Process.Pid, asked: asked})
+				log.note(_Logged{life: child.cmd.Process.Pid, asked: asked})
 			}
 			if _, err := forwarded.Write(line); err != nil {
 				return
@@ -116,7 +116,7 @@ func tap(t *testing.T, child *life, log *requestLog) {
 }
 
 func unitOf(compiled *Expression) string {
-	return compiled.held.keep.unit.(*remoteUnit).plan.Written
+	return compiled.held.keep.unit.(*_RemoteUnit).plan.Written
 }
 
 func expectSharingAgain(t *testing.T, sb *Sandbox, compiled *Expression, jobs int) {
@@ -242,7 +242,7 @@ func TestPinnedClockAndSeedHoldAcrossAReplay(t *testing.T) {
 	wait.Wait()
 	attempts := log.served(unitOf(observer))
 	expectEqual(t, len(attempts), 4)
-	pins := map[pinned]int{}
+	pins := map[_Pinned]int{}
 	for _, attempt := range attempts {
 		pins[attempt.Work.Pinned]++
 	}
