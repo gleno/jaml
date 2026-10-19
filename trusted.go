@@ -24,6 +24,11 @@ func (e *_TrustedEngine) enter(ctx context.Context) error {
 	select {
 	case e.gate <- struct{}{}:
 		return nil
+	default:
+	}
+	select {
+	case e.gate <- struct{}{}:
+		return nil
 	case <-ctx.Done():
 		return cancelled(ctx)
 	}
@@ -47,7 +52,7 @@ func (e *_TrustedEngine) build(ctx context.Context, plan _Blueprint) (_Unit, err
 			return
 		}
 		built = made
-		race.finish(_Answered{})
+		race.finish(_Built{})
 	}()
 	if failed, isRefused := race.await().(_Refused); isRefused {
 		return nil, failed.err

@@ -8,7 +8,7 @@ import (
 )
 
 type _Renderer struct {
-	texts    map[string]_Text
+	compiled *_Compiled
 	settings _ExpressionSettings
 	engine   *_LazySession
 	args     []_Datum
@@ -42,6 +42,11 @@ func (r *_Renderer) render(node any, place _Place) (any, error) {
 		r.skipped = append(r.skipped, r.relative(place.path))
 		return nil, nil
 	}
+	if place.skips == nil {
+		if encoded, spliced := r.compiled.spliced(node); spliced {
+			return encoded, nil
+		}
+	}
 	switch typed := node.(type) {
 	case *_Mapping:
 		var rendered = &_Mapping{keys: typed.keys, values: make(map[string]any, len(typed.keys))}
@@ -64,7 +69,7 @@ func (r *_Renderer) render(node any, place _Place) (any, error) {
 		}
 		return rendered, nil
 	case string:
-		compiled, hasCode := r.texts[typed]
+		compiled, hasCode := r.compiled.texts[typed]
 		if !hasCode {
 			return typed, nil
 		}

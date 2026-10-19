@@ -149,11 +149,21 @@ func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 
 func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
 	var f = _Frames{limit: 1 << 20}
+	var outline = &_CodeOutline{steps: map[string]*_CodeOutline{"a": {}, "b": {steps: map[string]*_CodeOutline{"0": {}}}}}
+	var built, err = f.built(3, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outlined, err := f.built(6, outline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectEqual(t, string(outlined), `{"job":6,"built":true,"code":{"a":true,"b":{"0":true}}}`)
 	for _, sent := range []struct {
 		sealed []byte
 		reply  _Reply
 	}{
-		{f.built(3), _Reply{Job: 3, Built: true}},
+		{built, _Reply{Job: 3, Built: true}},
 		{f.missing(4), _Reply{Job: 4, Missing: true}},
 		{f.failure(5, "", errors.New("plain")), _Reply{Job: 5, Failure: &_Failure{Kind: "EvaluationFailed", Message: "plain"}}},
 	} {

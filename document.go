@@ -8,6 +8,7 @@ import (
 
 type _Servable interface {
 	prepare(request _Work) (_Prepared, error)
+	outline() *_CodeOutline
 }
 
 type _Prepared func(ctx context.Context) (_Rendered, error)
@@ -20,7 +21,7 @@ type _Rendered struct {
 
 type _Document struct {
 	root     any
-	texts    map[string]_Text
+	compiled *_Compiled
 	settings _ExpressionSettings
 }
 
@@ -34,11 +35,11 @@ func makeDocument(ctx context.Context, written string, configured _ExpressionSet
 	if err != nil {
 		return nil, err
 	}
-	texts, err := compileTexts(ctx, root, delimitersFor(configured.sigil))
+	compiled, err := compileTexts(ctx, root, delimitersFor(configured.sigil))
 	if err != nil {
 		return nil, err
 	}
-	return &_Document{root: root, texts: texts, settings: configured}, nil
+	return &_Document{root: root, compiled: compiled, settings: configured}, nil
 }
 
 func compileRaw(source string, configured _ExpressionSettings) (*_Document, error) {
@@ -46,7 +47,7 @@ func compileRaw(source string, configured _ExpressionSettings) (*_Document, erro
 	if err != nil {
 		return nil, fail(InvalidExpression, "%s: %w", bare.around(source), err)
 	}
-	return &_Document{root: source, texts: map[string]_Text{source: {whole: &compiled}}, settings: configured}, nil
+	return &_Document{root: source, compiled: &_Compiled{texts: map[string]_Text{source: {whole: &compiled}}}, settings: configured}, nil
 }
 
 func compileBare(source string, configured _ExpressionSettings) (_Expression, error) {
@@ -74,13 +75,17 @@ func (d *_Document) prepare(request _Work) (_Prepared, error) {
 		if err := engine.warm(); err != nil {
 			return _Rendered{}, err
 		}
-		var renderer = &_Renderer{texts: d.texts, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
+		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
 		tree, err := renderer.render(chosen.node, renderer.place(chosen.path))
 		if err != nil {
 			return _Rendered{}, err
 		}
 		return _Rendered{tree: tree, path: chosen.path, skipped: renderer.skipped}, nil
 	}, nil
+}
+
+func (d *_Document) outline() *_CodeOutline {
+	return d.compiled.outline(d.root)
 }
 
 func encodeResult(result _Rendered) ([]byte, error) {
@@ -115,7 +120,7 @@ func (d *_Document) selectPath(path []string) (_Subtree, error) {
 }
 
 func (d *_Document) missingInside(leaf _Subtree, step string) error {
-	if written, isString := leaf.node.(string); isString && d.texts[written].holdsCode() {
+	if written, isString := leaf.node.(string); isString && d.compiled.holdsCode(written) {
 		return missingPath(leaf.path, fmt.Sprintf("is code; At cannot look inside what it produces: resolve %s and index the result", leaf.path))
 	}
 	return missingPath(leaf.path, fmt.Sprintf("is %s, which has no key %q", describeLeaf(leaf.node), step))

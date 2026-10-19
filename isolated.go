@@ -17,6 +17,7 @@ type _RemoteUnit struct {
 	frames     _Frames
 	plan       _Blueprint
 	lifetime   context.Context
+	outline    *_CodeOutline
 }
 
 func startIsolated(lifetime context.Context, configured _SandboxSettings) (*_IsolatedEngine, error) {
@@ -31,14 +32,21 @@ func startIsolated(lifetime context.Context, configured _SandboxSettings) (*_Iso
 
 func (e *_IsolatedEngine) build(lifetime context.Context, plan _Blueprint) (_Unit, error) {
 	var made = &_RemoteUnit{dispatcher: e.dispatcher, frames: e.frames, plan: plan, lifetime: lifetime}
-	if failed, isRefused := e.dispatcher.carry(lifetime, made.reside).(_Refused); isRefused {
-		return nil, failed.err
+	switch settled := e.dispatcher.carry(lifetime, made.reside).(type) {
+	case _Refused:
+		return nil, settled.err
+	case _Built:
+		made.outline = settled.outline
 	}
 	return made, nil
 }
 
 func (u *_RemoteUnit) reside(e *_Errand, l *_Life) _Outcome {
 	return l.reside(u, e.report).result
+}
+
+func (u *_RemoteUnit) holdsCode(path []string) bool {
+	return u.outline.holds(path)
 }
 
 func (u *_RemoteUnit) request() (*_RequestBody, error) {
@@ -53,7 +61,7 @@ func (u *_RemoteUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 	return u.dispatcher.carry(ctx, func(e *_Errand, l *_Life) _Outcome {
 		for range servingAttempts {
 			var r = l.reside(u, e.report)
-			if _, built := r.result.(_Answered); !built {
+			if _, built := r.result.(_Built); !built {
 				return r.result
 			}
 			var served = l.serve(e.ctx, _Outgoing{unit: r.build, body: written.body})

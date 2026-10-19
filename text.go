@@ -3,6 +3,7 @@ package jaml
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -24,12 +25,13 @@ type _Compiler struct {
 	delimiters _Delimiters
 }
 
-func compileTexts(ctx context.Context, root any, delimiters _Delimiters) (map[string]_Text, error) {
+func compileTexts(ctx context.Context, root any, delimiters _Delimiters) (*_Compiled, error) {
 	var c = &_Compiler{ctx: ctx, texts: map[string]_Text{}, visited: map[any]bool{}, delimiters: delimiters}
-	if err := c.visit(root, nil); err != nil {
+	if _, err := c.visit(root, nil); err != nil {
 		return nil, err
 	}
-	return c.texts, nil
+	maps.DeleteFunc(c.visited, func(_ any, holds bool) bool { return !holds })
+	return &_Compiled{texts: c.texts, coded: c.visited}, nil
 }
 
 type _Delimiter struct {
@@ -56,51 +58,48 @@ func (d _Delimiter) around(code string) string {
 	return d.opens + excerpt(code, codeExcerptLength) + d.closes
 }
 
-func (c *_Compiler) visit(node any, path *_DataPath) error {
-	written, isString := node.(string)
-	if !isString {
-		if c.revisits(node) {
-			return nil
-		}
-		return eachChild(node, path, c.visit)
+func (c *_Compiler) visit(node any, path *_DataPath) (bool, error) {
+	if written, isString := node.(string); isString {
+		return c.visitText(written, path)
 	}
-	if _, seen := c.texts[written]; seen {
-		return nil
+	var identity = identityOf(node)
+	if identity == nil {
+		return false, nil
+	}
+	if holds, seen := c.visited[identity]; seen {
+		return holds, nil
+	}
+	var holds = false
+	var err = eachChild(node, path, func(child any, path *_DataPath) error {
+		var childHolds, err = c.visit(child, path)
+		holds = holds || childHolds
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	c.visited[identity] = holds
+	return holds, nil
+}
+
+func (c *_Compiler) visitText(written string, path *_DataPath) (bool, error) {
+	if known, seen := c.texts[written]; seen {
+		return known.holdsCode(), nil
 	}
 	if c.ctx.Err() != nil {
-		return cancelled(c.ctx)
+		return false, cancelled(c.ctx)
 	}
 	compiled, err := c.compileText(written)
 	if err != nil && c.ctx.Err() != nil {
-		return cancelled(c.ctx)
+		return false, cancelled(c.ctx)
 	}
 	if err != nil {
-		return fail(InvalidExpression, "%w", err).within(path.String())
+		return false, fail(InvalidExpression, "%w", err).within(path.String())
 	}
 	if compiled.holdsCode() {
 		c.texts[written] = compiled
 	}
-	return nil
-}
-
-func (c *_Compiler) revisits(node any) bool {
-	var identity any
-	switch typed := node.(type) {
-	case *_Mapping:
-		identity = typed
-	case []any:
-		if len(typed) == 0 {
-			return false
-		}
-		identity = &typed[0]
-	default:
-		return false
-	}
-	if c.visited[identity] {
-		return true
-	}
-	c.visited[identity] = true
-	return false
+	return compiled.holdsCode(), nil
 }
 
 func (t _Text) holdsCode() bool {

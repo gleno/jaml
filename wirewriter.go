@@ -45,6 +45,15 @@ func (w *_WireWriter) raw(text string) error {
 	return nil
 }
 
+func (w *_WireWriter) splice(encoded _Encoded) error {
+	if len(w.written)+len(encoded) > w.limit {
+		return _PastLimit{}
+	}
+	w.reserve(len(encoded))
+	w.written = append(w.written, encoded...)
+	return nil
+}
+
 func (w *_WireWriter) mark(written byte) {
 	w.reserve(1)
 	w.written = append(w.written, written)
@@ -80,6 +89,8 @@ func (w *_WireWriter) data(value any) error {
 		return w.object(typed)
 	case *_Mapping:
 		return w.mapping(typed)
+	case _Encoded:
+		return w.splice(typed)
 	}
 	return fmt.Errorf("%T is not jaml data", value)
 }

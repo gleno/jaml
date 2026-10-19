@@ -150,10 +150,18 @@ func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
 		e.jobs.settle(job)
 		e.replies.write(e.replies.frames.failure(job, "", err))
 	case e.jobs.keep(job, built):
-		e.replies.write(e.replies.frames.built(job))
+		e.replies.write(e.builtFrame(job, built))
 	default:
 		e.replies.write(e.replies.frames.failure(job, "", cancelled(ctx)))
 	}
+}
+
+func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
+	frame, err := e.replies.frames.built(job, built.outline())
+	if err != nil {
+		return e.replies.frames.failure(job, "", fail(InvalidExpression, "outlining its code: %w", err))
+	}
+	return frame
 }
 
 func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {

@@ -127,7 +127,7 @@ func builtFrom(incoming _Reply) _Outcome {
 	if incoming.Failure != nil {
 		return _Refused{err: incoming.Failure.rebuild()}
 	}
-	return _Answered{}
+	return _Built{outline: incoming.Code}
 }
 
 func (l *_Life) settle(r *_Residency, result _Outcome) {
@@ -136,7 +136,7 @@ func (l *_Life) settle(r *_Residency, result _Outcome) {
 		return
 	default:
 	}
-	if _, built := result.(_Answered); !built {
+	if _, built := result.(_Built); !built {
 		l.drop(r)
 	}
 	r.result = result

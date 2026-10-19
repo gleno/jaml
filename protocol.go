@@ -16,7 +16,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 11
+	protocolVersion      = 12
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -66,12 +66,13 @@ type _Work struct {
 }
 
 type _Reply struct {
-	Job     uint64     `json:"job"`
-	Built   bool       `json:"built,omitempty"`
-	Data    _Borrowed  `json:"data,omitempty"`
-	Skipped [][]string `json:"skipped,omitempty"`
-	Failure *_Failure  `json:"failure,omitempty"`
-	Missing bool       `json:"missing,omitempty"`
+	Job     uint64        `json:"job"`
+	Built   bool          `json:"built,omitempty"`
+	Code    *_CodeOutline `json:"code,omitempty"`
+	Data    _Borrowed     `json:"data,omitempty"`
+	Skipped [][]string    `json:"skipped,omitempty"`
+	Failure *_Failure     `json:"failure,omitempty"`
+	Missing bool          `json:"missing,omitempty"`
 }
 
 type _Frames struct {
@@ -196,6 +197,10 @@ func (r _Reply) fits(op _Opcode) error {
 		return errors.New("the evaluator answered with more than one outcome")
 	case r.outcomes() == 0:
 		return errors.New("the evaluator answered with neither data nor a failure")
+	case r.Code != nil && !r.Built:
+		return errors.New("the evaluator outlined code for something other than a build")
+	case r.Code != nil && r.Code.checked() != nil:
+		return fmt.Errorf("the evaluator outlined code badly: %w", r.Code.checked())
 	case r.Failure != nil && r.Failure.kind() == nil:
 		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", r.Failure.Kind)
 	case r.Failure != nil:

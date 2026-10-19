@@ -11,8 +11,8 @@ func (f _Frames) open(job uint64) *_WireWriter {
 	return &_WireWriter{written: strconv.AppendUint([]byte(`{"job":`), job, 10), limit: f.limit}
 }
 
-func (f _Frames) built(job uint64) []byte {
-	return fmt.Appendf(nil, `{"job":%d,"built":true}`, job)
+func (f _Frames) built(job uint64, outline *_CodeOutline) ([]byte, error) {
+	return wireJSON(_Reply{Job: job, Built: true, Code: outline})
 }
 
 func (f _Frames) missing(job uint64) []byte {
