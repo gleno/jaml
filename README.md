@@ -18,7 +18,7 @@ Nothing in jaml has a `Close` method. **Everything lives exactly as long as the 
 
 So **pass a long-lived context** to the constructors: your service's root context, not a request's. A template made with a request-scoped context dies when the request ends. Each call (`Eval`, `Call`) takes its own context, which bounds only that call.
 
-A template or expression you drop without ending its context is still forgotten: once the garbage collector finds it unreachable, jaml ends its lifetime and tells the sandbox to drop it.
+A template or expression you drop without ending its context is still forgotten: once the garbage collector finds no copy of it reachable, jaml ends its lifetime and tells the sandbox to drop it. Copying a `Template` or `Expression` by value is fine; every copy works for as long as any of them is reachable.
 
 ## What it gives you
 
@@ -107,7 +107,7 @@ if errors.As(err, &thrown) {
 }
 ```
 
-An error from an expression that threw wraps a `*jaml.Thrown`, inside an `EvaluationFailed`. `Value` is what the thrown value looks like as JSON, read without calling `toJSON`: numbers are `float64`, lists `[]any`, objects `map[string]any`. Inside objects, functions, symbols and `undefined` are left out; inside lists they become `nil`. `NaN`, infinities and BigInts become `nil`. An `Error` or class instance contributes its own enumerable properties (`e.status = 404` gives `{"status": 404}`). Cycles, proxies and anything nested deeper than 4096 become `nil`. If reading the value throws, or it holds more than 1,048,576 values, `Value` is `nil`. Getters run while it is read, inside the sandbox. No JavaScript value ever reaches your code.
+An error from an expression that threw wraps a `*jaml.Thrown`, inside an `EvaluationFailed`. `Value` is what the thrown value looks like as JSON, read without calling `toJSON`: numbers are `float64`, lists `[]any`, objects `map[string]any`. Inside objects, functions, symbols and `undefined` are left out; inside lists they become `nil`. `NaN`, infinities and BigInts become `nil`. An `Error` or class instance contributes its own enumerable properties (`e.status = 404` gives `{"status": 404}`). Cycles, proxies and anything nested deeper than 4096 become `nil`. If reading the value throws, or it holds more than 1,048,576 values, `Value` is `nil`. Getters run while it is read, inside the sandbox. Once the call's context has ended, the thrown value is not read; the call fails with the context's cause. No JavaScript value ever reaches your code.
 
 ## Syntax
 
@@ -187,7 +187,7 @@ Both kinds run at most `WithMaxConcurrency` jobs at once, in arrival order; a jo
 
 ### Trusted
 
-`MakeTrustedSandbox` runs everything in your process. The context of each call interrupts its JavaScript cooperatively, so an infinite loop ends with its context, but a built-in that never returns to the interpreter runs on, and an allocation bomb takes your process down. A build that outlives its timeout returns to you at the timeout, but keeps its concurrency slot until it really finishes. `WithMemoryLimit` is refused. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code; trusted mode makes no promise about running untrusted code.
+`MakeTrustedSandbox` runs everything in your process. The context of each call interrupts its JavaScript cooperatively, so an infinite loop ends with its context, and so does binding vars or reading a result or a thrown value; but a built-in that never returns to the interpreter runs on, and an allocation bomb takes your process down. A build that outlives its timeout returns to you at the timeout, but keeps its concurrency slot until it really finishes. `WithMemoryLimit` is refused. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code; trusted mode makes no promise about running untrusted code.
 
 ### Isolated
 

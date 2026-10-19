@@ -27,7 +27,7 @@ func (r realm) snapshot(thrown goja.Value) any {
 	reader := &snapshotReader{realm: r, ancestors: map[*goja.Object]bool{}, remaining: maxResultValues}
 	var taken any
 	complete := false
-	if err := r.guarded(func() { taken, complete = reader.take(thrown, 0) }); err != nil || !complete {
+	if err := r.contain(func() { taken, complete = reader.take(thrown, 0) }); err != nil || !complete {
 		return nil
 	}
 	return taken

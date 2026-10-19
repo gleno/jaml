@@ -1,6 +1,8 @@
 package jaml
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"runtime/debug"
@@ -144,7 +146,7 @@ func TestAGoPanicInsideABuiltInFailsTheEvalInBothKinds(t *testing.T) {
 }
 
 func TestAPanickedSessionRunsNothingMore(t *testing.T) {
-	opened, err := openSession(sessionPlan{vars: encodedVars{"width": []byte("4503599627370496")}})
+	opened, err := openSession(t.Context(), sessionPlan{vars: encodedVars{"width": []byte("4503599627370496")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,4 +171,28 @@ func TestTheGuardedJSONParseLooksLikeTheBuiltIn(t *testing.T) {
 		text := expressionTemplate("[JSON.parse.name, JSON.parse.length, Object.getOwnPropertyDescriptor(JSON.parse, 'name').writable, Object.getOwnPropertyDescriptor(JSON.parse, 'length').configurable, Object.keys(JSON.parse).length]")
 		expectEqual(t, evalAs[[]any](t, mustTemplate(t, sb, text), nil, "v"), []any{"parse", float64(2), false, true, float64(0)})
 	})
+}
+
+func TestASessionRefusesEveryEntryOnceItsContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	opened, err := openSession(ctx, sessionPlan{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.close()
+	if err := opened.enter(func(realm) error { return nil }); err != nil {
+		t.Fatalf("a live session refused: %v", err)
+	}
+	cancel()
+	ran := false
+	err = opened.enter(func(realm) error {
+		ran = true
+		return nil
+	})
+	if ran {
+		t.Fatal("a step ran after its context ended")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the context's cause, got %v", err)
+	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,4 +103,85 @@ func TestACustomUnmarshalersErrorIsReachable(t *testing.T) {
 	if !errors.Is(both.trusted, errPicky) || !errors.Is(both.isolated, errPicky) {
 		t.Fatalf("expected the unmarshaler's error in %v", both.trusted)
 	}
+}
+
+func expectTheSameChildAfter(t *testing.T, sb *Sandbox, run func()) {
+	t.Helper()
+	if _, isIsolated := sb.engine.(*isolatedEngine); !isIsolated {
+		run()
+		return
+	}
+	before := childPID(t, sb)
+	run()
+	if after := childPID(t, sb); after != before {
+		t.Fatalf("the evaluator was replaced: %d became %d", before, after)
+	}
+}
+
+func evalOrHang(t *testing.T, template *Template, ctx context.Context, vars map[string]any) error {
+	t.Helper()
+	returned := make(chan error, 1)
+	go func() {
+		var out any
+		returned <- template.Eval(ctx, &out, vars, "v")
+	}()
+	select {
+	case err := <-returned:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Eval never returned")
+		return nil
+	}
+}
+
+func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) {
+	cases := map[string]string{
+		"spinning message":    "(() => { throw { get message() { for (;;) {} } } })()",
+		"spinning field":      "(() => { throw { message: 'm', get x() { for (;;) {} } } })()",
+		"spinning both":       "(() => { throw { get message() { for (;;) {} }, get x() { for (;;) {} } } })()",
+		"spinning error name": "(() => { const e = new Error('m'); Object.defineProperty(e, 'name', { get() { for (;;) {} } }); throw e })()",
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			eachKind(t, func(t *testing.T, sb *Sandbox) {
+				template := mustTemplate(t, sb, expressionTemplate(source))
+				var err error
+				expectTheSameChildAfter(t, sb, func() { err = evalOrHang(t, template, within(t, 200*time.Millisecond), nil) })
+				expectError(t, err, EvaluationFailed, "deadline exceeded")
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected context.DeadlineExceeded in %v", err)
+				}
+				var caught *Thrown
+				if errors.As(err, &caught) {
+					t.Fatalf("a throw read past its context still produced %+v", *caught)
+				}
+				var two int
+				if err := mustTemplate(t, sb, "v: ${ 1 + 1 }\n").Eval(within(t, 5*time.Second), &two, nil, "v"); err != nil {
+					t.Fatalf("the next Eval after the spin: %v", err)
+				}
+			}, WithMaxConcurrency(1))
+		})
+	}
+}
+
+func TestBindingVarsEndsWithItsContext(t *testing.T) {
+	long := json.RawMessage("[" + strings.Repeat("0,", 1<<16) + "0]")
+	vars := map[string]any{}
+	for i := range 192 {
+		vars["v"+strconv.Itoa(i)] = long
+	}
+	cancelAt := 600 * time.Millisecond * raceSlowdown
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		template := mustTemplate(t, sb, "v: ${ 1 }\n")
+		expectTheSameChildAfter(t, sb, func() {
+			ctx, cancel := context.WithCancel(t.Context())
+			started := time.Now()
+			time.AfterFunc(cancelAt, cancel)
+			err := evalOrHang(t, template, ctx, vars)
+			expectError(t, err, EvaluationFailed, "cancelled")
+			if took := time.Since(started); took > cancelAt+cancelAt/2 {
+				t.Fatalf("binding ran %v past its context", took-cancelAt)
+			}
+		})
+	})
 }

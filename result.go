@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -26,20 +27,30 @@ type realm struct {
 	vm              *goja.Runtime
 	objectPrototype *goja.Object
 	ownKeys         goja.Callable
+	parse           goja.Callable
 }
 
 func captureRealm(vm *goja.Runtime) realm {
 	object := vm.Get("Object").ToObject(vm)
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
-	return realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys}
+	return realm{vm: vm, objectPrototype: object.Get("prototype").ToObject(vm), ownKeys: ownKeys, parse: guardJSONParse(vm)}
 }
 
-func (r realm) guarded(run func()) error {
+func (r realm) native(run func()) error {
 	native, _ := goja.AssertFunction(r.vm.ToValue(func(goja.FunctionCall) goja.Value {
 		run()
 		return goja.Undefined()
 	}))
 	_, err := native(goja.Undefined())
+	return err
+}
+
+func (r realm) contain(run func()) error {
+	err := r.native(run)
+	var interrupted *goja.InterruptedError
+	if errors.As(err, &interrupted) {
+		panic(interrupted)
+	}
 	return err
 }
 
