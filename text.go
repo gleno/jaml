@@ -20,11 +20,12 @@ type _Segment struct {
 type _Compiler struct {
 	ctx        context.Context
 	texts      map[string]_Text
+	visited    map[any]bool
 	delimiters _Delimiters
 }
 
 func compileTexts(ctx context.Context, root any, delimiters _Delimiters) (map[string]_Text, error) {
-	var c = &_Compiler{ctx: ctx, texts: map[string]_Text{}, delimiters: delimiters}
+	var c = &_Compiler{ctx: ctx, texts: map[string]_Text{}, visited: map[any]bool{}, delimiters: delimiters}
 	if err := c.visit(root, nil); err != nil {
 		return nil, err
 	}
@@ -58,6 +59,9 @@ func (d _Delimiter) around(code string) string {
 func (c *_Compiler) visit(node any, path *_DataPath) error {
 	written, isString := node.(string)
 	if !isString {
+		if c.revisits(node) {
+			return nil
+		}
 		return eachChild(node, path, c.visit)
 	}
 	if _, seen := c.texts[written]; seen {
@@ -74,6 +78,26 @@ func (c *_Compiler) visit(node any, path *_DataPath) error {
 		c.texts[written] = compiled
 	}
 	return nil
+}
+
+func (c *_Compiler) revisits(node any) bool {
+	var identity any
+	switch typed := node.(type) {
+	case *_Mapping:
+		identity = typed
+	case []any:
+		if len(typed) == 0 {
+			return false
+		}
+		identity = &typed[0]
+	default:
+		return false
+	}
+	if c.visited[identity] {
+		return true
+	}
+	c.visited[identity] = true
+	return false
 }
 
 func (t _Text) holdsCode() bool {

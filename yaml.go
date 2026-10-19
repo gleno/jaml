@@ -41,7 +41,7 @@ func parseYAML(ctx context.Context, source string) (any, error) {
 	if document.Kind == 0 || len(document.Content) == 0 {
 		return nil, nil
 	}
-	var reader = &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}}
+	var reader = &_YamlReader{ctx: ctx, expanding: map[*yaml.Node]bool{}, converted: map[*yaml.Node]_Converted{}, deepest: -1}
 	return reader.data(document.Content[0], _DataPlace{})
 }
 
@@ -90,7 +90,15 @@ func (a _DataPlace) atIndex(index int) _DataPlace {
 type _YamlReader struct {
 	ctx       context.Context
 	expanding map[*yaml.Node]bool
+	converted map[*yaml.Node]_Converted
 	budget    _AliasBudget
+	deepest   int
+}
+
+type _Converted struct {
+	value  any
+	values int
+	height int
 }
 
 type _AliasBudget struct {
@@ -99,11 +107,22 @@ type _AliasBudget struct {
 }
 
 func (b *_AliasBudget) spend(aliased bool) error {
-	b.decoded++
+	*b = b.after(1, aliased)
 	if !aliased {
 		return nil
 	}
-	b.aliased++
+	return b.excess()
+}
+
+func (b _AliasBudget) after(values int, aliased bool) _AliasBudget {
+	b.decoded += values
+	if aliased {
+		b.aliased += values
+	}
+	return b
+}
+
+func (b _AliasBudget) excess() error {
 	if b.aliased > maxAliasedValues {
 		return fmt.Errorf("aliases expand to more than %d values", maxAliasedValues)
 	}
@@ -128,9 +147,68 @@ func (r *_YamlReader) data(node *yaml.Node, place _DataPlace) (any, error) {
 	if r.ctx.Err() != nil {
 		return nil, cancelled(r.ctx)
 	}
-	if node.Kind == yaml.AliasNode {
+	switch {
+	case node.Kind == yaml.AliasNode:
 		return r.alias(node, place)
+	case node.Anchor != "":
+		return r.anchored(node, place)
 	}
+	return r.convert(node, place)
+}
+
+func (r *_YamlReader) alias(node *yaml.Node, place _DataPlace) (any, error) {
+	if r.expanding[node.Alias] {
+		return nil, refuse(place.path, fmt.Sprintf("alias *%s refers to a node that contains it", node.Value))
+	}
+	place.aliased = true
+	return r.anchored(node.Alias, place)
+}
+
+func (r *_YamlReader) anchored(node *yaml.Node, place _DataPlace) (any, error) {
+	known, seen := r.converted[node]
+	switch {
+	case !seen:
+		return r.convertOnce(node, place)
+	case r.reuse(known, place):
+		return known.value, nil
+	}
+	return r.convert(node, place)
+}
+
+func (r *_YamlReader) convertOnce(node *yaml.Node, place _DataPlace) (any, error) {
+	var before, outer = r.budget.decoded, r.deepest
+	r.deepest = -1
+	value, err := r.convert(node, place)
+	var inner = r.deepest
+	r.deepest = max(outer, inner)
+	if err != nil {
+		return nil, err
+	}
+	var height = -1
+	if inner >= 0 {
+		height = inner - place.path.depth()
+	}
+	r.converted[node] = _Converted{value: value, values: r.budget.decoded - before, height: height}
+	return value, nil
+}
+
+func (r *_YamlReader) reuse(known _Converted, place _DataPlace) bool {
+	var deepest = place.path.depth() + known.height
+	if known.height >= 0 && deepest >= maxDataDepth {
+		return false
+	}
+	var charged = r.budget.after(known.values, place.aliased)
+	if place.aliased && charged.excess() != nil {
+		return false
+	}
+	r.budget = charged
+	if known.height >= 0 {
+		r.deepest = max(r.deepest, deepest)
+	}
+	return true
+}
+
+func (r *_YamlReader) convert(node *yaml.Node, place _DataPlace) (any, error) {
 	if err := r.budget.spend(place.aliased); err != nil {
 		return nil, refuse(place.path, err.Error())
 	}
@@ -140,6 +218,7 @@ func (r *_YamlReader) data(node *yaml.Node, place _DataPlace) (any, error) {
 	if place.path.depth() >= maxDataDepth {
 		return nil, fail(InvalidExpression, "%s", nestsTooDeep).within(place.path.String())
 	}
+	r.deepest = max(r.deepest, place.path.depth())
 	if node.Anchor != "" {
 		r.expanding[node] = true
 		defer delete(r.expanding, node)
@@ -151,14 +230,6 @@ func (r *_YamlReader) data(node *yaml.Node, place _DataPlace) (any, error) {
 		return r.sequence(node, place)
 	}
 	return nil, refuse(place.path, fmt.Sprintf("line %d holds a YAML node of unknown kind %d", node.Line, node.Kind))
-}
-
-func (r *_YamlReader) alias(node *yaml.Node, place _DataPlace) (any, error) {
-	if r.expanding[node.Alias] {
-		return nil, refuse(place.path, fmt.Sprintf("alias *%s refers to a node that contains it", node.Value))
-	}
-	place.aliased = true
-	return r.data(node.Alias, place)
 }
 
 func (r *_YamlReader) sequence(node *yaml.Node, place _DataPlace) ([]any, error) {

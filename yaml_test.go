@@ -3,6 +3,7 @@ package jaml
 import (
 	"fmt"
 	"math/big"
+	"math/rand/v2"
 	goruntime "runtime"
 	"strings"
 	"testing"
@@ -413,4 +414,108 @@ func TestAliasesExpandToAtMostAMillionValues(t *testing.T) {
 	if err := unaliased.spend(false); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAnAnchorIsConvertedOnceAndSharedByItsAliases(t *testing.T) {
+	root, err := parseYAML(t.Context(), "a: &a {x: [1]}\nb: *a\nc: [*a]\nm: {<<: *a, y: 2}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document = root.(*_Mapping)
+	var anchored = document.values["a"].(*_Mapping)
+	if document.values["b"] != anchored || document.values["c"].([]any)[0] != anchored {
+		t.Fatal("an alias holds its own copy of the anchored mapping")
+	}
+	if merged := document.values["m"].(*_Mapping).values["x"].([]any); &merged[0] != &anchored.values["x"].([]any)[0] {
+		t.Fatal("a merge holds its own copy of the anchored values")
+	}
+}
+
+func wideAliasedDocument() string {
+	var text strings.Builder
+	text.WriteString("a: &a {")
+	for key := range 4000 {
+		fmt.Fprintf(&text, "k%d: v%d, ", key, key)
+	}
+	text.WriteString("}\nrefs:\n")
+	for range 98 {
+		text.WriteString("- *a\n")
+	}
+	return text.String()
+}
+
+func TestAWideAliasedDocumentResidesAtItsWrittenSize(t *testing.T) {
+	var text = wideAliasedDocument()
+	var parsed = mustJaml(t, mustSandbox(t, isolatedKind, WithMemoryLimit(16<<20)), text)
+	expectEqual(t, evalAs[string](t, parsed, nil, "refs", "97", "k3999"), "v3999")
+	expectEqual(t, len(evalAs[map[string]string](t, parsed, nil, "refs", "50")), 4000)
+	var before, after goruntime.MemStats
+	goruntime.GC()
+	goruntime.ReadMemStats(&before)
+	root, err := parseYAML(t.Context(), text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goruntime.GC()
+	goruntime.ReadMemStats(&after)
+	goruntime.KeepAlive(root)
+	if retained := int64(after.HeapAlloc) - int64(before.HeapAlloc); retained > 8<<20 {
+		t.Fatalf("a %d byte document resides in %d bytes", len(text), retained)
+	}
+}
+
+func TestSharedAliasesTripTheBudgetAtTheValueThatTipsIt(t *testing.T) {
+	var item = "{k0: v,k1: v,k2: v,k3: v,k4: v,k5: v,k6: v,k7: v,k8: v,k9: v}"
+	var anchor = "a: &a [" + strings.TrimSuffix(strings.Repeat(item+",", 100), ",") + "]\n"
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		_, err := sb.MakeExpressionFromJaml(t.Context(), anchor+"b: ["+strings.TrimSuffix(strings.Repeat("*a,", 200), ",")+"]\n")
+		expectError(t, err, InvalidExpression, "$.b[99][17].k9: aliases expand to 109198 of the 110301 values read so far, which is excessive aliasing")
+		_, err = sb.MakeExpressionFromJaml(t.Context(), anchor+"m: &m {x: *a}\nb: ["+strings.TrimSuffix(strings.Repeat("{<<: *m},", 200), ",")+"]\n")
+		expectError(t, err, InvalidExpression, "$.b[107].x[88].k2: aliases expand to 119989 of the 121201 values read so far, which is excessive aliasing")
+	})
+}
+
+func TestSharedAliasesTripTheDepthLimitAtTheNodeThatTipsIt(t *testing.T) {
+	var nested = func(depth int, inner string) string {
+		return "v: " + strings.Repeat("[", depth) + inner + strings.Repeat("]", depth) + "\n"
+	}
+	var deep = func(zeros int, tail string) string {
+		return "$.v" + strings.Repeat("[0]", zeros) + tail + ": nests deeper than 4096"
+	}
+	makeInBothKinds(t, "a: &a [[[1]]]\n"+nested(4092, "*a")).expectAccepted(t)
+	makeInBothKinds(t, "a: &a [[[1]]]\n"+nested(4093, "*a")).expectRefused(t, InvalidExpression, deep(4095, ""))
+	makeInBothKinds(t, "m: &m {k: {k: {z: 1}}}\n"+nested(4093, "{<<: *m}")).expectRefused(t, InvalidExpression, deep(4093, ".k.k"))
+	makeInBothKinds(t, "a: &a [x, &b [y, [z]]]\n"+nested(4092, "[*b, *a]")).expectRefused(t, InvalidExpression, deep(4092, "[1][1][1]"))
+	makeInBothKinds(t, "a: &a [x, &b [y, [z]]]\n"+nested(4093, "[*b, *a]")).expectRefused(t, InvalidExpression, deep(4094, "[1]"))
+}
+
+func TestABulkAliasChargeTripsExactlyWhenSomeSingleChargeWould(t *testing.T) {
+	var random = rand.New(rand.NewPCG(1, 2))
+	for range 5_000 {
+		var start = _AliasBudget{decoded: random.IntN(5_000_000)}
+		var ceiling = min(int(allowedAliasRatio(start.decoded)*float64(start.decoded)), maxAliasedValues, start.decoded)
+		start.aliased = max(0, ceiling-random.IntN(10_000))
+		var values = 1 + random.IntN(10_000)
+		var stepwise, tripped = start, false
+		for range values {
+			if stepwise.spend(true) != nil {
+				tripped = true
+				break
+			}
+		}
+		if bulk := start.after(values, true).excess() != nil; bulk != tripped {
+			t.Fatalf("from %+v charging %d: bulk trips %v, one at a time trips %v", start, values, bulk, tripped)
+		}
+	}
+}
+
+func TestResolvingASharedAnchorLeavesItForTheNextResolve(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var parsed = mustJaml(t, sb, "base: &b {count: \"${ count }\", list: [\"${ count }\"]}\ncopy: *b\nmerged: {<<: *b}\n")
+		for _, count := range []int{1, 2, 3} {
+			var want = map[string]any{"count": float64(count), "list": []any{float64(count)}}
+			expectEqual(t, evalAs[map[string]any](t, parsed, map[string]any{"count": count}), map[string]any{"base": want, "copy": want, "merged": want})
+			expectEqual(t, evalAs[map[string]any](t, parsed, map[string]any{"count": count}, "copy"), want)
+		}
+	})
 }
