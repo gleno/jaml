@@ -300,7 +300,9 @@ func (s *_CodeScan) skipLineComment() {
 
 func (s *_CodeScan) settleAtLineEnd(skipped string) {
 	var frame = s.top()
-	if frame.kind.holdsStatements() && frame.settling == unsettled && !s.expectsOperand() && strings.ContainsAny(skipped, "\n\r  ") {
+	var sibling = frame.kind.holdsStatements() || frame.kind == classFrame
+	var complete = !s.expectsOperand() || s.last == blockCloseToken
+	if sibling && frame.settling == unsettled && complete && strings.ContainsAny(skipped, "\n\r  ") {
 		frame.settling = settledByLine
 	}
 }
@@ -330,6 +332,8 @@ func (s *_CodeScan) startsStatement() bool {
 	case s.startsWord("in") || s.startsWord("instanceof"):
 		return false
 	case c == '"' || c == '\'' || c == '{' || c == '#':
+		return true
+	case strings.HasPrefix(s.text[s.at:], "++") || strings.HasPrefix(s.text[s.at:], "--"):
 		return true
 	}
 	return isWordByte(c)
@@ -541,6 +545,7 @@ func (s *_CodeScan) named(name string, header _Header) error {
 	case "case", "default":
 		if statements {
 			frame.local[statementShape] = 0
+			frame.endExpression()
 		}
 	case "typeof", "void", "delete", "new", "yield", "extends":
 		err = s.count(prefixShape)
@@ -720,9 +725,12 @@ func (s *_CodeScan) closeBrace() (int, bool, error) {
 	}
 	s.last = frame.closing
 	parent.local[prefixShape] = 0
-	if frame.ends && parent.kind.holdsStatements() {
+	switch {
+	case frame.ends && parent.kind.holdsStatements():
 		parent.endExpression()
 		parent.settling = settledByStatement
+	case frame.kind == bodyFrame && parent.kind == classFrame:
+		parent.endExpression()
 	}
 	return 0, false, nil
 }

@@ -349,3 +349,65 @@ func TestCodeThatBuiltBeforeTheScannerStillBuilds(t *testing.T) {
 		expectEqual(t, mustResolve[int](t, WithScript(t.Context(), "var await = 6\nconst half = await / 2\n"), document.At("v")), 3)
 	})
 }
+
+func siblings(count int, sibling func(index int) string, separator string) string {
+	var written []string
+	for index := range count {
+		written = append(written, sibling(index))
+	}
+	return strings.Join(written, separator)
+}
+
+func manySiblingExpressions() map[string]string {
+	var many = 2 * shapeBounds[binaryShape].limit
+	var fields = 2*shapeBounds[rightShape].limit + 100
+	var field = func(index int) string { return fmt.Sprintf("f%d = a ? %d : () => b + c", index, index) }
+	return map[string]string{
+		"class fields on lines":         "(class { " + siblings(fields, field, "\n") + " })",
+		"class fields with semicolons":  "(class { " + siblings(fields, field, "; ") + " })",
+		"static class fields on lines":  "(class { " + siblings(fields, func(i int) string { return fmt.Sprintf("static s%d = !a", i) }, "\n") + " })",
+		"class arrow fields on lines":   "(class { " + siblings(fields, func(i int) string { return fmt.Sprintf("f%d = () => {}", i) }, "\n") + " })",
+		"private class fields on lines": "(class { " + siblings(fields, func(i int) string { return fmt.Sprintf("#p%d = a ** 2", i) }, "\n") + " })",
+		"class methods":                 "(class { " + siblings(fields, func(i int) string { return fmt.Sprintf("m%d(x = a ? 1 : 2) { return x }", i) }, "\n") + " })",
+		"class accessors": "(class { " + siblings(fields, func(i int) string {
+			return fmt.Sprintf("get g%d() { return a ? 1 : 2 } set g%d(v) { this.v = v }", i, i)
+		}, "\n") + " })",
+		"object entries":                 "({ " + siblings(many, func(i int) string { return fmt.Sprintf("k%d: a ? x => x : -b + c.d", i) }, ", ") + " })",
+		"object accessors":               "({ " + siblings(fields, func(i int) string { return fmt.Sprintf("get g%d() { return a = 1 }, set g%d(v) { a = v }", i, i) }, ", ") + " })",
+		"destructuring defaults":         "(({ " + siblings(many, func(i int) string { return fmt.Sprintf("d%d = a ? 1 : 2", i) }, ", ") + " }) => 0)",
+		"array of conditionals":          "[" + siblings(many, func(int) string { return "a ? b : c" }, ", ") + "]",
+		"arguments":                      "f(" + siblings(many, func(int) string { return "a = b ? !c : d.e.f" }, ", ") + ")",
+		"parameters":                     "((" + siblings(many, func(i int) string { return fmt.Sprintf("p%d = x => x", i) }, ", ") + ") => 0)",
+		"sequence":                       "(" + siblings(many, func(int) string { return "a = b ** c + d" }, ", ") + ")",
+		"template substitutions":         "`" + siblings(many, func(int) string { return "${a ? b : c}" }, "") + "`",
+		"cases":                          "(() => { switch (x) { " + siblings(fields, func(i int) string { return fmt.Sprintf("case %d: y = a ? 1 : x => !x", i) }, "\n") + " } })",
+		"cases with breaks":              "(() => { switch (x) { " + siblings(fields, func(i int) string { return fmt.Sprintf("case %d: if (a) y = b; break", i) }, "\n") + "\ndefault: } })",
+		"statements on lines":            "(() => { " + siblings(many, func(int) string { return "x = a ? b + c : () => {}" }, "\n") + " })",
+		"arrow statements on lines":      "(() => { " + siblings(fields, func(i int) string { return fmt.Sprintf("const f%d = () => {}", i) }, "\n") + " })",
+		"ifs on lines":                   "(() => { " + siblings(many, func(int) string { return "if (a) x = !b" }, "\n") + " })",
+		"labels on lines":                "(() => { " + siblings(fields, func(i int) string { return fmt.Sprintf("l%d: x = a.b.c", i) }, "\n") + " })",
+		"increments on lines":            "(() => { let x = 0\n" + siblings(many, func(int) string { return "x\n++x" }, "\n") + " })",
+		"binary statements on lines":     "(() => { " + siblings(many, func(int) string { return "a + b * c" }, "\n") + " })",
+		"member statements on lines":     "(() => { " + siblings(many, func(int) string { return "a.b.c()" }, "\n") + " })",
+		"function declarations on lines": "(() => { " + siblings(fields, func(i int) string { return fmt.Sprintf("function f%d() { return a ? 1 : 2 }", i) }, "\n") + " })",
+	}
+}
+
+func TestSiblingsNeverChainIntoOneShape(t *testing.T) {
+	for name, expression := range manySiblingExpressions() {
+		if _, err := parseExpression(expression); err != nil {
+			t.Errorf("%s: goja refuses the test input: %v", name, err)
+			continue
+		}
+		if err := refuseDeepExpression(expression); err != nil {
+			t.Errorf("%s: goja parses it, the scanner refuses: %v", name, err)
+		}
+		if !strings.HasPrefix(expression, "(() => { ") {
+			continue
+		}
+		var body = strings.TrimSuffix(strings.TrimPrefix(expression, "(() => { "), " })")
+		if err := refuseDeepScript(body); err != nil {
+			t.Errorf("%s as a script: the scanner refuses: %v", name, err)
+		}
+	}
+}
