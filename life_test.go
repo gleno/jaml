@@ -92,7 +92,7 @@ func crowdedTemplate(index int) string {
 }
 
 func TestJobsThatOverflowTogetherInACrowdSucceedOnReplay(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(24<<20), WithMaxConcurrency(8))
+	sb := mustIsolated(t, WithMemoryLimit(24<<20), WithMaxConcurrency(8), WithBuildTimeout(30*time.Second))
 	templates := make([]*Template, 8)
 	for index := range templates {
 		templates[index] = mustTemplate(t, sb, crowdedTemplate(index))
@@ -129,7 +129,7 @@ func TestACancelBehindABigRequestStillLands(t *testing.T) {
 }
 
 func TestForgottenRebuildsLeaveNothingResident(t *testing.T) {
-	sb := mustIsolated(t, WithMemoryLimit(64<<20))
+	sb := mustIsolated(t, WithMemoryLimit(64<<20), WithBuildTimeout(30*time.Second))
 	templates := make([]*Template, 12/min(raceSlowdown, 3))
 	ends := make([]context.CancelFunc, len(templates))
 	var half time.Duration

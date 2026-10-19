@@ -177,7 +177,7 @@ func TestDistinctValuesFullOfInterpolationsMakeQuickly(t *testing.T) {
 			t.Fatalf("making %d bytes took %v", written.Len(), took)
 		}
 		expectEqual(t, evalAs[string](t, template, map[string]any{"a": 1}, "v3"), "3"+strings.Repeat("1", 10_900))
-	})
+	}, WithBuildTimeout(30*time.Second))
 }
 
 func TestAnEndHiddenBehindClusteredClosersIsStillFound(t *testing.T) {

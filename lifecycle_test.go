@@ -359,7 +359,7 @@ func TestABuildPastTheLimitFailsConstruction(t *testing.T) {
 		"many plain servers": listOfPlainServers(100000),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := mustIsolated(t, WithMemoryLimit(16<<20)).MakeTemplate(within(t, 60*time.Second), text)
+			_, err := mustIsolated(t, WithMemoryLimit(16<<20), WithBuildTimeout(30*time.Second)).MakeTemplate(within(t, 60*time.Second), text)
 			expectError(t, err, MemoryLimit, "exceeded the memory limit of 16777216 bytes")
 			expectError(t, err, EvaluationFailed)
 		})
