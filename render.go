@@ -128,9 +128,16 @@ func (r *renderer) admit(result any, compiled expression, at *dataPath) (any, er
 		return result, nil
 	}
 	if coercion == Strict {
-		return nil, fail(CoercionFailed, "%s is %s, which strict %s coercion refuses", compiled.written(), absent, absent).within(at.String())
+		return nil, fail(CoercionFailed, "%s is %s, which strict %s coercion refuses%s", compiled.written(), absent, absent, hintFor(absent, compiled)).within(at.String())
 	}
 	return nil, nil
+}
+
+func hintFor(absent string, compiled expression) string {
+	if absent != "undefined" {
+		return ""
+	}
+	return compiled.undefinedHint()
 }
 
 func (r *renderer) evaluate(compiled expression, at *dataPath) (any, error) {

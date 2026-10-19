@@ -74,16 +74,40 @@ func (p parsedCode) compile(opened delimiter) (expression, error) {
 	return expression{source: p.source, opened: opened, program: program}, nil
 }
 
-func (p parsedCode) refuseUnlessFunction() error {
+func (p parsedCode) written() ast.Expression {
 	statement, isStatement := p.program.Body[1].(*ast.ExpressionStatement)
 	if !isStatement {
-		return errNotFunction
+		return nil
 	}
 	sequence, isSequence := statement.Expression.(*ast.SequenceExpression)
 	if !isSequence || len(sequence.Sequence) != 2 {
-		return errNotFunction
+		return nil
 	}
-	switch literal := sequence.Sequence[1].(type) {
+	return sequence.Sequence[1]
+}
+
+func (e expression) undefinedHint() string {
+	parsed, err := parseCode(e.source)
+	if err != nil || !endsInBracedArrow(parsed.written()) {
+		return ""
+	}
+	return "; an arrow returning an object literal needs parentheses: () => ({ ... })"
+}
+
+func endsInBracedArrow(written ast.Expression) bool {
+	arrow, isArrow := written.(*ast.ArrowFunctionLiteral)
+	for isArrow {
+		concise, isConcise := arrow.Body.(*ast.ExpressionBody)
+		if !isConcise {
+			return true
+		}
+		arrow, isArrow = concise.Expression.(*ast.ArrowFunctionLiteral)
+	}
+	return false
+}
+
+func (p parsedCode) refuseUnlessFunction() error {
+	switch literal := p.written().(type) {
 	case *ast.ArrowFunctionLiteral:
 		if literal.Async {
 			return errAsyncFunction
