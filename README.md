@@ -1,12 +1,24 @@
 # jaml
 
-YAML templates whose values can hold JavaScript expressions, evaluated against your variables when you decode. jaml parses the YAML into plain data once, walks it at `Eval` time replacing every expression with its result, then hands the data to `encoding/json` to decode into your type.
+YAML templates whose values can hold JavaScript expressions, evaluated against your variables when you decode. jaml parses the YAML into plain data once, walks it at `Eval` time replacing every expression with its result, then hands the data to `encoding/json` to decode into your type. Standalone expressions and functions work the same way.
 
 ## Install
 
 ```sh
 go get github.com/gleno/jaml
 ```
+
+## Lifetimes are contexts
+
+Nothing in jaml has a `Close` method. **Everything lives exactly as long as the context you made it with.**
+
+- A `Sandbox` lives until the context passed to `MakeSandbox` or `MakeTrustedSandbox` ends. That ends every template and expression in it, and an isolated sandbox's child process.
+- A `Template` or `Expression` lives until the context passed to `MakeTemplate` or `Compile` ends, or its sandbox ends.
+- After that, every call returns `Closed`.
+
+So **pass a long-lived context** to the constructors: your service's root context, not a request's. A template made with a request-scoped context dies when the request ends. Each call (`Eval`, `Call`) takes its own context, which bounds only that call.
+
+A template or expression you drop without ending its context is still forgotten: once the garbage collector finds it unreachable, jaml ends its lifetime and tells the sandbox to drop it.
 
 ## What it gives you
 
@@ -15,8 +27,11 @@ go get github.com/gleno/jaml
 - **Results are data.** An expression must produce JSON data: scalars, lists, objects. Functions, symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does.
 - **Null and undefined on your terms.** `Loose` or `Strict` for expression results, configured separately.
-- **Trusted or secure, chosen up front.** A trusted template runs expressions in your process with no limits. A secure template runs them in a child process with a memory limit, cancelled through `context.Context`.
-- **Safe to share.** A `Template` is immutable; call `Eval` from as many goroutines as you like.
+- **Expressions and functions.** `Compile` an expression on its own, then `Eval` it with vars or `Call` the function it evaluates to with arguments. The function never leaves the sandbox.
+- **Deterministic when you want.** The clock and random seed travel on the context.
+- **Thrown values as data.** What an expression threw is reachable as `*jaml.Thrown`, with its message and a JSON snapshot of the value.
+- **Isolated or trusted, chosen up front.** An isolated sandbox runs everything in one child process with a memory ceiling, and survives anything a template does. A trusted sandbox runs in your process.
+- **Safe to share.** Sandboxes, templates and expressions are safe for concurrent use from any number of goroutines.
 
 ## Usage
 
@@ -36,33 +51,63 @@ type Config struct {
 	Value3 string `json:"value3"`
 }
 
-template, err := jaml.MakeTrustedTemplate(text)
+sandbox, err := jaml.MakeSandbox(appCtx, jaml.WithMemoryLimit(512<<20))
+if err != nil {
+	return err
+}
+template, err := sandbox.MakeTemplate(appCtx, text)
 if err != nil {
 	return err
 }
 
 var cfg Config
-err = template.Eval(&cfg, map[string]any{"name": "abc"}, "config")
+err = template.Eval(requestCtx, &cfg, map[string]any{"name": "abc"}, "config")
 // cfg == Config{Value1: 123, Value2: 2, Value3: "some string abc"}
 ```
 
-`Eval(into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error.
+`Eval(ctx, into, vars, path...)` decodes into the non-nil pointer `into`. The optional `path` selects a subtree first, one key or list index per element (`"config"`, `"servers", "0"`); only that subtree is evaluated. A list index is written in plain decimal, with no sign or leading zero. A path that does not exist is a `MissingPath` error.
 
 `vars` must be JSON data. Every `Eval` checks and binds all of them before evaluating anything, whatever the path selects. A var that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …) is an `EvaluationFailed` error naming the var, never a template path.
 
-### Templates you do not trust
+### Expressions and functions
 
 ```go
-template, err := jaml.MakeSecureTemplate(ctx, text, jaml.WithMemoryLimit(128<<20))
+check, err := sandbox.Compile(appCtx, "x => x.end >= x.start || 'end before start'")
 if err != nil {
 	return err
 }
-defer template.Close()
+var verdict any
+err = check.Call(ctx, &verdict, map[string]any{"start": 2, "end": 1})
+// verdict == "end before start"
 
-evalCtx, cancel := context.WithTimeout(ctx, time.Second)
-defer cancel()
-err = template.Eval(evalCtx, &cfg, vars, "config")
+sum, err := sandbox.Compile(appCtx, "a + b")
+var total int
+err = sum.Eval(ctx, &total, map[string]any{"a": 1, "b": 2})
+// total == 3
 ```
+
+`Compile` takes one JavaScript expression, under the same rules as a whole-value expression in a template, without the `${ }`. `Eval` evaluates it with `vars` as globals and decodes the result. `Call` requires the expression to evaluate to a function, calls it with `args`, each passed as a JSON copy (checked like vars, named `argument 1`, `argument 2`, …), and decodes what it returns. Results follow the same coercion options as templates, with the same defaults: null is `Loose` and undefined is `Strict`, so a validator that returns `undefined` for "no error" wants `jaml.WithUndefinedCoercion(jaml.Loose)`. A function value never leaves the sandbox: an expression or call that produces one is an `EvaluationFailed` error. Errors locate an expression at `$`, its result: `$: x => x.y.z: TypeError: …`.
+
+### Clock and seed
+
+```go
+ctx = jaml.WithFixedClock(ctx, at)
+ctx = jaml.WithRandomSeed(ctx, seed)
+```
+
+Every `Eval` and `Call` pins a clock and a random seed when it is submitted: the ones on its context, or else the current time and a fresh random seed. `Date.now()` and `new Date()` return the pinned time for the whole call, and `Math.random()` draws from a generator seeded with the pinned seed. With both set, results are identical in both sandbox kinds and on every run. Pinning at submission also means that a call replayed after a crash (see below) sees exactly what its first attempt saw.
+
+### Thrown values
+
+```go
+var thrown *jaml.Thrown
+if errors.As(err, &thrown) {
+	_ = thrown.Message // "TypeError: no" or "threw an object", collapsed and cut at 200 characters
+	_ = thrown.Value   // a JSON snapshot of the thrown value
+}
+```
+
+An error from an expression that threw wraps a `*jaml.Thrown`, inside an `EvaluationFailed`. `Value` is what the thrown value looks like as JSON, read without calling `toJSON`: numbers are `float64`, lists `[]any`, objects `map[string]any`. Inside objects, functions, symbols and `undefined` are left out; inside lists they become `nil`. `NaN`, infinities and BigInts become `nil`. An `Error` or class instance contributes its own enumerable properties (`e.status = 404` gives `{"status": 404}`). Cycles, proxies and anything nested deeper than 4096 become `nil`. If reading the value throws, or it holds more than 1,048,576 values, `Value` is `nil`. Getters run while it is read, inside the sandbox. No JavaScript value ever reaches your code.
 
 ## Syntax
 
@@ -87,6 +132,7 @@ steps: |
 - **Keys are never evaluated.**
 - An expression is exactly one strict-mode JavaScript expression, evaluated as a top-level script expression: statements (`1; 2`), legacy octal escapes (`"\101"`) and `new.target` are syntax errors, `arguments` is a `ReferenceError`, and `this` is `globalThis`. A body holding only comments is an empty expression. The vars are globals, deep-copied from `vars` the way `encoding/json` marshals them, so an expression cannot change your data. They never replace a built-in: a var named like one is refused. A var name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing var is a `ReferenceError`; a missing property of a var is `undefined`.
 - All expressions in one `Eval` share one runtime, so one expression can see globals another one set. Separate `Eval` calls never share anything.
+- `Date` and `Math.random` are pinned per call: the clock stands still for the whole `Eval`, and the random sequence comes from one seed. See [Clock and seed](#clock-and-seed).
 
 ### YAML gotchas
 
@@ -124,35 +170,49 @@ YAML `~`, `null` and empty values are null and decode as JSON null. The settings
 - Inside a returned list, `undefined` becomes `null`; inside a returned object, a key holding `undefined` is dropped, as `JSON.stringify` does.
 - JSON null leaves a non-pointer field as `encoding/json` leaves it: unchanged.
 
-## Trusted and secure templates
+## Sandboxes
 
-goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted inside a built-in call such as `'x'.repeat(1e9)`. So jaml does not pretend to bound an expression running in your process. You choose:
+goja, the JavaScript engine, cannot limit memory, and it cannot be interrupted inside a built-in call such as a backtracking regular expression or `'x'.repeat(1e9)`. So jaml offers two kinds of sandbox with the same API, and templates and expressions behave identically in both apart from the isolation guarantees.
 
-**`MakeTrustedTemplate`** runs expressions in your process, with no time or memory limit. An infinite loop hangs `Eval`; an allocation bomb takes the process down. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code, and deep nesting in that string can still overflow goja's recursive parser; trusted mode makes no promise about running untrusted code.
+```go
+func MakeSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
+func MakeTrustedSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
 
-**`MakeSecureTemplate(ctx, …)`** runs expressions in a child process that jaml starts and owns:
+func WithMemoryLimit(bytes int64) SandboxOption        // isolated only; 16 MiB to 1 TiB; default 256 MiB
+func WithMaxConcurrency(jobs int) SandboxOption        // at least 1; default GOMAXPROCS
+func WithBuildTimeout(timeout time.Duration) SandboxOption // positive; default 5s
+```
 
-- **Construction.** Your process never interprets the template text: `MakeSecureTemplate` checks the options, starts the child and hands it the text, and the child parses the YAML and compiles every expression. Its answer ends construction. A template the child refuses fails with the same `InvalidTemplate` and the same message a trusted template would give; a path that is missing at `Eval` is the child's `MissingPath`, again word for word. So hostile text costs your process nothing to parse: construction is bounded by `ctx`, which kills the child and fails with `EvaluationFailed` matching the context's cause, and by the memory limit.
-- **Memory.** The limit (`WithMemoryLimit`, 256 MiB by default, anywhere from 16 MiB to 1 TiB; any other value, 0 included, is `InvalidTemplate`) bounds two phases separately, each over a baseline the child measures itself, so heap that your packages build in their `init()` or package variables does not count against it. *Building* the template may grow the heap by at most the limit over what the binary holds when the child starts; this is the peak while parsing, several times the size of the built template, and a template that does not fit fails construction (or a later respawn) with `MemoryLimit`. *Each `Eval`* may then grow the heap by at most the limit over what the child holds once the template is built, so the template itself is not charged to every `Eval`; rendering plain data still counts, because the `Eval` allocates it. While it builds or serves, the child checks its heap every millisecond and exits once it passes its baseline plus the limit. One huge allocation is caught as soon as it is made; a doubling loop can reach about twice the limit before it is stopped. Either way the call fails with `MemoryLimit`, which is an `EvaluationFailed`, and "exceeded the memory limit". A child whose allocation the operating system refuses outright, so the Go runtime dies "out of memory", is a `MemoryLimit` too.
-- **Time.** `Eval(ctx, …)` takes a context, and it bounds the whole call: waiting for a turn, starting a fresh child, the request and the answer. When it is done, the child is killed and `Eval` fails with `EvaluationFailed`. An `Eval` whose context is already done fails at once: it never waits for a turn, touches the child or starts a new one, and a child that is still starting when the context ends is killed.
-- **Recovery.** A child that is killed or dies fails only the `Eval` it was serving; the next `Eval` starts a fresh one. A JavaScript error does not kill the child. A child that crashes is reported with its exit status and the reason line of its crash, never its goroutine dump.
-- **Lifetime.** The child lives until `Close()` or until the template's context is done, whichever comes first, including a child that is still starting. `Close` never blocks. After that, `Eval` returns `Closed`. A template dropped without `Close` kills its child once the garbage collector finds it unreachable; `Close` is still the prompt way. A child also exits when its parent dies: at once when idle, within about a millisecond when busy.
-- **One at a time.** `Eval` calls on one secure template take turns, so one bad input cannot fail another's work. Use several templates for parallelism. An idle child uses no CPU.
-- **Clean environment.** The child gets none of your environment variables. It gets exactly `JAML_EVALUATOR`, `JAML_MEMORY_LIMIT`, `JAML_NONCE` (per start), `JAML_PARENT` (your process id), `ZONEINFO` when you have it set, and `TZ` when your local zone can be forwarded. A package whose `init()` needs another variable fails in the child, and every secure `Eval` fails with it.
-- **Local time.** The child uses your local zone when it can find it the way you did: a zone from `TZ` at startup, by name or by the path of its file, or one you set with `time.Local, _ = time.LoadLocation(name)`, including one found through `ZONEINFO`. Then trusted and secure templates agree on local `Date` methods. A zone without such a name (`time.FixedZone`, a renamed or hand-built location) cannot be forwarded, so the child uses the system zone. The zone is read when a child starts; a later change to `time.Local` reaches only children started after it.
-- **Signals.** The child runs in its own process group, so a terminal Ctrl-C, `SIGQUIT`, `SIGTSTP` or a signal sent to your process group does not reach it. It still dies with your process.
-- **Cost.** Starting a child takes about 5 ms, and every child parses and compiles the template when it starts, at construction and at each respawn; a template that built once builds again, and a respawn that fails anyway reports the kind the child sent. A secure `Eval` is one round trip: the path and the vars go to the child, which selects and renders the subtree exactly as a trusted template would and sends back the data, which is then decoded into your target in your process.
-- **Location.** An `Eval` that fails because the child was cancelled, ran out of memory or died names the selected path, not the expression that was running.
+Both kinds run at most `WithMaxConcurrency` jobs at once, in arrival order; a job is building a template, compiling an expression, an `Eval` or a `Call`. Building and compiling are bounded by their context and by `WithBuildTimeout`. A bad option is an `InvalidTemplate` error.
 
-The child is your own binary, started again with a marker in its environment; on Linux it is the running image (`/proc/self/exe`), even if the file has been replaced since. jaml's `init()` sees the marker, identifies itself to the parent with a greeting that carries the protocol version and the nonce, serves evaluations over file descriptors 3 and 4, and exits, so your `main()` never runs in the child. The `init()` functions of packages that Go initializes before jaml do run there. A child that does not identify itself, because the executable is not a jaml binary or speaks another protocol version, is `Unsupported`, with a message naming which. Secure templates need a Unix that can start the binary again: they are not supported on Windows, iOS, js or wasip1 (`Unsupported`), or when jaml is built into a C shared library or a plugin.
+### Trusted
 
-Both kinds share the same limits:
+`MakeTrustedSandbox` runs everything in your process. The context of each call interrupts its JavaScript cooperatively, so an infinite loop ends with its context, but a built-in that never returns to the interpreter runs on, and an allocation bomb takes your process down. A build that outlives its timeout returns to you at the timeout, but keeps its concurrency slot until it really finishes. `WithMemoryLimit` is refused. Use it for templates you wrote. Untrusted *vars* are fine: they are bound as JSON data and never run. An expression that hands an untrusted string to `eval`, `new Function` or `new RegExp` runs it as code; trusted mode makes no promise about running untrusted code.
+
+### Isolated
+
+`MakeSandbox` starts one child process that jaml owns and runs every template and expression of the sandbox in it, many at once, each job in its own fresh JavaScript runtime.
+
+- **Building happens in the child.** Your process never interprets template or expression text: it hands the text to the child, which parses and compiles it. A refusal comes back with the same kind and message a trusted sandbox gives. Your process keeps each live template's text, to build it again in a fresh child when it is next used.
+- **Memory.** One ceiling: the child's live heap may grow at most `WithMemoryLimit` over what it held when it started, so heap that your packages build in `init()` does not count. Built templates and expressions are resident and count. While any job runs, the child checks its heap every millisecond; past the ceiling it collects garbage once, and if the live heap is still over, it exits and the job that caused it fails with `MemoryLimit` ("exceeded the memory limit of N bytes"), which is an `EvaluationFailed`. A doubling loop can reach about twice the limit before it is stopped. A child whose allocation the operating system refuses outright is a `MemoryLimit` too.
+- **Time.** When a call's context ends, the child interrupts that job. A job stuck inside a built-in gets 250 ms to stop; then the child is killed. The call fails with `EvaluationFailed` matching the context's cause (`context.DeadlineExceeded`, `context.Canceled` or your `context.Cause`), and names the selected path. A call whose context is already done fails at once, without touching the child.
+- **Recovery.** When the child dies for any reason, every job it was running is a suspect. jaml starts a fresh child and replays the suspects one at a time, each alone, with its pinned clock and seed, while new jobs wait. A suspect that kills the child while running alone fails with its real cause: `MemoryLimit`, or "evaluator died" with its exit status and the reason line of its crash, never its goroutine dump. Every other suspect returns its normal result, as if nothing had happened. Then the sandbox runs jobs concurrently again. A job whose own deadline forced the kill is not replayed; it fails with its context's cause. jaml does not judge: it never flags or refuses a template, and a template whose `Eval` ran out of memory once is tried again on its next `Eval`. Jobs that only overflowed together all succeed on replay. Replay is safe because jobs are pure: vars and arguments are JSON copies, and there is no I/O and no callback into your process.
+- **Clean environment.** The child gets none of your environment variables. It gets exactly `JAML_EVALUATOR`, `JAML_MEMORY_LIMIT`, `JAML_NONCE` (per start), `JAML_PARENT` (your process id), `ZONEINFO` when you have it set, and `TZ` when your local zone can be forwarded. A package whose `init()` needs another variable fails in the child.
+- **Local time.** The child uses your local zone when it can find it the way you did: a zone from `TZ` at startup, by name or by the path of its file, or one you set with `time.Local, _ = time.LoadLocation(name)`, including one found through `ZONEINFO`. Then trusted and isolated sandboxes agree on local `Date` methods. A zone without such a name (`time.FixedZone`, a renamed or hand-built location) cannot be forwarded, so the child uses the system zone. The zone is read when a child starts.
+- **Signals and parents.** The child runs in its own process group, so a terminal Ctrl-C or a signal sent to your process group does not reach it. It exits when your process dies: at once when idle, within about a millisecond when busy. An idle child uses no CPU.
+- **Cost.** Starting a child takes about 5 ms and is bounded by `WithBuildTimeout` as well as the context. An `Eval` is one request to the child, which sends back the data, decoded into your target in your process.
+
+The child is your own binary, started again with a marker in its environment; on Linux it is the running image (`/proc/self/exe`), even if the file has been replaced since. jaml's `init()` sees the marker, identifies itself to the parent with a greeting that carries the protocol version and the nonce, serves over file descriptors 3 and 4, and exits, so your `main()` never runs in the child. The `init()` functions of packages that Go initializes before jaml do run there. A child that does not identify itself, because the executable is not a jaml binary or speaks another protocol version, is `Unsupported`, with a message naming which. Isolated sandboxes need a Unix that can start the binary again: they are not supported on Windows, iOS, js or wasip1 (`Unsupported`), or when jaml is built into a C shared library or a plugin.
+
+### Limits
+
+Both kinds share these limits:
 
 - JavaScript calls nest at most 4096 deep; deeper recursion fails with `EvaluationFailed`.
 - A value that holds code (a whole expression, or text with `${{`) is at most 65,536 bytes as written; a longer one is refused with `InvalidTemplate`, naming its path. This bounds how deep goja's recursive parser can go, so no template text can overflow the stack while it is compiled.
 - Vars, results and templates nest at most 4096 deep. Deeper data is refused, naming the var or the path where it crosses the limit: a template with `InvalidTemplate`, a var or a result with `EvaluationFailed`.
 - `JSON.parse` refuses text nested deeper than 4096 with a `RangeError`, so a deep string var cannot be turned into deep data.
-- Data an expression builds for itself is not bounded. Some built-ins (`JSON.stringify`, `String` or `join` of an array, `flat`) walk it recursively on the Go stack, and a value nested about a million deep overflows that stack, which Go cannot recover from. It is the template's own risk, like an allocation bomb: a trusted template takes your process down, a secure template's child dies, and that `Eval` fails.
+- Data an expression builds for itself is not bounded. Some built-ins (`JSON.stringify`, `String` or `join` of an array, `flat`) walk it recursively on the Go stack, and a value nested about a million deep overflows that stack, which Go cannot recover from. It is the template's own risk, like an allocation bomb: a trusted sandbox takes your process down; an isolated sandbox's child dies, and that `Eval` fails with the cause once it is replayed alone.
 - A Go panic inside the engine, such as goja's `'x'.repeat(2 ** 52)`, fails the `Eval` with `EvaluationFailed` instead of reaching your code.
 - A result may hold at most 1,048,576 values, each list and object counting as one. A bigger result is refused as a whole (`result holds more than 1048576 values`), before jaml allocates room for it, so a sparse list cannot claim more than it holds.
 - The runtime has no I/O, no `require`, no timers, and source-map comments are not followed.
@@ -160,16 +220,28 @@ Both kinds share the same limits:
 ## API
 
 ```go
-func MakeTrustedTemplate(text string, options ...Option) (*TrustedTemplate, error)
-func (t *TrustedTemplate) Eval(into any, vars map[string]any, path ...string) error
+func MakeSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
+func MakeTrustedSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
+func (s *Sandbox) MakeTemplate(ctx context.Context, text string, options ...Option) (*Template, error)
+func (s *Sandbox) Compile(ctx context.Context, source string, options ...Option) (*Expression, error)
 
-func MakeSecureTemplate(ctx context.Context, text string, options ...Option) (*SecureTemplate, error)
-func (t *SecureTemplate) Eval(ctx context.Context, into any, vars map[string]any, path ...string) error
-func (t *SecureTemplate) Close() error
+func (t *Template) Eval(ctx context.Context, into any, vars map[string]any, path ...string) error
+func (e *Expression) Eval(ctx context.Context, into any, vars map[string]any) error
+func (e *Expression) Call(ctx context.Context, into any, args ...any) error
+
+func WithFixedClock(ctx context.Context, at time.Time) context.Context
+func WithRandomSeed(ctx context.Context, seed uint64) context.Context
 
 func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
 func WithUndefinedCoercion(coercion Coercion) Option // Loose or Strict (default)
-func WithMemoryLimit(bytes int64) Option             // secure only; 16 MiB to 1 TiB; default 256 MiB
+func WithMemoryLimit(bytes int64) SandboxOption
+func WithMaxConcurrency(jobs int) SandboxOption
+func WithBuildTimeout(timeout time.Duration) SandboxOption
+
+type Thrown struct {
+	Message string
+	Value   any
+}
 ```
 
 ### Errors
@@ -180,15 +252,15 @@ var (
 	InvalidTemplate  // bad YAML, bad JavaScript syntax, bad options
 	InvalidTarget    // into is not a non-nil pointer
 	MissingPath      // the path names nothing in the template
-	EvaluationFailed // an expression threw or produced something that is not data; a secure evaluator was cancelled, ran out of memory or died
+	EvaluationFailed // an expression threw or produced something that is not data; a call was cancelled; an isolated child ran out of memory or died
 	CoercionFailed   // json.Unmarshal refused the data, or strict null/undefined refused a result
-	Closed           // Eval on a secure template after Close or after its context ended
-	Unsupported      // secure templates on a platform that cannot run them, or a child that is not a jaml evaluator
-	MemoryLimit      // derives from EvaluationFailed: a secure evaluator ran out of memory
+	Closed           // the template's, expression's or sandbox's context has ended
+	Unsupported      // an isolated sandbox on a platform that cannot run one, or a child that is not a jaml evaluator
+	MemoryLimit      // derives from EvaluationFailed: an isolated job ran out of memory
 )
 ```
 
-All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches any of them, and trusted and secure templates return the same kind for the same failure. An error also wraps its cause: a secure `Eval` that ran out of time matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), and a failed decode reaches `encoding/json`'s error. No JavaScript value escapes an `Eval`: what an expression threw is described as text when it is caught, so reading an error never runs template code. Messages lead with the location, for example:
+All derive from `TemplateError`, so `errors.Is(err, jaml.TemplateError)` matches any of them, and both sandbox kinds return the same kind and the same message for the same failure. An error also wraps its cause: a cancelled call matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), a failed decode reaches `encoding/json`'s error, and a throw reaches `*jaml.Thrown`. Messages lead with the location, for example:
 
 ```
 $.config.servers[0].port: ${port}: ReferenceError: port is not defined: evaluation failed: template error
