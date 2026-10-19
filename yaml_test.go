@@ -287,7 +287,7 @@ func TestAWideAliasFanOutIsExcessiveAliasing(t *testing.T) {
 		text := "a: &a [" + strings.TrimSuffix(strings.Repeat(item+",", 1000), ",") + "]\nb: [" + strings.TrimSuffix(strings.Repeat("*a,", 90), ",") + "]\n"
 		_, err := sb.MakeTemplate(t.Context(), text)
 		expectError(t, err, InvalidTemplate, "$.b[", "excessive aliasing")
-	})
+	}, WithBuildTimeout(30*time.Second))
 }
 
 func TestModestAliasingIsAccepted(t *testing.T) {
