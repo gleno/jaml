@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/dop251/goja"
@@ -51,52 +52,68 @@ func (e _Expression) writesWhere(exception *goja.Exception) bool {
 	if len(stack) == 0 || stack[0].SrcName() != expressionFile {
 		return false
 	}
-	parsed, err := parseCode(e.source)
-	if err != nil {
-		return false
-	}
 	var offset = file.Idx(offsetOf(expressionOpens+e.source+"\n", stack[0].Position()) + 1)
-	return anyNode(reflect.ValueOf(parsed.program), func(node any) bool {
+	return slices.ContainsFunc(e.writes, func(site _WriteSite) bool { return site.from <= offset && offset < site.to })
+}
+
+type _WriteSite struct {
+	from file.Idx
+	to   file.Idx
+}
+
+func exactly(offset file.Idx) _WriteSite {
+	return _WriteSite{from: offset, to: offset + 1}
+}
+
+func writeSites(program *ast.Program) []_WriteSite {
+	var sites []_WriteSite
+	anyNode(reflect.ValueOf(program), func(node any) bool {
 		switch typed := node.(type) {
 		case *ast.AssignExpression:
-			return targetAt(typed.Left, offset) || bindingAt(typed, offset)
+			sites = append(sites, targetsOf(typed.Left)...)
+			if _, named := typed.Left.(*ast.Identifier); named {
+				sites = append(sites, _WriteSite{from: typed.Idx0(), to: typed.Idx1()})
+			}
 		case *ast.UnaryExpression:
-			return changesOperand(typed.Operator) && targetAt(typed.Operand, offset)
+			if changesOperand(typed.Operator) {
+				sites = append(sites, targetsOf(typed.Operand)...)
+			}
 		}
 		return false
 	})
-}
-
-func bindingAt(assignment *ast.AssignExpression, offset file.Idx) bool {
-	var _, named = assignment.Left.(*ast.Identifier)
-	return named && assignment.Idx0() <= offset && offset < assignment.Idx1()
+	return sites
 }
 
 func changesOperand(operator token.Token) bool {
 	return operator == token.DELETE || operator == token.INCREMENT || operator == token.DECREMENT
 }
 
-func targetAt(target ast.Expression, offset file.Idx) bool {
+func targetsOf(target ast.Expression) []_WriteSite {
 	switch typed := target.(type) {
 	case *ast.DotExpression:
-		return typed.Identifier.Idx == offset
+		return []_WriteSite{exactly(typed.Identifier.Idx)}
 	case *ast.BracketExpression:
-		return typed.LeftBracket == offset
+		return []_WriteSite{exactly(typed.LeftBracket)}
 	case *ast.ArrayPattern, *ast.ObjectPattern:
-		return anyNode(reflect.ValueOf(typed), func(node any) bool {
-			member, isMember := node.(ast.Expression)
-			return isMember && member != target && (targetAt(member, offset) || patternTargetAt(member, offset))
+		var sites []_WriteSite
+		anyNode(reflect.ValueOf(typed), func(node any) bool {
+			if member, isMember := node.(ast.Expression); isMember && member != target {
+				sites = append(sites, targetsOf(member)...)
+				sites = append(sites, patternTargetsOf(member)...)
+			}
+			return false
 		})
+		return sites
 	}
-	return false
+	return nil
 }
 
-func patternTargetAt(member ast.Expression, offset file.Idx) bool {
+func patternTargetsOf(member ast.Expression) []_WriteSite {
 	switch member.(type) {
 	case *ast.DotExpression, *ast.BracketExpression:
-		return member.Idx0() == offset
+		return []_WriteSite{exactly(member.Idx0())}
 	}
-	return false
+	return nil
 }
 
 func anyNode(node reflect.Value, matches func(node any) bool) bool {

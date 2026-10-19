@@ -34,8 +34,8 @@ func TestSyntaxErrorsCountCharactersAndQuoteWhereTheyPoint(t *testing.T) {
 		text, expected string
 	}{
 		"accented":  {"v: \"${ \\\"ééééé\\\" + ) }\"\n", `syntax error at line 1, column 12 of the expression: Unexpected token ) at ") }"`},
-		"leading":   {"v: \"${   'ééé' + 1 +* 2 }\"\n", `syntax error at line 1, column 15 of the expression: Unexpected token * at "* 2 }"`},
-		"multiline": {"v: |\n  ${ 1 +\n    é * * 2 }\n", `syntax error at line 2, column 7 of the expression: Unexpected token * at "* 2 }"`},
+		"leading":   {"v: \"${   'ééé' + 1 +* 2 }\"\n", `syntax error at line 1, column 15 of the expression: Unexpected token * at "* 2"`},
+		"multiline": {"v: |\n  ${ 1 +\n    é * * 2 }\n", `syntax error at line 2, column 7 of the expression: Unexpected token * at "* 2"`},
 		"octal":     {"v: \"${ 'é\\\\07' }\"\n", `syntax error at line 1, column 2 of the expression: Octal escape sequences are not allowed in strict mode at "'é\\07'"`},
 	}
 	for name, c := range cases {

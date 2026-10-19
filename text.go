@@ -71,6 +71,9 @@ func (c *_Compiler) visit(node any, path *_DataPath) error {
 		return cancelled(c.ctx)
 	}
 	compiled, err := c.compileText(written)
+	if err != nil && c.ctx.Err() != nil {
+		return cancelled(c.ctx)
+	}
 	if err != nil {
 		return fail(InvalidExpression, "%w", err).within(path.String())
 	}
@@ -127,7 +130,7 @@ func (c *_Compiler) compileText(written string) (compiled _Text, err error) {
 func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 	var wholeValue = c.delimiters.value
 	var after = trimmed[len(wholeValue.opens):]
-	end, err := searchingEndsIn(trimmed).expressionEnd(after, wholeValue)
+	end, err := codeEnd(after, wholeValue)
 	if err != nil {
 		return _Text{}, fmt.Errorf("%s%s: %w", wholeValue.opens, excerpt(after, codeExcerptLength), err)
 	}
@@ -145,7 +148,6 @@ func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 func (c *_Compiler) compileInterpolations(written string) (_Text, error) {
 	var interpolation = c.delimiters.interpolation
 	var compiled _Text
-	var search = searchingEndsIn(written)
 	var rest = written
 	for {
 		var start = strings.Index(rest, interpolation.opens)
@@ -154,7 +156,10 @@ func (c *_Compiler) compileInterpolations(written string) (_Text, error) {
 		}
 		compiled = compiled.withLiteral(rest[:start])
 		var after = rest[start+len(interpolation.opens):]
-		end, err := search.expressionEnd(after, interpolation)
+		if c.ctx.Err() != nil {
+			return _Text{}, cancelled(c.ctx)
+		}
+		end, err := codeEnd(after, interpolation)
 		if err != nil {
 			return _Text{}, fmt.Errorf("%s%s: %w", interpolation.opens, excerpt(after, codeExcerptLength), err)
 		}

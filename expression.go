@@ -3,7 +3,6 @@ package jaml
 import (
 	"errors"
 	"fmt"
-	"iter"
 	"reflect"
 	"sort"
 	"strings"
@@ -17,25 +16,22 @@ import (
 
 const expressionOpens = "\"use strict\";0,\n"
 
-const closerStop = "Unexpected token }"
-
 const maxCodeBytes = 64 << 10
-
-const endSearchParsesPerByte = 32
 
 var (
 	errEmptyExpression  = errors.New("empty expression")
 	errNotOneExpression = errors.New("syntax error: write a single JavaScript expression")
-	errCostlyEnds       = fmt.Errorf("finding where its expressions end would parse more than %d times its length", endSearchParsesPerByte)
 	errNotFunction      = errors.New("not a function literal: write an arrow function or a function expression")
 	errAsyncFunction    = errors.New("an async function returns a promise, not data")
 	errGenerator        = errors.New("a generator function returns an iterator, not data")
 )
 
 type _Expression struct {
-	source  string
-	opened  _Delimiter
-	program *goja.Program
+	source      string
+	opened      _Delimiter
+	program     *goja.Program
+	bracedArrow bool
+	writes      []_WriteSite
 }
 
 func (e _Expression) written() string {
@@ -59,6 +55,9 @@ func parseCode(source string) (_ParsedCode, error) {
 	if err := refuseLongCode(source); err != nil {
 		return _ParsedCode{}, err
 	}
+	if err := refuseDeepExpression(source); err != nil {
+		return _ParsedCode{}, err
+	}
 	program, err := parseExpression(source)
 	if err != nil {
 		return _ParsedCode{}, err
@@ -71,7 +70,7 @@ func (p _ParsedCode) compile(opened _Delimiter) (_Expression, error) {
 	if err != nil {
 		return _Expression{}, describeSyntaxError(p.source, err)
 	}
-	return _Expression{source: p.source, opened: opened, program: program}, nil
+	return _Expression{source: p.source, opened: opened, program: program, bracedArrow: endsInBracedArrow(p.written()), writes: writeSites(p.program)}, nil
 }
 
 func (p _ParsedCode) written() ast.Expression {
@@ -87,8 +86,7 @@ func (p _ParsedCode) written() ast.Expression {
 }
 
 func (e _Expression) undefinedHint() string {
-	parsed, err := parseCode(e.source)
-	if err != nil || !endsInBracedArrow(parsed.written()) {
+	if !e.bracedArrow {
 		return ""
 	}
 	return "; an arrow returning an object literal needs parentheses: () => ({ ... })"
@@ -199,100 +197,6 @@ func escapesInLegacyOctal(literal *ast.StringLiteral) *ast.StringLiteral {
 		}
 	}
 	return nil
-}
-
-type _ParseStop struct {
-	offset   int
-	position file.Position
-	message  string
-}
-
-func (s _ParseStop) closes(after string, opened _Delimiter) bool {
-	return s.message == closerStop && strings.HasPrefix(after[s.offset:], opened.closes)
-}
-
-type _EndSearch struct {
-	unparsed int
-}
-
-func searchingEndsIn(value string) *_EndSearch {
-	return &_EndSearch{unparsed: endSearchParsesPerByte * len(value)}
-}
-
-func (s *_EndSearch) expressionEnd(after string, opened _Delimiter) (int, error) {
-	for window := range truncatedWindows(after, opened.closes) {
-		if err := s.spend(window); err != nil {
-			return 0, err
-		}
-		if stop, failed := firstParseError(after[:window]); failed && stop.closes(after, opened) {
-			return stop.offset, nil
-		}
-	}
-	if err := s.spend(len(after)); err != nil {
-		return 0, err
-	}
-	return finalEnd(after, opened)
-}
-
-func (s *_EndSearch) spend(parsed int) error {
-	if parsed > s.unparsed {
-		return errCostlyEnds
-	}
-	s.unparsed -= parsed
-	return nil
-}
-
-func finalEnd(after string, opened _Delimiter) (int, error) {
-	stop, failed := firstParseError(after)
-	switch {
-	case failed && strings.HasPrefix(after[stop.offset:], opened.closes):
-		return stop.offset, nil
-	case !failed || strings.HasPrefix(opened.closes, after[stop.offset:]):
-		return 0, fmt.Errorf("unclosed %s", opened.opens)
-	}
-	return 0, placeSyntaxError(after, stop.position, stop.message)
-}
-
-func truncatedWindows(after, closer string) iter.Seq[int] {
-	return func(yield func(int) bool) {
-		seen, pending := 0, 0
-		for offset := range occurrences(after, closer) {
-			if pending > 0 && !yield(pending) {
-				return
-			}
-			seen++
-			pending = 0
-			if seen&(seen-1) == 0 {
-				pending = offset + len(closer)
-			}
-		}
-	}
-}
-
-func occurrences(text, closer string) iter.Seq[int] {
-	return func(yield func(int) bool) {
-		for offset := strings.Index(text, closer); offset >= 0; {
-			if !yield(offset) {
-				return
-			}
-			var next = strings.Index(text[offset+1:], closer)
-			if next < 0 {
-				return
-			}
-			offset += 1 + next
-		}
-	}
-}
-
-func firstParseError(code string) (_ParseStop, bool) {
-	_, err := parseAfterOpens(code)
-	var parseErrors parser.ErrorList
-	if !errors.As(err, &parseErrors) || len(parseErrors) == 0 {
-		return _ParseStop{}, false
-	}
-	var first = parseErrors[0]
-	var offset = offsetOf(expressionOpens+code, first.Position) - len(expressionOpens)
-	return _ParseStop{offset: max(offset, 0), position: first.Position, message: first.Message}, true
 }
 
 func offsetOf(program string, position file.Position) int {

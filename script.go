@@ -57,6 +57,9 @@ func compileScript(source string) (compiled _Script, err error) {
 			err = failure
 		}
 	}()
+	if err := refuseDeepScript(source); err != nil {
+		return _Script{}, err
+	}
 	program, err := parser.ParseFile(nil, "", scriptOpens+source, 0, parser.WithDisableSourceMaps)
 	if err != nil {
 		return _Script{}, placeScriptError(source, scriptOpens, err)

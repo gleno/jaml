@@ -101,22 +101,6 @@ func TestManyClosingCandidatesStayCheap(t *testing.T) {
 	})
 }
 
-func TestWindowedEndSearchAgreesWithOneParseOfTheRest(t *testing.T) {
-	var corpus = []string{
-		" 1 }} tail }}", " '}}' }}", " {a: 1}}}", " `${ {b: '}}'}.b }` }} x }}", " /}}/.test(s) }} }}",
-		" x // }}\n }} y }}", " /* }} */ 1 }}", " a }x}}", " 1}", " ) }}", " (1 }} }}", " '}}}' }} '}}' }}",
-		" x => { return {a: '}}'} } }} }}", " [1, {b: 2}]}}}}",
-		" `\\1` }} b }}", " 1 + `\\u` }} }}",
-	}
-	for _, after := range corpus {
-		windowed, windowedErr := searchingEndsIn(after).expressionEnd(after, dollar.interpolation)
-		whole, wholeErr := finalEnd(after, dollar.interpolation)
-		if windowed != whole || (windowedErr == nil) != (wholeErr == nil) {
-			t.Fatalf("%q: windowed %d %v, whole %d %v", after, windowed, windowedErr, whole, wholeErr)
-		}
-	}
-}
-
 func codeValue(unit string, length int) string {
 	return "${ " + strings.Repeat(unit, (length-len("${  }"))/len(unit)) + " }"
 }
@@ -132,24 +116,6 @@ func TestAValueHoldingCodeIsAtMost64KiB(t *testing.T) {
 		}
 		var document = mustJaml(t, sb, "plain: \""+strings.Repeat("(", maxCodeBytes+1)+"\"\n")
 		expectEqual(t, mustResolve[string](t, t.Context(), document.At("plain")), strings.Repeat("(", maxCodeBytes+1))
-	})
-}
-
-func TestTheWorstRecursiveConstructsUnderTheCapLeaveTheParserStackBounded(t *testing.T) {
-	survivesInAChildWithMaxStack(t, 256<<20, func(t *testing.T) {
-		for _, unit := range []string{"(", "[", "{", "a?", "x=>", "(x)=>", "!", "-", "typeof ", "void ", "new ", "a=", "`${"} {
-			for _, written := range []string{codeValue(unit, maxCodeBytes), "x ${{ " + strings.Repeat(unit, (maxCodeBytes-6)/len(unit))} {
-				if len(written) > maxCodeBytes {
-					t.Fatalf("%q: test value is %d bytes", unit, len(written))
-				}
-				var c = &_Compiler{texts: map[string]_Text{}}
-				_, _ = c.compileText(written)
-			}
-			var c = &_Compiler{texts: map[string]_Text{}}
-			if _, err := c.compileText(codeValue(unit, maxCodeBytes+len(unit)+1)); err == nil || !strings.Contains(err.Error(), "longer than") {
-				t.Fatalf("%q: expected the size refusal, got %v", unit, err)
-			}
-		}
 	})
 }
 
@@ -186,17 +152,6 @@ func TestAnEndHiddenBehindClusteredClosersIsStillFound(t *testing.T) {
 		var document = mustJaml(t, sb, "v: \"${{ "+inString+".length }}\"\n")
 		expectEqual(t, mustResolve[string](t, t.Context(), document.At("v")), fmt.Sprint(len(inString)-2))
 	})
-}
-
-func TestAnEndSearchThatOutgrowsItsValueIsRefused(t *testing.T) {
-	var after = " `}}" + strings.Repeat(" ", 1_000) + strings.Repeat("}}", 100) + "` }}"
-	var search = &_EndSearch{unparsed: 4 * len(after)}
-	if _, err := search.expressionEnd(after, dollar.interpolation); err != errCostlyEnds {
-		t.Fatalf("expected the costly-ends refusal, got %v", err)
-	}
-	if end, err := searchingEndsIn(after).expressionEnd(after, dollar.interpolation); err != nil || end != len(after)-2 {
-		t.Fatalf("expected the end at %d, got %d %v", len(after)-2, end, err)
-	}
 }
 
 func TestAClosedExpressionReportsItsOwnSyntaxError(t *testing.T) {
