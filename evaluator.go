@@ -200,7 +200,12 @@ func (w *_ReplyWriter) greet(greeting _Hello) {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: writing the greeting: %v\n", err)
 		os.Exit(exitProtocolBroken)
 	}
-	w.write(encoded)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, err := w.out.Write(append(encoded, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: writing the greeting: %v\n", err)
+		os.Exit(exitProtocolBroken)
+	}
 }
 
 func (w *_ReplyWriter) write(frame []byte) {

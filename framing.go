@@ -12,6 +12,7 @@ import (
 const (
 	frameHeader     = 8
 	controlFrameCap = 1 << 10
+	greetingCap     = 1 << 10
 )
 
 type _FrameReader struct {

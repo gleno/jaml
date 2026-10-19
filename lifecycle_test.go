@@ -63,6 +63,7 @@ const (
 	crashAtStartLimit    = 16<<20 + 6
 	panicAtStartLimit    = 16<<20 + 7
 	oversizedAnswerLimit = 16<<20 + 8
+	olderProtocolLimit   = 16<<20 + 9
 	slowStartLimit       = 64<<20 + 9
 	slowStart            = time.Second
 )
@@ -84,7 +85,7 @@ func impersonateAnEvaluator() bool {
 		return false
 	}
 	switch os.Getenv(evaluatorMemoryLimit) {
-	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit), strconv.Itoa(oversizedAnswerLimit):
+	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit), strconv.Itoa(oversizedAnswerLimit), strconv.Itoa(olderProtocolLimit):
 	default:
 		return false
 	}
@@ -102,7 +103,10 @@ func impersonateAnEvaluator() bool {
 		os.Exit(0)
 	case strconv.Itoa(futureProtocolLimit):
 		greeting.Version = 999
-		answerFramed(replies, greeting)
+		greetPlainly(replies, greeting)
+	case strconv.Itoa(olderProtocolLimit):
+		greeting.Version = 10
+		greetPlainly(replies, greeting)
 	case strconv.Itoa(malformedAnswerLimit):
 		answerBadly(requests, replies, greeting, "{\"job\": %d, \"data\": nope}")
 	case strconv.Itoa(emptyAnswerLimit):
@@ -116,13 +120,13 @@ func impersonateAnEvaluator() bool {
 	return true
 }
 
-func answerFramed(replies *os.File, answer any) {
-	encoded, _ := wireJSON(answer)
-	_, _ = replies.Write(headed(encoded))
+func greetPlainly(replies *os.File, greeting _Hello) {
+	encoded, _ := wireJSON(greeting)
+	_, _ = replies.Write(append(encoded, '\n'))
 }
 
 func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) {
-	answerFramed(replies, greeting)
+	greetPlainly(replies, greeting)
 	var incoming = framesFor(defaultMemoryLimit).requests(requests)
 	for {
 		var asked _Request
@@ -147,6 +151,11 @@ func TestAForeignExecutableIsUnsupported(t *testing.T) {
 func TestAReplacedExecutableIsUnsupported(t *testing.T) {
 	_, err := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(futureProtocolLimit))
 	expectError(t, err, Unsupported, fmt.Sprintf("speaks jaml protocol v999, want v%d", protocolVersion))
+}
+
+func TestAnOlderEvaluatorIsNamedByItsVersion(t *testing.T) {
+	_, err := MakeSecureSandbox(within(t, 10*time.Second), WithMemoryLimit(olderProtocolLimit))
+	expectError(t, err, Unsupported, fmt.Sprintf("speaks jaml protocol v10, want v%d", protocolVersion))
 }
 
 func TestASilentExecutableEndsWithTheContext(t *testing.T) {

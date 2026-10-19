@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -66,11 +67,6 @@ type _Ending interface {
 	verdict(remains _Remains) error
 }
 
-type _Greeting struct {
-	hello _Hello
-	err   error
-}
-
 type _Collected struct {
 	state *os.ProcessState
 }
@@ -103,11 +99,7 @@ func startLife(spec _ChildSpec) (*_Life, error) {
 	if err != nil {
 		return nil, startFailure(err)
 	}
-	greeting, err := born.greet(bounded, greeted)
-	if err == nil {
-		err = greeting.vouch(world.nonce)
-	}
-	if err != nil {
+	if err := born.greet(bounded, greeted); err != nil {
 		return nil, startFailure(born.abandon(spec.lifetime, err))
 	}
 	return born, nil
@@ -162,7 +154,7 @@ func (w _EvaluatorWorld) env() []string {
 	return append(env, w.zone...)
 }
 
-func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, <-chan _Greeting, error) {
+func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, <-chan error, error) {
 	image, err := selfImage()
 	if err != nil {
 		return nil, nil, fmt.Errorf("finding this executable: %w", err)
@@ -196,8 +188,9 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, <-chan _Greeting, error
 		quiet:        &_Quiet{meaning: errSilent},
 	}
 	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
-	var greeted = make(chan _Greeting, 1)
-	go born.listen(&_ReplyStream{frames: framesFor(w.limit).replies(replies.reader, born.quiet)}, greeted)
+	var greeted = make(chan error, 1)
+	var lines = bufio.NewReaderSize(replies.reader, greetingCap)
+	go born.listen(&_ReplyStream{lines: lines, frames: framesFor(w.limit).replies(lines, born.quiet), nonce: w.nonce}, greeted)
 	go func() {
 		var ending = endingOf(cmd, cmd.Wait())
 		born.reap()
@@ -298,18 +291,18 @@ func (l *_Life) lost() _Lost {
 	return _Lost{cause: l.verdict}
 }
 
-func (l *_Life) greet(ctx context.Context, greeted <-chan _Greeting) (_Hello, error) {
+func (l *_Life) greet(ctx context.Context, greeted <-chan error) error {
 	select {
-	case greeting := <-greeted:
-		if errors.Is(greeting.err, errHungUp) {
-			return greeting.hello, l.deathBeforeGreeting(ctx)
+	case err := <-greeted:
+		if errors.Is(err, errHungUp) {
+			return l.deathBeforeGreeting(ctx)
 		}
-		if greeting.err != nil {
-			return greeting.hello, fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", greeting.err)
+		if _, isOwn := err.(_ExpressionError); isOwn || err == nil {
+			return err
 		}
-		return greeting.hello, nil
+		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", err)
 	case <-ctx.Done():
-		return _Hello{}, cancelled(ctx)
+		return cancelled(ctx)
 	}
 }
 
@@ -377,7 +370,9 @@ func peakNote(state *os.ProcessState) string {
 }
 
 type _ReplyStream struct {
+	lines  *bufio.Reader
 	frames *_FrameReader
+	nonce  string
 }
 
 type _Quiet struct {
@@ -405,6 +400,23 @@ func (q *_Quiet) lasted() time.Duration {
 		return 0
 	}
 	return monotonicNow() - time.Duration(since-1)
+}
+
+func (s *_ReplyStream) greeting() error {
+	s.frames.quiet.waiting()
+	line, err := s.lines.ReadSlice('\n')
+	s.frames.quiet.heard()
+	switch {
+	case errors.Is(err, bufio.ErrBufferFull):
+		return fmt.Errorf("it greeted with more than %d bytes", greetingCap)
+	case err != nil:
+		return ended(err)
+	}
+	var hello _Hello
+	if err := json.Unmarshal(line, &hello); err != nil {
+		return fmt.Errorf("reading its greeting: %w", err)
+	}
+	return hello.vouch(s.nonce)
 }
 
 func (s *_ReplyStream) read(target any) error {

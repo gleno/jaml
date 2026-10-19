@@ -313,12 +313,11 @@ func (l *_Life) backstop(told <-chan struct{}, quiet *_Quiet) func() {
 	return sync.OnceFunc(func() { close(answered) })
 }
 
-func (l *_Life) listen(replies *_ReplyStream, greeted chan<- _Greeting) {
+func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 	defer close(l.drained)
-	var greeting _Greeting
-	greeting.err = replies.read(&greeting.hello)
-	greeted <- greeting
-	if greeting.err != nil {
+	var err = replies.greeting()
+	greeted <- err
+	if err != nil {
 		return
 	}
 	for {
