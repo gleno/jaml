@@ -8,6 +8,40 @@ YAML documents whose values can hold JavaScript, resolved into your Go types. ja
 go get github.com/gleno/jaml
 ```
 
+## Quick start
+
+Make a sandbox and an expression once, on a long-lived context. Resolve it per request, with that request's values and scripts on the context:
+
+```go
+type Settings struct {
+	Team     string           `json:"team"`
+	Greeting string           `json:"greeting"`
+	Limit    *jaml.Expression `json:"limit"`
+}
+
+sandbox, err := jaml.MakeSecureSandbox(appCtx)
+if err != nil {
+	return err
+}
+document, err := sandbox.MakeExpressionFromJaml(appCtx, `
+team: ${ team.toUpperCase() }
+greeting: "${{ greet(user) }}, welcome"
+limit: "${ (plan) => plan.seats * 10 }"
+`)
+if err != nil {
+	return err
+}
+
+ctx := jaml.WithValues(requestCtx, map[string]any{"team": "sales", "user": "ann"})
+ctx = jaml.WithScript(ctx, `function greet(name) { return 'hi ' + name }`)
+settings, err := jaml.Resolve[Settings](ctx, document)
+// settings.Team == "SALES", settings.Greeting == "hi ann, welcome"
+limit, err := jaml.Resolve[int](ctx, settings.Limit, map[string]any{"seats": 3})
+// limit == 30
+```
+
+`${ … }` keeps its result's type, `${{ … }}` writes its result into text, and code that produces a function is called with the arguments of the `Resolve`. A `*jaml.Expression` field is left unevaluated, so you resolve it later with its own arguments. The rest of this README is the exact rules.
+
 ## Lifetimes are contexts
 
 Nothing in jaml has a `Close` method. **Everything lives exactly as long as the context you made it with.**
@@ -68,7 +102,7 @@ cfg, err := jaml.Resolve[Config](ctx, document.At("config"))
 
 ### Paths
 
-`At(path...)` selects a part of an expression, one key or list index per step (`"config"`, `"servers", "0"`), and returns a new `*Expression` for it. It never fails: a path that does not exist is a `MissingPath` error from `Resolve`, and so is a step that is not valid UTF-8, named after the steps before it (`$.k has no key "\xff"`). A list index is written in plain decimal, with no sign or leading zero. Only the selected part is evaluated. Error locations spell the selected path the way you asked for it: a step in plain decimal is an index (`$[0]`), even when it selects a mapping key `"0"`.
+`At(path...)` selects a part of an expression, one key or list index per step (`"config"`, `"servers", "0"`), and returns a new `*Expression` for it. It never fails: a path that does not exist is a `MissingPath` error from `Resolve`, and so is a step that is not valid UTF-8, named after the steps before it (`$.k has no key "\xff"`). A list index is written in plain decimal, with no sign or leading zero. Only the selected part is evaluated. `At` navigates the document as written, never what code computes: a step into a value that holds code is a `MissingPath` error (`$.limit is code; At cannot look inside what it produces`), so resolve that value and index the result in Go. Error locations spell the selected path the way you asked for it: a step in plain decimal is an index (`$[0]`), even when it selects a mapping key `"0"`.
 
 ### Resolve
 
@@ -129,11 +163,11 @@ ctx = jaml.WithValues(ctx, map[string]any{"user": user, "limit": 10})
 
 Values are globals for every piece of code in a `Resolve`, also reachable as `this.user` and `globalThis.user`. `WithValues` merges by name: a later binding of a name wins. The map is copied when you call `WithValues` (a shallow copy), and each value is encoded as JSON when `Resolve` runs, so code never sees or changes your data.
 
-Every piece of code sees the values exactly as they were bound, whatever other code did: values are bound once per `Resolve` and deeply frozen. A value cannot be replaced or deleted, and changing it in place throws a `TypeError`. Copy before you change: write `[...items].sort()` or `items.toSorted()` (the engine has `toSorted`, `toReversed`, `toSpliced` and `with`), and `{ ...user, name: 'x' }` rather than `user.name = 'x'`.
+Every piece of code sees the values exactly as they were bound, whatever other code did: values are bound once per `Resolve` and deeply frozen. A value cannot be replaced or deleted, and changing it in place throws a `TypeError` that says so: `TypeError: cannot change a read-only value: …`. That covers an assignment, `delete`, `++` or `--` written in the expression itself, and a mutating array method (`sort`, `reverse`, `fill`, `copyWithin`, `splice`, `push`, `pop`, `shift`, `unshift`) or `Object.defineProperty`, `defineProperties`, `assign` and `setPrototypeOf` called from anywhere. A write to any other read-only object, a built-in included, gets the same message; an assignment inside a script's function keeps the engine's own message. Copy before you change: write `[...items].sort()` or `items.toSorted()` (the engine has `toSorted`, `toReversed`, `toSpliced` and `with`), and `{ ...user, name: 'x' }` rather than `user.name = 'x'`.
 
 The built-ins are frozen too, after the scripts run and before the first piece of code, so no piece of code can change what a later one sees through a prototype: `Object.prototype.admin = true` throws a `TypeError`, and so does redefining any built-in method. An object may still give itself its own `name`, `message`, `toString`, `valueOf`, `constructor`, `push` and the like by plain assignment (`Object.assign(new Error(), { name: 'Custom' })`, `o.toString = () => 'x'`): those inherited properties accept an assignment on any object but their own prototype. Every `Resolve` gets a fresh runtime, so nothing survives from one `Resolve` to the next. Freezing costs about 1 ms per `Resolve` that runs code.
 
-Values must be JSON data. Every `Resolve` checks and binds all of them before evaluating anything, whatever the path selects. A value that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …, and every name the global object inherits: `constructor`, `hasOwnProperty`, `__proto__`, …) is an `EvaluationFailed` error naming the value, never a document path. Text is checked as JavaScript will see it, whatever marshalled it: a `json.RawMessage` or a custom `MarshalJSON` that writes an unpaired surrogate escape (`"\ud800"`) or raw bytes that are not UTF-8 is refused too. `encoding/json` writes invalid UTF-8 in a Go string as the escape `�`, so that escape is refused wherever it appears; a real U+FFFD written as the character itself binds. A value name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing value is a `ReferenceError`; a missing property of a value is `undefined`.
+Values must be JSON data. Every `Resolve` checks and binds all of them before evaluating anything, whatever the path selects. A value that `encoding/json` cannot marshal, that nests deeper than 4096, that holds text or keys that are not valid UTF-8, or whose name is already a JavaScript global (`JSON`, `Math`, `globalThis`, `undefined`, `NaN`, …, and every name the global object inherits: `constructor`, `hasOwnProperty`, `__proto__`, …) is an `EvaluationFailed` error naming the value, located at the root `$`, never at the path you selected. Text is checked as JavaScript will see it, whatever marshalled it: a `json.RawMessage` or a custom `MarshalJSON` that writes an unpaired surrogate escape (`"\ud800"`) or raw bytes that are not UTF-8 is refused too. `encoding/json` writes invalid UTF-8 in a Go string as the escape `�`, so that escape is refused wherever it appears; a real U+FFFD written as the character itself binds. A value name that is not a JavaScript identifier is still reachable as `globalThis["my-var"]`. A missing value is a `ReferenceError`; a missing property of a value is `undefined`.
 
 ### Scripts
 
@@ -355,17 +389,20 @@ var (
 	MissingPath       // the path names nothing in the document
 	EvaluationFailed  // code or a script threw or produced something that is not data; a call was cancelled; a secure sandbox's child ran out of memory or died
 	CoercionFailed    // json.Unmarshal refused the data, or strict null/undefined refused a result
-	Closed            // the expression's or sandbox's context has ended
+	Closed            // the expression's own context or its sandbox's has ended; the message says which
 	Unsupported       // a secure sandbox on a platform that cannot run one, or a child that is not a jaml evaluator
 	MemoryLimit       // derives from EvaluationFailed: a secure sandbox's job ran out of memory
 )
 ```
 
-All derive from `ExpressionError`, so `errors.Is(err, jaml.ExpressionError)` matches any of them, and both sandbox kinds return the same kind and the same message for the same failure. An error also wraps its cause: a cancelled call matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), a failed decode reaches `encoding/json`'s error, and a throw reaches `*jaml.Thrown`. Messages lead with the location, for example:
+All derive from `ExpressionError`, so `errors.Is(err, jaml.ExpressionError)` matches any of them, and both sandbox kinds return the same kind and the same message for the same failure. An error also wraps its cause: a cancelled call matches `context.DeadlineExceeded` (or `context.Canceled`, or your `context.Cause`), a failed decode reaches `encoding/json`'s error, and a throw reaches `*jaml.Thrown`. Every message leads with a location: `$` for the root, `$.a.b` deeper. An error about no particular place, such as a bad option or a cancelled build, is located at `$`. For example:
 
 ```
 $.config.servers[0].port: ${port}: ReferenceError: port is not defined: evaluation failed: expression error
+$.config: its own context, the one it was made or copied with, has ended: closed: expression error
 ```
+
+A `Closed` error names which context ended: the expression's own (the one passed to `MakeExpression…` or `Copy`), or the sandbox's. A strict undefined result from an arrow whose body is a block adds a hint, since `() => { ok: true }` is a block with a label, not an object: write `() => ({ ok: true })`.
 
 A key longer than 60 characters appears in a location as its first 60 followed by `…`. Messages stay on one line and stay short: quoted code is collapsed to single spaces and cut at 60 characters, a thrown message at 200, and a syntax error gives its line and column in characters and quotes the code from that point. A getter that throws while jaml reads a result names where it was: `reading result.a.b: Error: x`.
 
