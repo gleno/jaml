@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -148,24 +147,19 @@ func mapKey(kind reflect.Type, written string) (reflect.Value, bool) {
 }
 
 func fieldNamed(value reflect.Value, key string) (reflect.Value, bool) {
-	var folded []int
-	for _, field := range jsonFields(value.Type()) {
-		if field.name == key {
-			return fieldAt(value, field.index), true
-		}
-		if folded == nil && strings.EqualFold(field.name, key) {
-			folded = field.index
-		}
-	}
-	if folded == nil {
+	index, found := fieldFor(value.Type(), key)
+	if !found {
 		return reflect.Value{}, false
 	}
-	return fieldAt(value, folded), true
+	return fieldAt(value, index)
 }
 
-func fieldAt(value reflect.Value, index []int) reflect.Value {
+func fieldAt(value reflect.Value, index []int) (reflect.Value, bool) {
 	for _, step := range index {
 		if value.Kind() == reflect.Pointer {
+			if value.IsNil() && !value.CanSet() {
+				return reflect.Value{}, false
+			}
 			if value.IsNil() {
 				value.Set(reflect.New(value.Type().Elem()))
 			}
@@ -173,5 +167,5 @@ func fieldAt(value reflect.Value, index []int) reflect.Value {
 		}
 		value = value.Field(step)
 	}
-	return value
+	return value, value.CanSet()
 }
