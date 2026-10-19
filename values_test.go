@@ -49,10 +49,11 @@ func TestVarsHoldingInvalidUTF8AreRefusedInBothKinds(t *testing.T) {
 
 func TestRealReplacementCharactersAndEscapedTextStillBind(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var vars = map[string]any{"real": "a�b", "written": `�`, "key": map[string]any{`�`: "�"}}
+		var vars = map[string]any{"real": "a�b", "written": "\\ufffd", "key": map[string]any{"\\ufffd": "�"}}
+		expectEscapeText(t, vars["written"].(string))
 		var got = _Agreement{text: "v: ${ [real, written, Object.keys(key)[0]] }\n", vars: vars, path: []string{"v"}}
 		got.eval(t, intoAny).expectAccepted(t)
-		expectEqual(t, evalAs[[]string](t, mustJaml(t, sb, "v: ${ [real, written, Object.keys(key)[0]] }\n"), vars, "v"), []string{"a�b", `�`, `�`})
+		expectEqual(t, evalAs[[]string](t, mustJaml(t, sb, "v: ${ [real, written, Object.keys(key)[0]] }\n"), vars, "v"), []string{"a�b", "\\ufffd", "\\ufffd"})
 	})
 }
 
@@ -95,6 +96,13 @@ func TestVarsBindOnceTheFirstExpressionNeedsThem(t *testing.T) {
 		var document = mustJaml(t, sb, "plain: [1, 2]\nlater: ${ answer + 1 }\n")
 		expectEqual(t, evalAs[map[string]any](t, document, map[string]any{"answer": 41}), map[string]any{"plain": []any{float64(1), float64(2)}, "later": float64(42)})
 	})
+}
+
+func expectEscapeText(t *testing.T, text string) {
+	t.Helper()
+	if text != string([]byte{'\\', 'u', 'f', 'f', 'f', 'd'}) {
+		t.Fatalf("%q is not the six-byte escape text", text)
+	}
 }
 
 type _WrittenJSON string
