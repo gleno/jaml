@@ -4,11 +4,15 @@ package jaml
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -248,5 +252,136 @@ func TestAHostThatReapsItsOwnChildrenOutlivesThem(t *testing.T) {
 		if !strings.Contains(string(output), want) {
 			t.Fatalf("want %q in\n%s", want, output)
 		}
+	}
+}
+
+const (
+	stragglerLimit       = 64<<20 + 11
+	silentStragglerLimit = 16<<20 + 12
+)
+
+var _ = misbehaveAtTheEnd()
+
+func misbehaveAtTheEnd() bool {
+	if os.Getenv(evaluatorMarker) != "1" {
+		return false
+	}
+	switch os.Getenv(evaluatorMemoryLimit) {
+	case strconv.Itoa(stragglerLimit):
+		leaveAStraggler()
+	case strconv.Itoa(silentStragglerLimit):
+		leaveAStraggler()
+		time.Sleep(time.Hour)
+	default:
+		return false
+	}
+	return true
+}
+
+func leaveAStraggler() {
+	var straggler = exec.Command("/bin/sleep", "10")
+	straggler.Stderr = os.Stderr
+	straggler.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if straggler.Start() != nil {
+		return
+	}
+	register, err := os.OpenFile(stragglerRegister(os.Getenv(evaluatorParent)), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer register.Close()
+	fmt.Fprintln(register, straggler.Process.Pid)
+}
+
+func stragglerRegister(host string) string {
+	self, _ := os.Executable()
+	return filepath.Join(filepath.Dir(self), "stragglers-"+host)
+}
+
+func reapStragglers(t *testing.T) {
+	var register = stragglerRegister(strconv.Itoa(os.Getpid()))
+	t.Cleanup(func() {
+		recorded, _ := os.ReadFile(register)
+		for _, line := range strings.Fields(string(recorded)) {
+			if pid, err := strconv.Atoi(line); err == nil {
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
+			}
+		}
+		_ = os.Remove(register)
+	})
+}
+
+func TestAReplyDeliveredBeforeTheEndWinsOverIt(t *testing.T) {
+	for range 50 {
+		var outcome = serveIntoAnEndingLife(t)
+		if _, answered := outcome.(_Answered); !answered {
+			t.Fatalf("a reply delivered before the life ended came back as %#v", outcome)
+		}
+	}
+}
+
+func serveIntoAnEndingLife(t *testing.T) _Outcome {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAll(reader, writer)
+	fillPipe(t, writer)
+	var life = &_Life{reaped: make(chan struct{}), ended: make(chan struct{}), wire: newWire(writer, writer), board: &_Switchboard{pending: map[uint64]*_Expectation{}}}
+	var served = make(chan _Outcome, 1)
+	go func() { served <- life.serve(t.Context(), 1, _Work{}) }()
+	for !life.board.awaits(1) {
+		time.Sleep(time.Millisecond)
+	}
+	if err := life.board.deliver(_Reply{Job: 1, Data: json.RawMessage("1")}); err != nil {
+		t.Fatal(err)
+	}
+	life.bury(errors.New("the child died after answering"))
+	go func() { _, _ = io.Copy(io.Discard, reader) }()
+	return <-served
+}
+
+func fillPipe(t *testing.T, writer *os.File) {
+	t.Helper()
+	var chunk = make([]byte, 4096)
+	_ = writer.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
+	for {
+		if _, err := writer.Write(chunk); err != nil {
+			break
+		}
+	}
+	_ = writer.SetWriteDeadline(time.Time{})
+}
+
+func (b *_Switchboard) awaits(job uint64) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pending[job] != nil
+}
+
+func TestAChildLeavingAStragglerIsStillBuried(t *testing.T) {
+	reapStragglers(t)
+	var sb = mustIsolated(t, WithMemoryLimit(stragglerLimit))
+	var document = mustJaml(t, sb, "v: ${ 1 }\n")
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
+	var process = currentChild(t, sb)
+	var started = time.Now()
+	process.kill(errors.New("ours to end"))
+	expectDeath(t, process)
+	if waited := time.Since(started); waited > time.Second {
+		t.Fatalf("a child leaving a straggler took %s to bury", waited)
+	}
+	expectEqual(t, process.verdict.Error(), "ours to end")
+	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
+}
+
+func TestAStartLeavingAStragglerKeepsItsDeadline(t *testing.T) {
+	reapStragglers(t)
+	var started = time.Now()
+	_, err := MakeSecureSandbox(within(t, 300*time.Millisecond), WithMemoryLimit(silentStragglerLimit))
+	expectError(t, err, EvaluationFailed, "starting the evaluator")
+	if waited := time.Since(started); waited > time.Second {
+		t.Fatalf("a start leaving a straggler held its caller for %s past a 300ms deadline", waited)
 	}
 }

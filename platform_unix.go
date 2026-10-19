@@ -19,3 +19,7 @@ func killedOutright(state *os.ProcessState) bool {
 	status, isStatus := state.Sys().(syscall.WaitStatus)
 	return isStatus && status.Signaled() && status.Signal() == syscall.SIGKILL
 }
+
+func killGroup(leader *os.Process) {
+	_ = syscall.Kill(-leader.Pid, syscall.SIGKILL)
+}

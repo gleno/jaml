@@ -51,6 +51,7 @@ type _Life struct {
 	cmd          *exec.Cmd
 	signals      sync.Mutex
 	reaped       chan struct{}
+	drained      chan struct{}
 	ended        chan struct{}
 	verdict      error
 	killCause    atomic.Pointer[error]
@@ -61,6 +62,11 @@ type _Life struct {
 
 type _Ending interface {
 	verdict(remains _Remains) error
+}
+
+type _Greeting struct {
+	hello _Hello
+	err   error
 }
 
 type _Collected struct {
@@ -91,18 +97,17 @@ func startLife(spec _ChildSpec) (*_Life, error) {
 		return nil, startFailure(cancelled(bounded))
 	}
 	var world = currentWorld(spec.limit)
-	born, replies, err := world.start(spec)
+	born, greeted, err := world.start(spec)
 	if err != nil {
 		return nil, startFailure(err)
 	}
-	greeting, err := born.greet(bounded, replies)
+	greeting, err := born.greet(bounded, greeted)
 	if err == nil {
 		err = greeting.vouch(world.nonce)
 	}
 	if err != nil {
-		return nil, startFailure(born.abandon(err))
+		return nil, startFailure(born.abandon(spec.lifetime, err))
 	}
-	go born.listen(replies)
 	return born, nil
 }
 
@@ -155,7 +160,7 @@ func (w _EvaluatorWorld) env() []string {
 	return append(env, w.zone...)
 }
 
-func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
+func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, <-chan _Greeting, error) {
 	image, err := selfImage()
 	if err != nil {
 		return nil, nil, fmt.Errorf("finding this executable: %w", err)
@@ -171,6 +176,7 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 	cmd.ExtraFiles = []*os.File{requests.reader, replies.writer, control.reader}
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = evaluatorProcAttr()
+	cmd.WaitDelay = cancelGrace
 	err = cmd.Start()
 	closeAll(requests.reader, replies.writer, control.reader)
 	if err != nil {
@@ -180,21 +186,25 @@ func (w _EvaluatorWorld) start(spec _ChildSpec) (*_Life, *_ReplyStream, error) {
 	var born = &_Life{
 		cmd:          cmd,
 		reaped:       make(chan struct{}),
+		drained:      make(chan struct{}),
 		ended:        make(chan struct{}),
 		buildTimeout: spec.buildTimeout,
 		wire:         newWire(requests.writer, control.writer),
 		board:        &_Switchboard{pending: map[uint64]*_Expectation{}},
 	}
 	var unbind = context.AfterFunc(spec.lifetime, func() { born.kill(fmt.Errorf("closed: %w", context.Cause(spec.lifetime))) })
+	var greeted = make(chan _Greeting, 1)
+	go born.listen(&_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit)}, greeted)
 	go func() {
 		var ending = endingOf(cmd, cmd.Wait())
 		born.reap()
 		var remains = _Remains{stderr: stderr, killCause: born.killReason(), limit: w.limit}
-		closeAll(requests.writer, replies.reader, control.writer)
+		closeAll(requests.writer, control.writer)
 		unbind()
+		born.drain(replies.reader)
 		born.bury(ending.verdict(remains))
 	}()
-	return born, &_ReplyStream{lines: bufio.NewReader(replies.reader), frames: framesFor(w.limit)}, nil
+	return born, greeted, nil
 }
 
 type _Pipe struct {
@@ -234,7 +244,7 @@ func (l *_Life) end() {
 	select {
 	case <-l.reaped:
 	default:
-		_ = l.cmd.Process.Kill()
+		killGroup(l.cmd.Process)
 	}
 }
 
@@ -251,9 +261,23 @@ func (l *_Life) killReason() error {
 	return nil
 }
 
-func (l *_Life) abandon(reason error) error {
+func (l *_Life) drain(replies *os.File) {
+	var bound = time.NewTimer(cancelGrace)
+	defer bound.Stop()
+	select {
+	case <-l.drained:
+	case <-bound.C:
+	}
+	_ = replies.Close()
+	<-l.drained
+}
+
+func (l *_Life) abandon(ctx context.Context, reason error) error {
 	l.kill(reason)
-	<-l.ended
+	select {
+	case <-l.ended:
+	case <-ctx.Done():
+	}
 	return reason
 }
 
@@ -271,21 +295,18 @@ func (l *_Life) lost() _Lost {
 	return _Lost{cause: l.verdict}
 }
 
-func (l *_Life) greet(ctx context.Context, replies *_ReplyStream) (_Hello, error) {
-	var greeting _Hello
-	var read = make(chan error, 1)
-	go func() { read <- replies.read(&greeting) }()
+func (l *_Life) greet(ctx context.Context, greeted <-chan _Greeting) (_Hello, error) {
 	select {
-	case err := <-read:
-		if errors.Is(err, errHungUp) {
-			return greeting, l.deathBeforeGreeting(ctx)
+	case greeting := <-greeted:
+		if errors.Is(greeting.err, errHungUp) {
+			return greeting.hello, l.deathBeforeGreeting(ctx)
 		}
-		if err != nil {
-			return greeting, fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", err)
+		if greeting.err != nil {
+			return greeting.hello, fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", greeting.err)
 		}
-		return greeting, nil
+		return greeting.hello, nil
 	case <-ctx.Done():
-		return greeting, cancelled(ctx)
+		return _Hello{}, cancelled(ctx)
 	}
 }
 

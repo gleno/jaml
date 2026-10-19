@@ -19,3 +19,7 @@ func evaluatorProcAttr() *syscall.SysProcAttr {
 func killedOutright(*os.ProcessState) bool {
 	return false
 }
+
+func killGroup(leader *os.Process) {
+	_ = leader.Kill()
+}

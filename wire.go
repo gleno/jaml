@@ -105,7 +105,7 @@ func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 			l.settle(r, race.await())
 			return
 		case <-l.ended:
-			race.finish(l.lost())
+			race.finish(l.final(asked, builtFrom))
 			l.settle(r, race.await())
 			return
 		case <-overdue:
@@ -196,7 +196,7 @@ func (l *_Life) serve(ctx context.Context, unit uint64, asked _Work) _Outcome {
 		case incoming := <-sent.replies:
 			return servedFrom(incoming)
 		case <-l.ended:
-			return l.lost()
+			return l.final(sent, servedFrom)
 		case <-stopped:
 			stopped = nil
 			delivered = l.tell(_Request{Op: opCancel, Job: sent.job})
@@ -255,6 +255,15 @@ func (l *_Life) send(ctx context.Context, outgoing _Request) (_Call, error) {
 	return _Call{job: outgoing.Job, replies: replies}, nil
 }
 
+func (l *_Life) final(c _Call, judged func(_Reply) _Outcome) _Outcome {
+	select {
+	case incoming := <-c.replies:
+		return judged(incoming)
+	default:
+		return l.lost()
+	}
+}
+
 func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 	var delivered = make(chan struct{})
 	go func() {
@@ -273,7 +282,14 @@ func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 	return delivered
 }
 
-func (l *_Life) listen(replies *_ReplyStream) {
+func (l *_Life) listen(replies *_ReplyStream, greeted chan<- _Greeting) {
+	defer close(l.drained)
+	var greeting _Greeting
+	greeting.err = replies.read(&greeting.hello)
+	greeted <- greeting
+	if greeting.err != nil {
+		return
+	}
 	for {
 		var incoming _Reply
 		var err = replies.read(&incoming)
