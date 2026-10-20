@@ -187,3 +187,20 @@ b: "${ [Math.max.call.call(Math.max, null, 1, 2), typeof Function.prototype.appl
 		})
 	})
 }
+
+func TestStrictWritesToBuiltInsThrowWhileSloppyAndReflectWritesFailQuietly(t *testing.T) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, `
+strict: "${ [() => { Object.prototype.admin = true }, () => { Math = {} }, () => { Array.prototype.map = 1 }, () => { Function.prototype.call = 1 }].map((write) => { try { write(); return 'written' } catch (e) { return e.name } }) }"
+sloppy: "${ [Function('Object.prototype.admin = true; return 1')(), Function('Math = {}; return typeof Math.max')(), Function('Array.prototype.map = 1; return typeof [].map')(), (0, eval)('Function.prototype.call = 1; typeof Function.prototype.call')] }"
+reflected: "${ [Reflect.set(Object.prototype, 'admin', true), Reflect.set(globalThis, 'Math', {}), Reflect.set(Array.prototype, 'map', 1)] }"
+held: "${ [({}).admin === undefined, typeof Math.max, typeof [].map, typeof Function.prototype.call] }"
+`)
+		expectEqual(t, mustResolve[map[string]any](t, t.Context(), document), map[string]any{
+			"strict":    []any{"TypeError", "TypeError", "TypeError", "TypeError"},
+			"sloppy":    []any{float64(1), "function", "function", "function"},
+			"reflected": []any{false, false, false},
+			"held":      []any{true, "function", "function", "function"},
+		})
+	})
+}
