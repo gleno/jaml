@@ -333,3 +333,32 @@ func TestAChildThatWakesBeforeTheBackstopStillAnswers(t *testing.T) {
 	expectEqual(t, out, 5)
 	expectSurvived(t, child)
 }
+
+func TestAChildStoppedMidReplyIsCaughtForALimitedCall(t *testing.T) {
+	var sb = mustIsolated(t, WithMemoryLimit(markedReplyLimit))
+	var big = mustExpression(t, sb, bigAnswer())
+	var child = currentChild(t, sb)
+	t.Cleanup(func() { _ = child.cmd.Process.Signal(syscall.SIGKILL) })
+	var limited = make(chan error, 1)
+	go func() {
+		var out string
+		limited <- resolveInto(WithTimeLimit(t.Context(), 2*time.Second), &out, big)
+	}()
+	awaitHeldReply(t, child.cmd.Process.Pid)
+	if err := child.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		t.Fatalf("stopping the evaluator: %v", err)
+	}
+	var stopped = time.Now()
+	select {
+	case err := <-limited:
+		expectError(t, err, TimeLimit, "$: exceeded the time limit of 2s", "the evaluator stopped answering")
+	case <-time.After(2*time.Second + backstopSilence + 10*time.Second):
+		t.Fatal("a limited call waited on an evaluator stopped mid-reply past its backstop")
+	}
+	if waited := time.Since(stopped); waited > 2*time.Second+cancelGrace+backstopSilence+2*time.Second {
+		t.Fatalf("an evaluator stopped mid-reply was given up on only after %s", waited)
+	}
+	if child.alive() {
+		t.Fatal("the evaluator stopped mid-reply outlived the call it held")
+	}
+}

@@ -332,7 +332,7 @@ func (l *_Life) backstop(told <-chan struct{}, quiet *_Quiet) func() {
 				return
 			case <-timer.C:
 			}
-			var silence = min(monotonicNow()-since, quiet.lasted())
+			var silence = min(monotonicNow()-since, quiet.lasted(), l.quiet.lasted())
 			if silence >= backstopSilence {
 				l.kill(quiet.meaning)
 				return

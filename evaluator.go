@@ -49,6 +49,7 @@ func serveEvaluations(answers io.Writer) int {
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
 	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
+	go watch.pulse(replies.beat)
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
 }
@@ -243,6 +244,10 @@ func (w *_ReplyWriter) greet(greeting _Hello) {
 	}
 }
 
+func (w *_ReplyWriter) beat() {
+	w.write(nil)
+}
+
 func (w *_ReplyWriter) write(frame []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -354,6 +359,14 @@ func (w *_HeapWatch) during(work func()) {
 		w.mu.Unlock()
 	}()
 	work()
+}
+
+func (w *_HeapWatch) pulse(beat func()) {
+	for range time.Tick(heartbeatEvery) {
+		if w.working() {
+			beat()
+		}
+	}
 }
 
 func (w *_HeapWatch) patrol() {

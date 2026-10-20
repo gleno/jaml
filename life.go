@@ -25,6 +25,7 @@ const (
 	pressureMarker         = "jaml evaluator: the live heap passed three quarters of its ceiling"
 	cancelGrace            = 250 * time.Millisecond
 	backstopSilence        = 20 * cancelGrace
+	heartbeatEvery         = backstopSilence / 5
 	evaluatorStartDeadline = 30 * time.Second
 	notAnEvaluator         = "this executable is not a jaml evaluator (C shared library or plugin host?)"
 )
@@ -438,6 +439,9 @@ func (s *_ReplyStream) greeting() error {
 
 func (s *_ReplyStream) read(target any) error {
 	frame, err := s.frames.next()
+	for err == nil && len(frame) == 0 {
+		frame, err = s.frames.next()
+	}
 	if err != nil {
 		return err
 	}
