@@ -138,14 +138,14 @@ func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 			t.Fatal(err)
 		}
 		var thrown = &Thrown{Message: "threw \u2028 something", Value: value}
-		err = fail(EvaluationFailed, "%w", thrown).within("$.v")
-		var described = describeFailure(err)
+		var failed = failWith(evaluationFailed, thrown).at("$.v")
+		var described = describeFailure(failed)
 		described.Thrown = &_ThrownOnWire{Message: thrown.Message, Value: data}
 		want, marshalErr := wireJSON(_Reply{Job: 7, Failure: &described})
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
-		expectEqual(t, string(f.failure(7, "$.v", err)), string(want))
+		expectEqual(t, string(f.failure(7, "$.v", failed)), string(want))
 	}
 	var stopped = located("$.v", fmt.Errorf("cancelled: %w", context.Canceled))
 	var described = describeFailure(stopped)
@@ -175,7 +175,7 @@ func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
 	}{
 		{built, _Reply{Job: 3, Built: true}},
 		{f.missing(4), _Reply{Job: 4, Missing: true}},
-		{f.failure(5, "", errors.New("plain")), _Reply{Job: 5, Failure: &_Failure{Kind: "EvaluationFailed", Message: "plain"}}},
+		{f.failure(5, "$.a", errors.New("plain")), _Reply{Job: 5, Failure: &_Failure{Kind: "EvaluationFailed", At: "$.a", Message: "plain"}}},
 	} {
 		want, err := wireJSON(sent.reply)
 		if err != nil {
@@ -198,8 +198,8 @@ func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 
 func TestAThrownValuePastTheCapIsRefusedAndOneUnderIsCarried(t *testing.T) {
 	var f = _Frames{limit: 1 << 10}
-	for _, size := range []int{900, 1100} {
-		var err = fail(EvaluationFailed, "%w", &Thrown{Message: "threw a string", Value: strings.Repeat("x", size)})
+	for _, size := range []int{850, 1100} {
+		var err = failWith(evaluationFailed, &Thrown{Message: "threw a string", Value: strings.Repeat("x", size)})
 		var sent _Reply
 		if decodeErr := json.Unmarshal(f.failure(1, "$", err), &sent); decodeErr != nil {
 			t.Fatal(decodeErr)

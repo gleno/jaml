@@ -69,13 +69,13 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 		return _Refused{err: err}
 	}
 	defer u.engine.leave()
-	run, err := u.built.prepare(written.view(), u.engine.runtime)
+	prepared, err := u.built.prepare(written.view(), u.engine.runtime)
 	if err != nil {
 		return _Refused{err: err}
 	}
 	bounded, stop := written.ask.timeLimit.bound(ctx)
 	defer stop()
-	result, err := run(bounded)
+	result, err := prepared.render(bounded)
 	if err != nil {
 		return _Refused{err: err}
 	}

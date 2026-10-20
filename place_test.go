@@ -2,6 +2,7 @@ package jaml
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"testing"
@@ -174,10 +175,14 @@ func TestEveryErrorLeadsWithAPath(t *testing.T) {
 	})
 }
 
-func TestAnErrorWithoutAPlaceIsAtTheRoot(t *testing.T) {
-	expectEqual(t, _ExpressionError{kind: EvaluationFailed, cause: errors.New("boom")}.Error(), "$: boom: evaluation failed: expression error")
-	expectEqual(t, _Failure{Kind: "EvaluationFailed", Message: "boom"}.rebuild().Error(), "$: boom: evaluation failed: expression error")
-	expectEqual(t, describeFailure(fail(CoercionFailed, "boom").within("$.a")).rebuild().Error(), "$.a: boom: coercion failed: expression error")
+func TestAFailureLeavesTheChildPlaced(t *testing.T) {
+	expectEqual(t, located("$.a", errors.New("boom")).Error(), "$.a: boom: evaluation failed: expression error")
+	expectEqual(t, located("$.b", fail(coercionFailed, "boom").at("$.a")).Error(), "$.a: boom: coercion failed: expression error")
+	expectEqual(t, describeFailure(_Unplaced{kind: coercionFailed, label: "script 1", cause: errors.New("boom")}.at("$.a")).rebuild().Error(), "$.a: script 1: boom: coercion failed: expression error")
+	var unplaced = _Reply{Job: 1, Failure: &_Failure{Kind: "EvaluationFailed", Message: "boom"}}
+	if err := unplaced.fits(opServe); err == nil {
+		t.Fatal("a failure at no place crossed the wire")
+	}
 }
 
 func TestAClosedErrorNamesThePathAndTheContextThatEnded(t *testing.T) {
@@ -217,5 +222,23 @@ func TestAClosedErrorNamesThePathAndTheContextThatEnded(t *testing.T) {
 			_, err = sb.MakeExpression(t.Context(), "1")
 			expectError(t, err, Closed, "$: the sandbox's context has ended")
 		})
+	}
+}
+
+func TestEveryKindCrossesTheWire(t *testing.T) {
+	for kind := range kinds {
+		var sent = _Unplaced{kind: _Kind(kind), label: "script 1", cause: errors.New("boom")}.at("$.a")
+		var frame = _Frames{limit: 1 << 20}.failure(1, "$.a", sent)
+		var reply _Reply
+		if err := json.Unmarshal(frame, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if err := reply.fits(opServe); err != nil {
+			t.Fatalf("%v: %v", kind, err)
+		}
+		var rebuilt = reply.Failure.rebuild()
+		if !errors.Is(rebuilt, kinds[kind].sentinel) || rebuilt.Error() != sent.Error() {
+			t.Fatalf("%q came back as %q", sent, rebuilt)
+		}
 	}
 }

@@ -279,7 +279,7 @@ func expectDeepCut(t *testing.T, value any) {
 
 func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
 	var sent _Reply
-	if err := json.Unmarshal(_Frames{limit: 1 << 20}.failure(1, "$.v", fail(EvaluationFailed, "$.v: %w", &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})), &sent); err != nil {
+	if err := json.Unmarshal(_Frames{limit: 1 << 20}.failure(1, "$.v", failWith(evaluationFailed, &Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})), &sent); err != nil {
 		t.Fatal(err)
 	}
 	var carried = sent.Failure.rebuild()
@@ -288,11 +288,11 @@ func TestAThrownValueCrossesTheWireAsJSON(t *testing.T) {
 		t.Fatalf("no Thrown in %v", carried)
 	}
 	expectEqual(t, *caught, Thrown{Message: "threw an object", Value: map[string]any{"k": []any{"v"}}})
-	encoded, err := json.Marshal(describeFailure(fail(EvaluationFailed, "plain")))
+	encoded, err := json.Marshal(describeFailure(fail(evaluationFailed, "plain").at("$.v")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectEqual(t, string(encoded), `{"kind":"EvaluationFailed","message":"plain"}`)
+	expectEqual(t, string(encoded), `{"kind":"EvaluationFailed","at":"$.v","message":"plain"}`)
 }
 
 type _KeptByValue struct {

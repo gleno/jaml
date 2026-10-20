@@ -8,85 +8,103 @@ import (
 const rootPlace = "$"
 
 type Failure struct {
-	Path   string
-	Reason string
+	Path    string
+	Reason  string
+	printed string
 }
 
 func (f *Failure) Error() string {
+	if f.printed != "" {
+		return f.printed
+	}
 	return f.Path + ": " + f.Reason
 }
 
-type _ExpressionError struct {
-	kind  error
-	path  string
-	code  string
+type _Unplaced struct {
+	kind  _Kind
+	label string
 	cause error
 }
 
-type _Quoted struct {
-	code   string
-	reason error
+type _ExpressionError struct {
+	unplaced _Unplaced
+	path     string
 }
 
-func (q _Quoted) Error() string {
-	return q.code + ": " + q.reason.Error()
+type _LabelledCause struct {
+	label string
+	cause error
 }
 
-func (q _Quoted) Unwrap() error {
-	return q.reason
+func (l _LabelledCause) Error() string {
+	return _Unplaced{label: l.label, cause: l.cause}.parts()
 }
 
-func fail(kind error, format string, args ...any) _ExpressionError {
+func (l _LabelledCause) Unwrap() error {
+	return l.cause
+}
+
+func fail(kind _Kind, format string, args ...any) _Unplaced {
 	return failWith(kind, fmt.Errorf(format, args...))
 }
 
-func failWith(kind error, err error) _ExpressionError {
-	if quoted, isQuoted := err.(_Quoted); isQuoted {
-		return _ExpressionError{kind: kind, code: quoted.code, cause: quoted.reason}
+func failWith(kind _Kind, err error) _Unplaced {
+	if labelled, isLabelled := err.(_LabelledCause); isLabelled {
+		return _Unplaced{kind: kind, label: labelled.label, cause: labelled.cause}
 	}
-	return _ExpressionError{kind: kind, cause: err}
+	return _Unplaced{kind: kind, cause: err}
 }
 
-func (e _ExpressionError) within(path string) _ExpressionError {
-	e.path = path
-	return e
+func (u _Unplaced) at(path string) _ExpressionError {
+	return _ExpressionError{unplaced: u, path: path}
 }
 
-func (e _ExpressionError) place() string {
-	if e.path == "" {
-		return rootPlace
+func (u _Unplaced) Error() string {
+	return u.parts() + ": " + u.kind.sentinel().Error()
+}
+
+func (u _Unplaced) parts() string {
+	if u.label == "" {
+		return u.cause.Error()
 	}
-	return e.path
+	return u.label + ": " + u.cause.Error()
+}
+
+func (u _Unplaced) Unwrap() []error {
+	return []error{u.kind.sentinel(), u.cause}
 }
 
 func (e _ExpressionError) Error() string {
-	return e.place() + e.joint() + e.quoted() + e.cause.Error() + ": " + e.kind.Error()
-}
-
-func (e _ExpressionError) quoted() string {
-	if e.code == "" {
-		return ""
-	}
-	return e.code + ": "
+	return e.path + e.joint() + e.unplaced.Error()
 }
 
 func (e _ExpressionError) As(target any) bool {
 	failure, wanted := target.(**Failure)
 	if wanted {
-		*failure = &Failure{Path: e.place(), Reason: e.cause.Error()}
+		*failure = &Failure{Path: e.path, Reason: e.unplaced.cause.Error(), printed: e.Error()}
 	}
 	return wanted
 }
 
 func (e _ExpressionError) joint() string {
-	if e.kind == MissingPath {
+	if e.unplaced.kind == missingPath {
 		return " "
 	}
 	return ": "
 }
 
 func (e _ExpressionError) Unwrap() []error {
-	return []error{e.kind, e.cause}
+	return e.unplaced.Unwrap()
+}
+
+func located(path string, err error) _ExpressionError {
+	switch failed := err.(type) {
+	case _ExpressionError:
+		return failed
+	case _Unplaced:
+		return failed.at(path)
+	}
+	return failWith(evaluationFailed, err).at(path)
 }
 
 type _MemoryExhausted string

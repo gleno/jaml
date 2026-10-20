@@ -60,8 +60,14 @@ func serving(child *_Life) bool {
 }
 
 func TestAJobWhoseReplayIsKilledFromOutsideIsUnavailable(t *testing.T) {
-	var sb = mustIsolated(t)
-	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	_SandboxKinds{isolatedKind, unprotectedKind}.each(t, func(t *testing.T, sb *Sandbox) {
+		var spin = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n").At("spin")
+		expectUnavailableFromOutside(t, sb, spin)
+	})
+}
+
+func expectUnavailableFromOutside(t *testing.T, sb *Sandbox, spin *Expression) {
+	t.Helper()
 	var started = recordStarts(t, sb)
 	var first = currentChild(t, sb)
 	var spun = make(chan error, 1)
@@ -77,7 +83,10 @@ func TestAJobWhoseReplayIsKilledFromOutsideIsUnavailable(t *testing.T) {
 		t.Fatal("the killed job was never replayed")
 	}
 	var err = <-spun
-	expectError(t, err, Unavailable, "killed from outside jaml")
+	expectError(t, err, Unavailable, "$.spin: evaluator died", "killed from outside jaml")
+	if failureOf(t, err).Path != "$.spin" {
+		t.Fatalf("expected the selection, got %+v", failureOf(t, err))
+	}
 	if errors.Is(err, EvaluationFailed) {
 		t.Fatalf("a death jaml did not cause blamed the code: %v", err)
 	}

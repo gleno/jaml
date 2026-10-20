@@ -102,7 +102,7 @@ func TestABuildRaceKeepsTheFirstVerdict(t *testing.T) {
 	if !isRefused {
 		t.Fatalf("an expired build was not refused: %#v", expiredFirst.await())
 	}
-	expectError(t, located("", failed.err), EvaluationFailed, "cancelled: the build took longer than its timeout of 1ns")
+	expectError(t, located(rootPlace, failed.err), EvaluationFailed, "cancelled: the build took longer than its timeout of 1ns")
 }
 
 func TestABuildRaceRecordsExactlyOneVerdict(t *testing.T) {

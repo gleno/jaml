@@ -221,13 +221,17 @@ func (s *_Session) run(sources []string, values _BoundValues) error {
 	for index, source := range sources {
 		compiled, err := scripts.compile(source)
 		if err != nil {
-			return fail(InvalidExpression, "script %d: %w", index+1, err)
+			return _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: err}
 		}
 		if err := s.enter(func(r _Realm) error { return r.runScript(compiled, values) }); err != nil {
-			return fail(EvaluationFailed, "script %d: %w", index+1, err)
+			return _Unplaced{kind: evaluationFailed, label: scriptLabel(index), cause: err}
 		}
 	}
 	return nil
+}
+
+func scriptLabel(index int) string {
+	return fmt.Sprintf("script %d", index+1)
 }
 
 func (r _Realm) runScript(compiled _Script, values _BoundValues) error {

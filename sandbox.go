@@ -73,6 +73,11 @@ func MakeSecureSandboxWithoutBuiltinsProtection(ctx context.Context, options ...
 }
 
 func makeSecureSandbox(ctx context.Context, options []SandboxOption) (*Sandbox, error) {
+	made, err := startSecureSandbox(ctx, options)
+	return made, placed(rootPlace, err)
+}
+
+func startSecureSandbox(ctx context.Context, options []SandboxOption) (*Sandbox, error) {
 	if err := isolationSupported(); err != nil {
 		return nil, err
 	}
@@ -88,17 +93,27 @@ func makeSecureSandbox(ctx context.Context, options []SandboxOption) (*Sandbox, 
 }
 
 func MakeTrustedSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
+	made, err := makeTrustedSandbox(ctx, options)
+	return made, placed(rootPlace, err)
+}
+
+func makeTrustedSandbox(ctx context.Context, options []SandboxOption) (*Sandbox, error) {
 	configured, err := configureSandbox(slices.Concat(options, []SandboxOption{withBuiltins(mutableBuiltins)}))
 	if err != nil {
 		return nil, err
 	}
 	if configured.memoryLimit != 0 {
-		return nil, fail(InvalidExpression, "a trusted sandbox has no memory limit; use MakeSecureSandbox")
+		return nil, fail(invalidExpression, "a trusted sandbox has no memory limit; use MakeSecureSandbox")
 	}
 	return &Sandbox{lifetime: ctx, engine: newTrusted(configured)}, nil
 }
 
 func (s *Sandbox) MakeExpressionFromJaml(ctx context.Context, jaml string, options ...Option) (*Expression, error) {
+	made, err := s.fromJaml(ctx, jaml, options)
+	return made, placed(rootPlace, err)
+}
+
+func (s *Sandbox) fromJaml(ctx context.Context, jaml string, options []Option) (*Expression, error) {
 	if s == nil || s.engine == nil {
 		return nil, unmadeSandbox()
 	}
@@ -110,12 +125,17 @@ func (s *Sandbox) MakeExpressionFromJaml(ctx context.Context, jaml string, optio
 		return nil, err
 	}
 	if configured.function {
-		return nil, fail(InvalidExpression, "jaml.AsFunction applies to MakeExpression, not to MakeExpressionFromJaml")
+		return nil, fail(invalidExpression, "jaml.AsFunction applies to MakeExpression, not to MakeExpressionFromJaml")
 	}
 	return s.make(ctx, _Blueprint{Written: jaml, Null: configured.null, Undefined: configured.undefined, Sigil: configured.sigil})
 }
 
 func (s *Sandbox) MakeExpression(ctx context.Context, expression string, options ...Option) (*Expression, error) {
+	made, err := s.fromExpression(ctx, expression, options)
+	return made, placed(rootPlace, err)
+}
+
+func (s *Sandbox) fromExpression(ctx context.Context, expression string, options []Option) (*Expression, error) {
 	if s == nil || s.engine == nil {
 		return nil, unmadeSandbox()
 	}
@@ -127,7 +147,7 @@ func (s *Sandbox) MakeExpression(ctx context.Context, expression string, options
 		return nil, err
 	}
 	if configured.sigil != defaultSigil {
-		return nil, fail(InvalidExpression, "jaml.WithSigil applies to MakeExpressionFromJaml, not to MakeExpression")
+		return nil, fail(invalidExpression, "jaml.WithSigil applies to MakeExpressionFromJaml, not to MakeExpression")
 	}
 	return s.make(ctx, _Blueprint{Written: expression, Null: configured.null, Undefined: configured.undefined, Raw: true, Function: configured.function})
 }
@@ -187,8 +207,8 @@ func (k *_Keep) sandboxEnded() bool {
 	return k.sandbox.Err() != nil || errors.Is(context.Cause(k.lifetime), errSandboxEnded)
 }
 
-func (k *_Keep) closed() _ExpressionError {
-	return fail(Closed, "%s has ended", k.endedContext())
+func (k *_Keep) closed() _Unplaced {
+	return fail(closed, "%s has ended", k.endedContext())
 }
 
 func (k *_Keep) endedContext() string {
@@ -217,17 +237,17 @@ func (k *_Keep) release() {
 func (s *Sandbox) framed(ctx context.Context, err error) error {
 	switch {
 	case s.lifetime.Err() != nil:
-		return fail(Closed, "the sandbox's context has ended")
+		return fail(closed, "the sandbox's context has ended")
 	case ctx.Err() != nil:
-		return fail(EvaluationFailed, "building: %w", cancelled(ctx))
+		return _Unplaced{kind: evaluationFailed, label: "building", cause: cancelled(ctx)}
 	case err != nil:
-		return located("", err)
+		return err
 	}
 	return nil
 }
 
 func unmadeSandbox() error {
-	return fail(InvalidExpression, "a sandbox not made by MakeSecureSandbox, MakeSecureSandboxWithoutBuiltinsProtection or MakeTrustedSandbox")
+	return fail(invalidExpression, "a sandbox not made by MakeSecureSandbox, MakeSecureSandboxWithoutBuiltinsProtection or MakeTrustedSandbox").at(rootPlace)
 }
 
 func (e *Expression) At(path ...string) *Expression {
@@ -238,30 +258,48 @@ func (e *Expression) At(path ...string) *Expression {
 }
 
 func (e *Expression) Copy(ctx context.Context) (*Expression, error) {
+	copied, err := e.copy(ctx)
+	return copied, placed(e.selection(), err)
+}
+
+func (e *Expression) copy(ctx context.Context) (*Expression, error) {
 	if e == nil || e.held == nil {
 		return nil, unmadeExpression("Copy")
 	}
-	var path = selectedPath(e.path).String()
-	if err := e.held.admit(ctx, path); err != nil {
+	if err := e.held.admit(ctx); err != nil {
 		return nil, err
 	}
 	held, holding := e.held.keep.hold(ctx)
 	if !holding {
-		return nil, e.held.keep.closed().within(path)
+		return nil, e.held.keep.closed()
 	}
 	return &Expression{held: held, path: e.path}, nil
 }
 
-func unmadeExpression(method string) error {
-	return fail(InvalidExpression, "%s on an expression not made by a Sandbox", method)
+func (e *Expression) selection() string {
+	if e == nil {
+		return rootPlace
+	}
+	return selectedPath(e.path).String()
 }
 
-func (h *_Handle) admit(ctx context.Context, path string) error {
+func placed(path string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return located(path, err)
+}
+
+func unmadeExpression(method string) error {
+	return fail(invalidExpression, "%s on an expression not made by a Sandbox", method).at(rootPlace)
+}
+
+func (h *_Handle) admit(ctx context.Context) error {
 	if h.ended() {
-		return fail(Closed, "%s has ended", h.endedContext()).within(path)
+		return fail(closed, "%s has ended", h.endedContext())
 	}
 	if ctx.Err() != nil {
-		return fail(EvaluationFailed, "%w", cancelled(ctx)).within(path)
+		return cancelled(ctx)
 	}
 	return nil
 }
@@ -272,23 +310,22 @@ func (h *_Handle) answer(ctx context.Context, ask _Ask, decode func(settled _Ans
 	var job = jobWithin(ctx, h.lifetime)
 	defer job.end()
 	var result = h.keep.unit.serve(job, ask)
-	var path = selectedPath(ask.path).String()
 	switch {
 	case h.ended():
-		return fail(Closed, "%s ended while it ran", h.endedContext()).within(path)
+		return fail(closed, "%s ended while it ran", h.endedContext())
 	case ctx.Err() != nil:
-		return located(path, cancelled(ctx))
+		return cancelled(ctx)
 	}
 	switch settled := result.(type) {
 	case _Answered:
 		if err := decode(settled); err != nil {
-			return fail(CoercionFailed, "%w", err).within(blame(path, settled.data, err))
+			return failWith(coercionFailed, err).at(blame(selectedPath(ask.path).String(), settled.data, err))
 		}
 		return nil
 	case _Refused:
-		return located(path, settled.err)
+		return settled.err
 	}
-	return located(path, errUnjudged)
+	return errUnjudged
 }
 
 type _Job struct {

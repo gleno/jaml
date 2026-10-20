@@ -97,7 +97,7 @@ func TestOnlyAnOverseenLimitTurnsAFailedJobIntoTimeLimit(t *testing.T) {
 	var kept = refusal(t, overran(overdue, thrown))
 	expectError(t, kept, TimeLimit, "$.v: exceeded the time limit of 1ms: Error: boom")
 	var failure *Failure
-	if !errors.As(kept, &failure) || *failure != (Failure{Path: "$.v", Reason: "exceeded the time limit of 1ms: Error: boom"}) {
+	if !errors.As(kept, &failure) || failure.Path != "$.v" || failure.Reason != "exceeded the time limit of 1ms: Error: boom" || failure.Error() != kept.Error() {
 		t.Fatalf("a late failure past its limit reads %+v", failure)
 	}
 	var cause *Thrown

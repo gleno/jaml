@@ -11,7 +11,10 @@ type _Servable interface {
 	outline() *_CodeOutline
 }
 
-type _Prepared func(ctx context.Context) (_Rendered, error)
+type _Prepared struct {
+	spot   *_Spot
+	render func(ctx context.Context) (_Rendered, error)
+}
 
 type _Rendered struct {
 	tree    any
@@ -46,7 +49,7 @@ func makeDocument(ctx context.Context, written string, configured _ExpressionSet
 func compileRaw(source string, configured _ExpressionSettings) (*_Document, error) {
 	compiled, err := compileBare(source, configured)
 	if err != nil {
-		return nil, failWith(InvalidExpression, _Quoted{code: bare.around(source), reason: err})
+		return nil, _Unplaced{kind: invalidExpression, label: bare.around(source), cause: err}
 	}
 	return &_Document{root: source, compiled: &_Compiled{texts: map[string]_Text{source: {whole: &compiled}}}, settings: configured}, nil
 }
@@ -67,22 +70,23 @@ func compileBare(source string, configured _ExpressionSettings) (_Expression, er
 func (d *_Document) prepare(request _Work, runtime _Runtime) (_Prepared, error) {
 	chosen, err := d.selectPath(request.Path)
 	if err != nil {
-		return nil, err
+		return _Prepared{}, err
 	}
 	var plan = _SessionPlan{values: request.Values, scripts: request.Scripts, pinned: request.Pinned, runtime: runtime}
-	return func(ctx context.Context) (_Rendered, error) {
+	var spot = &_Spot{selection: chosen.path}
+	return _Prepared{spot: spot, render: func(ctx context.Context) (_Rendered, error) {
 		var engine = &_LazySession{ctx: ctx, plan: plan}
 		defer engine.close()
 		if err := engine.warm(); err != nil {
 			return _Rendered{}, err
 		}
-		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
+		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, spot: spot, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
 		tree, err := renderer.render(chosen.node, renderer.place(chosen))
 		if err != nil {
 			return _Rendered{}, err
 		}
 		return _Rendered{tree: tree, path: chosen.path, skipped: renderer.skipped}, nil
-	}, nil
+	}}, nil
 }
 
 func (d *_Document) outline() *_CodeOutline {
@@ -92,7 +96,7 @@ func (d *_Document) outline() *_CodeOutline {
 func encodeResult(result _Rendered) ([]byte, error) {
 	var encoded = unboundedWriter()
 	if err := encoded.data(result.tree); err != nil {
-		return nil, fail(CoercionFailed, "%w", err).within(result.path.String())
+		return nil, failWith(coercionFailed, err).at(result.path.String())
 	}
 	return encoded.written, nil
 }
@@ -107,13 +111,13 @@ func (d *_Document) selectPath(path []string) (_Subtree, error) {
 		case *_Mapping:
 			found, ok := typed.values[step]
 			if !ok {
-				return _Subtree{}, missingPath(location, fmt.Sprintf("has no key %q", step))
+				return _Subtree{}, noSuchPath(location, fmt.Sprintf("has no key %q", step))
 			}
 			current, location = found, location.atStep(step)
 		case []any:
 			index, err := strconv.Atoi(step)
 			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
-				return _Subtree{}, missingPath(location, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
+				return _Subtree{}, noSuchPath(location, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
 			current, location = typed[index], location.atStep(step)
 		default:
@@ -125,9 +129,9 @@ func (d *_Document) selectPath(path []string) (_Subtree, error) {
 
 func (d *_Document) missingInside(leaf _Subtree, step string) error {
 	if written, isString := leaf.node.(string); isString && d.compiled.holdsCode(written) {
-		return missingPath(leaf.path, fmt.Sprintf("is code; At cannot look inside what it produces: resolve %s and index the result", leaf.path))
+		return noSuchPath(leaf.path, fmt.Sprintf("is code; At cannot look inside what it produces: resolve %s and index the result", leaf.path))
 	}
-	return missingPath(leaf.path, fmt.Sprintf("is %s, which has no key %q", describeLeaf(leaf.node), step))
+	return noSuchPath(leaf.path, fmt.Sprintf("is %s, which has no key %q", describeLeaf(leaf.node), step))
 }
 
 func describeLeaf(node any) string {
@@ -143,8 +147,8 @@ func describeLeaf(node any) string {
 	}
 }
 
-func missingPath(path *_DataPath, message string) error {
-	return fail(MissingPath, "%s", message).within(path.String())
+func noSuchPath(path *_DataPath, message string) error {
+	return fail(missingPath, "%s", message).at(path.String())
 }
 
 func eachChild(node any, path *_DataPath, visit func(child any, path *_DataPath) error) error {

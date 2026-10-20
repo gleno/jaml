@@ -9,20 +9,20 @@ func admitJamlText(text string) error {
 	if utf8.ValidString(text) {
 		return nil
 	}
-	return fail(InvalidExpression, "yaml: %s", encodingProblem(text))
+	return fail(invalidExpression, "yaml: %s", encodingProblem(text))
 }
 
 func admitSource(source string) error {
 	if utf8.ValidString(source) {
 		return nil
 	}
-	return failWith(InvalidExpression, _Quoted{code: bare.around(source), reason: syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character")})
+	return _Unplaced{kind: invalidExpression, label: bare.around(source), cause: syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character")}
 }
 
 func admitPath(path []string) error {
 	for index, step := range path {
 		if !utf8.ValidString(step) {
-			return missingPath(selectedPath(path[:index]), fmt.Sprintf("has no key %q", step))
+			return noSuchPath(selectedPath(path[:index]), fmt.Sprintf("has no key %q", step))
 		}
 	}
 	return nil

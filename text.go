@@ -94,7 +94,7 @@ func (c *_Compiler) visitText(written string, path *_DataPath) (bool, error) {
 		return false, cancelled(c.ctx)
 	}
 	if err != nil {
-		return false, failWith(InvalidExpression, err).within(path.String())
+		return false, failWith(invalidExpression, err).at(path.String())
 	}
 	if compiled.holdsCode() {
 		c.texts[written] = compiled
@@ -131,7 +131,7 @@ func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 	var after = trimmed[len(wholeValue.opens):]
 	end, err := codeEnd(after, wholeValue)
 	if err != nil {
-		return _Text{}, _Quoted{code: wholeValue.opens + excerpt(after, codeExcerptLength), reason: err}
+		return _Text{}, _LabelledCause{label: wholeValue.opens + excerpt(after, codeExcerptLength), cause: err}
 	}
 	if end != len(after)-len(wholeValue.closes) {
 		return _Text{}, c.delimiters.notWhole()
@@ -139,7 +139,7 @@ func (c *_Compiler) compileWhole(trimmed string) (_Text, error) {
 	var code = after[:end]
 	compiled, err := compileExpression(code, wholeValue)
 	if err != nil {
-		return _Text{}, _Quoted{code: wholeValue.around(code), reason: err}
+		return _Text{}, _LabelledCause{label: wholeValue.around(code), cause: err}
 	}
 	return _Text{whole: &compiled}, nil
 }
@@ -160,11 +160,11 @@ func (c *_Compiler) compileInterpolations(written string) (_Text, error) {
 		}
 		end, err := codeEnd(after, interpolation)
 		if err != nil {
-			return _Text{}, _Quoted{code: interpolation.opens + excerpt(after, codeExcerptLength), reason: err}
+			return _Text{}, _LabelledCause{label: interpolation.opens + excerpt(after, codeExcerptLength), cause: err}
 		}
 		code, err := compileExpression(after[:end], interpolation)
 		if err != nil {
-			return _Text{}, _Quoted{code: interpolation.around(after[:end]), reason: err}
+			return _Text{}, _LabelledCause{label: interpolation.around(after[:end]), cause: err}
 		}
 		compiled.segments = append(compiled.segments, _Segment{code: &code})
 		rest = after[end+len(interpolation.closes):]

@@ -83,7 +83,7 @@ func TestARuntimeOutOfMemoryIsAMemoryLimit(t *testing.T) {
 	if !errors.Is(_MemoryExhausted("evaluator died (exit status 2): "+runtimeOutOfMemory), MemoryLimit) {
 		t.Fatal("a runtime out-of-memory death is not a MemoryLimit")
 	}
-	if errors.Is(fail(EvaluationFailed, "boom"), MemoryLimit) {
+	if errors.Is(fail(evaluationFailed, "boom"), MemoryLimit) {
 		t.Fatal("every evaluation failure matches MemoryLimit")
 	}
 }

@@ -17,13 +17,17 @@ func Resolve[T any](ctx context.Context, e *Expression, args ...any) (T, error) 
 }
 
 func (e *Expression) resolve(ctx context.Context, destination any, args []any) error {
+	return placed(e.selection(), e.decodeInto(ctx, destination, args))
+}
+
+func (e *Expression) decodeInto(ctx context.Context, destination any, args []any) error {
 	if e == nil || e.held == nil {
 		return unmadeExpression("Resolve")
 	}
 	if err := admitPath(e.path); err != nil {
 		return err
 	}
-	if err := e.held.admit(ctx, selectedPath(e.path).String()); err != nil {
+	if err := e.held.admit(ctx); err != nil {
 		return err
 	}
 	var target = reflect.TypeOf(destination).Elem()
@@ -52,9 +56,9 @@ func admitScripts(scripts []string) ([]string, error) {
 	for index, source := range scripts {
 		switch {
 		case !utf8.ValidString(source):
-			return nil, fail(InvalidExpression, "script %d: %w", index+1, syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character"))
+			return nil, _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character")}
 		case len(source) > maxCodeBytes:
-			return nil, fail(InvalidExpression, "script %d is longer than %d bytes", index+1, maxCodeBytes)
+			return nil, fail(invalidExpression, "script %d is longer than %d bytes", index+1, maxCodeBytes)
 		}
 	}
 	return scripts, nil

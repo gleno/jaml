@@ -70,17 +70,17 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	vm.SetRandSource(plan.pinned.random())
 	realm, err := captureRealm(vm, plan.runtime)
 	if err != nil {
-		return nil, fail(EvaluationFailed, "%w", err)
+		return nil, failWith(evaluationFailed, err)
 	}
 	var opened = &_Session{ctx: ctx, realm: realm}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
 	if err := opened.enter(realm.protection.guard); err != nil {
 		opened.close()
-		return nil, fail(EvaluationFailed, "%w", err)
+		return nil, failWith(evaluationFailed, err)
 	}
 	if err := opened.bind(plan.values); err != nil {
 		opened.close()
-		return nil, fail(EvaluationFailed, "binding values: %w", err)
+		return nil, _Unplaced{kind: evaluationFailed, label: bindingValues, cause: err}
 	}
 	if err := opened.run(plan.scripts, plan.values); err != nil {
 		opened.close()
@@ -88,7 +88,7 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	}
 	if err := opened.enter(func(r _Realm) error { return r.protection.freeze(r, plan.survey()) }); err != nil {
 		opened.close()
-		return nil, fail(EvaluationFailed, "%w", err)
+		return nil, failWith(evaluationFailed, err)
 	}
 	return opened, nil
 }

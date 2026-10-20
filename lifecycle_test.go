@@ -183,7 +183,7 @@ func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 func TestASilentExecutableEndsWithItsStartDeadline(t *testing.T) {
 	var started = time.Now()
 	_, err := startLife(_ChildSpec{lifetime: t.Context(), limit: silentLimit, startDeadline: 200 * time.Millisecond, buildTimeout: defaultBuildTimeout})
-	expectUnavailable(t, err, "$: starting the evaluator", "took longer than 200ms to start")
+	expectUnavailable(t, placed(rootPlace, err), "$: starting the evaluator", "took longer than 200ms to start")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded in %v", err)
 	}
@@ -321,7 +321,8 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 			} else {
 				expectUnavailable(t, respawned)
 			}
-			expectEqual(t, respawned.Error(), constructed.Error())
+			expectEqual(t, failureOf(t, respawned).Path, "$.a")
+			expectEqual(t, strings.TrimPrefix(respawned.Error(), "$.a"), strings.TrimPrefix(constructed.Error(), "$"))
 			for _, kind := range everyKind {
 				if errors.Is(respawned, kind) != errors.Is(constructed, kind) {
 					t.Fatalf("a respawn and a construction disagree on %v:\nrespawn:      %v\nconstruction: %v", kind, respawned, constructed)

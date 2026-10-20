@@ -124,7 +124,7 @@ func (e *_Errand) judge(held _Lease, result _Outcome) (_Outcome, bool) {
 
 func blameless(cause error) error {
 	if outside, killed := cause.(_OutsideDeath); killed {
-		return failWith(Unavailable, outside)
+		return failWith(unavailable, outside)
 	}
 	return cause
 }

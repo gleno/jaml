@@ -151,11 +151,11 @@ func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
 	switch {
 	case err != nil:
 		e.jobs.settle(job)
-		e.replies.write(e.replies.frames.failure(job, "", err))
+		e.replies.write(e.replies.frames.failure(job, rootPlace, err))
 	case e.jobs.keep(job, built):
 		e.replies.write(e.builtFrame(job, built))
 	default:
-		e.replies.write(e.replies.frames.failure(job, "", cancelled(ctx)))
+		e.replies.write(e.replies.frames.failure(job, rootPlace, cancelled(ctx)))
 	}
 }
 
@@ -173,25 +173,25 @@ func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
 
 func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {
 	var path = selectedPath(request.Path).String()
-	run, err := held.prepare(request, e.runtime)
+	prepared, err := held.prepare(request, e.runtime)
 	if err != nil {
 		e.jobs.settle(job)
-		e.replies.write(e.replies.frames.failure(job, "", err))
+		e.replies.write(e.replies.frames.failure(job, path, err))
 		return
 	}
 	var sealed []byte
 	e.watch.during(func() {
 		bounded, stop := request.TimeLimit.bound(ctx)
 		defer stop()
-		var unwatch = context.AfterFunc(bounded, func() { e.overran(job, path, bounded) })
+		var unwatch = context.AfterFunc(bounded, func() { e.overran(job, prepared.spot, bounded) })
 		defer unwatch()
-		result, err := run(bounded)
+		result, err := prepared.render(bounded)
 		var told = e.jobs.settle(job)
 		switch {
 		case err != nil:
 			sealed = e.replies.frames.failure(job, path, err)
 		case told:
-			sealed = e.replies.frames.failure(job, path, located(path, cancelled(bounded)))
+			sealed = e.replies.frames.failure(job, path, cancelled(bounded))
 		default:
 			sealed = e.replies.frames.answer(job, result)
 		}
@@ -199,14 +199,14 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 	e.replies.write(sealed)
 }
 
-func (e *_Evaluator) overran(job uint64, path string, bounded context.Context) {
+func (e *_Evaluator) overran(job uint64, spot *_Spot, bounded context.Context) {
 	var exhausted, overran = context.Cause(bounded).(_TimeExhausted)
 	if !overran {
 		return
 	}
 	e.jobs.overrun(job, func() {
-		var stuck = fmt.Errorf("%w and was still inside a built-in %s after it was told to stop", exhausted, cancelGrace)
-		e.replies.write(e.replies.frames.failure(job, path, located(path, stuck)))
+		var stuck = spot.blame(fmt.Errorf("%w and was still inside a built-in %s after it was told to stop", exhausted, cancelGrace))
+		e.replies.write(e.replies.frames.failure(job, stuck.path, stuck))
 	})
 }
 

@@ -53,7 +53,7 @@ func readOneDocument(source string) (*yaml.Node, error) {
 	var decoder = yaml.NewDecoder(strings.NewReader(source))
 	var document yaml.Node
 	if err := decoder.Decode(&document); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fail(InvalidExpression, "%w", err)
+		return nil, failWith(invalidExpression, err)
 	}
 	for {
 		var another yaml.Node
@@ -62,10 +62,10 @@ func readOneDocument(source string) (*yaml.Node, error) {
 			return &document, nil
 		}
 		if err != nil {
-			return nil, fail(InvalidExpression, "%w", err)
+			return nil, failWith(invalidExpression, err)
 		}
 		if another.Kind != 0 && !isEmptyDocument(&another) {
-			return nil, fail(InvalidExpression, "line %d starts a second YAML document; a jaml document is one YAML document", another.Line)
+			return nil, fail(invalidExpression, "line %d starts a second YAML document; a jaml document is one YAML document", another.Line)
 		}
 	}
 }
@@ -229,7 +229,7 @@ func (r *_YamlReader) convert(node *yaml.Node, place _DataPlace) (any, error) {
 		return resolveScalar(node, place.path)
 	}
 	if place.path.depth() >= maxDataDepth {
-		return nil, fail(InvalidExpression, "%s", nestsTooDeep).within(place.path.String())
+		return nil, fail(invalidExpression, "%s", nestsTooDeep).at(place.path.String())
 	}
 	r.deepest = max(r.deepest, place.path.depth())
 	if node.Anchor != "" {
@@ -569,5 +569,5 @@ func (n _Numeral) float() (any, error) {
 }
 
 func refuse(path *_DataPath, message string) error {
-	return fail(InvalidExpression, "%s", message).within(path.String())
+	return fail(invalidExpression, "%s", message).at(path.String())
 }

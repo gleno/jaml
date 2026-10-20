@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func failureOf(t *testing.T, err error) *Failure {
@@ -77,5 +78,73 @@ func TestEveryKindOfFailureRebuildsItsMessage(t *testing.T) {
 				t.Fatalf("Failure %+v does not fit %q", failure, err)
 			}
 		}
+	})
+}
+
+func TestALabelPrintsBeforeTheReasonButStaysOutOfIt(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var one = mustExpression(t, sb, "1")
+		var out any
+
+		var err = resolveInto(WithScript(t.Context(), "throw new Error('boom')"), &out, one)
+		expectFailure(t, err, "$", "Error: boom")
+		expectError(t, err, EvaluationFailed, "$: script 1: Error: boom: evaluation failed")
+		var thrown *Thrown
+		if !errors.As(err, &thrown) || thrown.Message != failureOf(t, err).Reason {
+			t.Fatalf("expected the thrown message as the reason, got %v and %v", thrown, err)
+		}
+
+		err = resolveInto(WithScript(t.Context(), "let ="), &out, one)
+		expectError(t, err, InvalidExpression, "$: script 1: ")
+		if strings.Contains(failureOf(t, err).Reason, "script 1") {
+			t.Fatalf("expected the script label left out of the reason, got %+v", failureOf(t, err))
+		}
+
+		err = resolveInto(WithTimeLimit(WithScript(t.Context(), "for (;;) {}"), 50*time.Millisecond), &out, one)
+		expectError(t, err, TimeLimit, "$: script 1: exceeded the time limit of 50ms")
+		expectFailure(t, err, "$", "exceeded the time limit of 50ms")
+
+		err = resolveInto(WithValues(t.Context(), map[string]any{"x": make(chan int)}), &out, mustExpression(t, sb, "x"))
+		expectError(t, err, EvaluationFailed, "$: binding values: value \"x\"")
+		if strings.Contains(failureOf(t, err).Reason, "binding values") {
+			t.Fatalf("expected the binding label left out of the reason, got %+v", failureOf(t, err))
+		}
+	})
+}
+
+func TestAFailurePrintsWhatItsErrorPrints(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "a: ${ (() => { throw new Error('x') })() }\nb: 1\n")
+		var out any
+		_, made := sb.MakeExpression(t.Context(), "1 +")
+		_, copied := document.Copy(cancelledContext(t))
+		for _, err := range []error{
+			resolveInto(t.Context(), &out, document.At("a")),
+			resolveInto(t.Context(), &out, document.At("zz")),
+			resolveInto(WithScript(t.Context(), "throw 1"), &out, document.At("b")),
+			resolveInto(WithTimeLimit(t.Context(), -1), &out, document.At("b")),
+			made,
+			copied,
+		} {
+			var failure = failureOf(t, err)
+			if failure.Path == "" || failure.Error() != err.Error() {
+				t.Fatalf("Failure %+v prints %q, its error prints %q", failure, failure.Error(), err)
+			}
+		}
+	})
+	expectEqual(t, (&Failure{Path: "$.a", Reason: "boom"}).Error(), "$.a: boom")
+}
+
+func TestATimeLimitWhileTheSessionOpensNamesTheSelection(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "quick: ${ x }\n")
+		var out any
+		var err = resolveInto(WithTimeLimit(WithValues(t.Context(), map[string]any{"x": 1}), time.Nanosecond), &out, document.At("quick"))
+		expectError(t, err, TimeLimit)
+		if failure := failureOf(t, err); failure.Path != "$.quick" {
+			t.Fatalf("expected the selection, got %+v from %q", failure, err)
+		}
+		err = resolveInto(WithTimeLimit(WithScript(t.Context(), "for (;;) {}"), 50*time.Millisecond), &out, document.At("quick"))
+		expectError(t, err, TimeLimit, "$.quick: script 1: exceeded the time limit of 50ms")
 	})
 }

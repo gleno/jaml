@@ -26,13 +26,15 @@ const (
 	cancelGrace            = 250 * time.Millisecond
 	backstopSilence        = 20 * cancelGrace
 	evaluatorStartDeadline = 30 * time.Second
+	notAnEvaluator         = "this executable is not a jaml evaluator (C shared library or plugin host?)"
 )
 
 var (
-	errHungUp     = errors.New("the evaluator hung up")
-	errRetired    = errors.New("retired after replaying one job alone")
-	errSilent     = fmt.Errorf("the evaluator stopped answering for %s after it was told to stop a job", backstopSilence)
-	errNotReading = fmt.Errorf("the evaluator was not reading requests for %s after a job's context ended or its time limit ran out", backstopSilence)
+	errHungUp          = errors.New("the evaluator hung up")
+	errRetired         = errors.New("retired after replaying one job alone")
+	errSilent          = fmt.Errorf("the evaluator stopped answering for %s after it was told to stop a job", backstopSilence)
+	errNotReading      = fmt.Errorf("the evaluator was not reading requests for %s after a job's context ended or its time limit ran out", backstopSilence)
+	errForeignGreeting = errors.New("it answered with a foreign greeting")
 )
 
 type _EvaluatorWorld struct {
@@ -108,10 +110,10 @@ func startLife(spec _ChildSpec) (*_Life, error) {
 }
 
 func startFailure(err error) error {
-	if _, isOwn := err.(_ExpressionError); isOwn {
+	if _, isOwn := err.(_Unplaced); isOwn {
 		return err
 	}
-	return fail(Unavailable, "starting the evaluator: %w", err)
+	return _Unplaced{kind: unavailable, label: "starting the evaluator", cause: err}
 }
 
 func currentWorld(spec _ChildSpec) _EvaluatorWorld {
@@ -301,10 +303,10 @@ func (l *_Life) greet(ctx context.Context, greeted <-chan error) error {
 		if errors.Is(err, errHungUp) {
 			return l.deathBeforeGreeting(ctx)
 		}
-		if _, isOwn := err.(_ExpressionError); isOwn || err == nil {
+		if _, isOwn := err.(_Unplaced); isOwn || err == nil {
 			return err
 		}
-		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): %w", err)
+		return _Unplaced{kind: unsupported, label: notAnEvaluator, cause: err}
 	case <-ctx.Done():
 		return cancelled(ctx)
 	}
@@ -322,9 +324,9 @@ func (l *_Life) deathBeforeGreeting(ctx context.Context) error {
 func (greeting _Hello) vouch(nonce string) error {
 	switch {
 	case greeting.Magic != evaluatorMagic || greeting.Nonce != nonce:
-		return fail(Unsupported, "this executable is not a jaml evaluator (C shared library or plugin host?): it answered with a foreign greeting")
+		return _Unplaced{kind: unsupported, label: notAnEvaluator, cause: errForeignGreeting}
 	case greeting.Version != protocolVersion:
-		return fail(Unavailable, "the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)
+		return fail(unavailable, "the evaluator speaks jaml protocol v%d, want v%d (executable replaced since start?)", greeting.Version, protocolVersion)
 	}
 	return nil
 }
@@ -438,13 +440,6 @@ func (s *_ReplyStream) read(target any) error {
 		return fmt.Errorf("reading the evaluator's answer: %w", err)
 	}
 	return nil
-}
-
-func located(path string, err error) error {
-	if own, isOwn := err.(_ExpressionError); isOwn {
-		return own
-	}
-	return fail(EvaluationFailed, "%w", err).within(path)
 }
 
 func cancelled(ctx context.Context) error {

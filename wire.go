@@ -217,17 +217,21 @@ func overran(watched context.Context, result _Outcome) _Outcome {
 }
 
 func lapsed(exhausted _TimeExhausted, err error) error {
-	failed, isOwn := err.(_ExpressionError)
 	switch {
 	case errors.Is(err, errMissing), errors.Is(err, TimeLimit):
 		return err
 	case errors.Is(err, context.Canceled):
 		return exhausted
-	case !isOwn:
-		return fmt.Errorf("%w: %w", exhausted, err)
 	}
-	failed.cause = fmt.Errorf("%w: %w", exhausted, failed.cause)
-	return failed
+	switch failed := err.(type) {
+	case _ExpressionError:
+		failed.unplaced.cause = fmt.Errorf("%w: %w", exhausted, failed.unplaced.cause)
+		return failed
+	case _Unplaced:
+		failed.cause = fmt.Errorf("%w: %w", exhausted, failed.cause)
+		return failed
+	}
+	return fmt.Errorf("%w: %w", exhausted, err)
 }
 
 func servedFrom(incoming _Reply) _Outcome {

@@ -27,14 +27,14 @@ func (f _Frames) answer(job uint64, result _Rendered) []byte {
 	case errors.As(err, new(_PastLimit)):
 		return f.refusal(job, path)
 	case err != nil:
-		return f.failure(job, path, fail(CoercionFailed, "%w", err).within(path))
+		return f.failure(job, path, failWith(coercionFailed, err))
 	}
 	return sealed.written
 }
 
 func (f _Frames) failure(job uint64, path string, err error) []byte {
 	var sealed = f.open(job)
-	if sealed.failure(err) != nil {
+	if sealed.failure(located(path, err)) != nil {
 		return f.refusal(job, path)
 	}
 	return sealed.written
@@ -42,7 +42,7 @@ func (f _Frames) failure(job uint64, path string, err error) []byte {
 
 func (f _Frames) refusal(job uint64, path string) []byte {
 	var unbounded = _Frames{limit: math.MaxInt}
-	return unbounded.failure(job, path, located(path, fmt.Errorf("the answer is larger than %d bytes", f.limit)))
+	return unbounded.failure(job, path, fmt.Errorf("the answer is larger than %d bytes", f.limit))
 }
 
 func (w *_WireWriter) answer(result _Rendered) error {
@@ -91,8 +91,8 @@ func (w *_WireWriter) steps(path []string) error {
 	return w.raw("]")
 }
 
-func (w *_WireWriter) failure(err error) error {
-	var described = describeFailure(err)
+func (w *_WireWriter) failure(failed _ExpressionError) error {
+	var described = describeFailure(failed)
 	if err := w.raw(`,"failure":{"kind":`); err != nil {
 		return err
 	}
@@ -104,8 +104,8 @@ func (w *_WireWriter) failure(err error) error {
 			return err
 		}
 	}
-	if described.Code != "" {
-		if err := w.labelled(`,"code":`, described.Code); err != nil {
+	if described.Label != "" {
+		if err := w.labelled(`,"label":`, described.Label); err != nil {
 			return err
 		}
 	}
@@ -123,7 +123,7 @@ func (w *_WireWriter) failure(err error) error {
 		return err
 	}
 	var caught *Thrown
-	if errors.As(err, &caught) {
+	if errors.As(failed, &caught) {
 		if err := w.thrown(caught); err != nil {
 			return err
 		}

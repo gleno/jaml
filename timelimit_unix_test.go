@@ -19,9 +19,21 @@ func TestARunStuckInABuiltInPastItsTimeLimitEndsTheChildAndFailsWithTimeLimit(t 
 	}()
 	var out any
 	var err = resolveInto(WithTimeLimit(t.Context(), 50*time.Millisecond), &out, runaway)
-	expectError(t, err, TimeLimit, "$: exceeded the time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
+	expectError(t, err, TimeLimit, "$: /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b'): exceeded the time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
 	expectStuckAfterCancel(t, child)
 	if err := <-survived; err != nil {
 		t.Fatalf("a job beside the stuck one failed: %v", err)
 	}
+}
+
+func TestAStuckRunNamesThePieceAndQuotesItsCode(t *testing.T) {
+	_SandboxKinds{isolatedKind, unprotectedKind}.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "y:\n  - ${ /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b') }\n")
+		var child = currentChild(t, sb)
+		var out any
+		var err = resolveInto(WithTimeLimit(t.Context(), 50*time.Millisecond), &out, document.At("y"))
+		expectError(t, err, TimeLimit, "$.y[0]: ${/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')}: exceeded the time limit of 50ms and was still inside a built-in")
+		expectFailure(t, err, "$.y[0]", "exceeded the time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
+		expectStuckAfterCancel(t, child)
+	})
 }

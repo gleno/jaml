@@ -91,7 +91,7 @@ func (d *_ShapeDrawing) node(target reflect.Type) int {
 		return index
 	}
 	if target == expressionType {
-		d.refuse(fail(InvalidTarget, "Resolve fills *jaml.Expression, never a jaml.Expression held by value, as %s holds", d.root))
+		d.refuse(fail(invalidTarget, "Resolve fills *jaml.Expression, never a jaml.Expression held by value, as %s holds", d.root).at(rootPlace))
 		return -1
 	}
 	if decodesItself(target) {
@@ -126,9 +126,9 @@ func (d *_ShapeDrawing) refuse(refusal error) {
 
 func (d *_ShapeDrawing) cannotDecode(target reflect.Type, reason string) error {
 	if target == d.root {
-		return fail(InvalidTarget, "Resolve cannot decode into %s", reason)
+		return fail(invalidTarget, "Resolve cannot decode into %s", reason).at(rootPlace)
 	}
-	return fail(InvalidTarget, "Resolve cannot decode into %s, as %s holds", reason, d.root)
+	return fail(invalidTarget, "Resolve cannot decode into %s, as %s holds", reason, d.root).at(rootPlace)
 }
 
 func undecodable(target reflect.Type) string {

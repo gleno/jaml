@@ -18,7 +18,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 17
+	protocolVersion      = 18
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -108,7 +108,7 @@ func (f _Frames) requests(source io.Reader) *_FrameReader {
 type _Failure struct {
 	Kind    string         `json:"kind"`
 	At      string         `json:"at,omitempty"`
-	Code    string         `json:"code,omitempty"`
+	Label   string         `json:"label,omitempty"`
 	Overran bool           `json:"overran,omitempty"`
 	Stopped bool           `json:"stopped,omitempty"`
 	Message string         `json:"message"`
@@ -120,25 +120,10 @@ type _ThrownOnWire struct {
 	Value   _Borrowed `json:"value"`
 }
 
-type _FailureKind struct {
-	name     string
-	sentinel error
-}
-
-var failureKinds = []_FailureKind{
-	{"InvalidExpression", InvalidExpression},
-	{"InvalidTarget", InvalidTarget},
-	{"MissingPath", MissingPath},
-	{"EvaluationFailed", EvaluationFailed},
-	{"CoercionFailed", CoercionFailed},
-	{"Closed", Closed},
-	{"Unsupported", Unsupported},
-}
-
 func (b _Blueprint) build(ctx context.Context) (built _Servable, err error) {
 	defer func() {
 		if failure := buildPanic(recover()); failure != nil {
-			err = fail(InvalidExpression, "%w", failure)
+			err = failWith(invalidExpression, failure)
 		}
 	}()
 	configured, err := configure(b.options())
@@ -173,18 +158,9 @@ func buildPanic(recovered any) error {
 	return errors.New(excerpt(failure.Error(), thrownExcerptLength))
 }
 
-func describeFailure(err error) _Failure {
-	failed, isOwn := err.(_ExpressionError)
-	if !isOwn {
-		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
-	}
-	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Code: failed.code, Overran: errors.Is(failed.cause, TimeLimit), Stopped: errors.Is(failed.cause, context.Canceled), Message: failed.cause.Error()}
-	for _, kind := range failureKinds {
-		if kind.sentinel == failed.kind {
-			described.Kind = kind.name
-		}
-	}
-	return described
+func describeFailure(failed _ExpressionError) _Failure {
+	var unplaced = failed.unplaced
+	return _Failure{Kind: kinds[unplaced.kind].name, At: failed.path, Label: unplaced.label, Overran: errors.Is(unplaced.cause, TimeLimit), Stopped: errors.Is(unplaced.cause, context.Canceled), Message: unplaced.cause.Error()}
 }
 
 func (r _Reply) outcomes() int {
@@ -207,8 +183,10 @@ func (r _Reply) fits(op _Opcode) error {
 		return errors.New("the evaluator outlined code for something other than a build")
 	case r.Code != nil && r.Code.checked() != nil:
 		return fmt.Errorf("the evaluator outlined code badly: %w", r.Code.checked())
-	case r.Failure != nil && r.Failure.kind() == nil:
+	case r.Failure != nil && !r.Failure.known():
 		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", r.Failure.Kind)
+	case r.Failure != nil && r.Failure.At == "":
+		return errors.New("the evaluator answered with a failure at no place")
 	case r.Failure != nil:
 		return nil
 	case op == opBuild && !r.Built:
@@ -219,21 +197,14 @@ func (r _Reply) fits(op _Opcode) error {
 	return nil
 }
 
-func (f _Failure) kind() error {
-	for _, kind := range failureKinds {
-		if kind.name == f.Kind {
-			return kind.sentinel
-		}
-	}
-	return nil
+func (f _Failure) known() bool {
+	_, known := kindNamed(f.Kind)
+	return known
 }
 
-func (f _Failure) rebuild() error {
-	var kind = f.kind()
-	if kind == nil {
-		kind = EvaluationFailed
-	}
-	return _ExpressionError{kind: kind, path: f.At, code: f.Code, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), overran: f.Overran, stopped: f.Stopped}}
+func (f _Failure) rebuild() _ExpressionError {
+	var kind, _ = kindNamed(f.Kind)
+	return _Unplaced{kind: kind, label: f.Label, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), overran: f.Overran, stopped: f.Stopped}}.at(f.At)
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {

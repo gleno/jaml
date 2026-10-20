@@ -10,19 +10,62 @@ import (
 	"github.com/gleno/fault"
 )
 
+type _Kind int
+
+const (
+	invalidExpression _Kind = iota
+	invalidTarget
+	missingPath
+	evaluationFailed
+	coercionFailed
+	closed
+	unsupported
+	unavailable
+)
+
+type _KindEntry struct {
+	name     string
+	sentinel fault.Fault
+}
+
+var ExpressionError = fault.Sentinel("expression error")
+
+var kinds = [...]_KindEntry{
+	invalidExpression: {"InvalidExpression", ExpressionError.WithMessage("invalid expression")},
+	invalidTarget:     {"InvalidTarget", ExpressionError.WithMessage("invalid target")},
+	missingPath:       {"MissingPath", ExpressionError.WithMessage("missing path")},
+	evaluationFailed:  {"EvaluationFailed", ExpressionError.WithMessage("evaluation failed")},
+	coercionFailed:    {"CoercionFailed", ExpressionError.WithMessage("coercion failed")},
+	closed:            {"Closed", ExpressionError.WithMessage("closed")},
+	unsupported:       {"Unsupported", ExpressionError.WithMessage("unsupported")},
+	unavailable:       {"Unavailable", ExpressionError.WithMessage("unavailable")},
+}
+
 var (
-	ExpressionError   = fault.Sentinel("expression error")
-	InvalidExpression = ExpressionError.WithMessage("invalid expression")
-	InvalidTarget     = ExpressionError.WithMessage("invalid target")
-	MissingPath       = ExpressionError.WithMessage("missing path")
-	EvaluationFailed  = ExpressionError.WithMessage("evaluation failed")
-	CoercionFailed    = ExpressionError.WithMessage("coercion failed")
-	Closed            = ExpressionError.WithMessage("closed")
-	Unsupported       = ExpressionError.WithMessage("unsupported")
-	Unavailable       = ExpressionError.WithMessage("unavailable")
+	InvalidExpression = kinds[invalidExpression].sentinel
+	InvalidTarget     = kinds[invalidTarget].sentinel
+	MissingPath       = kinds[missingPath].sentinel
+	EvaluationFailed  = kinds[evaluationFailed].sentinel
+	CoercionFailed    = kinds[coercionFailed].sentinel
+	Closed            = kinds[closed].sentinel
+	Unsupported       = kinds[unsupported].sentinel
+	Unavailable       = kinds[unavailable].sentinel
 	MemoryLimit       = EvaluationFailed.WithMessage("exceeded the memory limit")
 	TimeLimit         = EvaluationFailed.WithMessage("exceeded the time limit")
 )
+
+func (k _Kind) sentinel() fault.Fault {
+	return kinds[k].sentinel
+}
+
+func kindNamed(name string) (_Kind, bool) {
+	for kind, entry := range kinds {
+		if entry.name == name {
+			return _Kind(kind), true
+		}
+	}
+	return 0, false
+}
 
 type Coercion int
 
@@ -76,7 +119,7 @@ type _MemoryLimit int64
 
 func makeMemoryLimit(bytes int64) (_MemoryLimit, error) {
 	if bytes < smallestMemoryLimit || bytes > largestMemoryLimit {
-		return 0, fail(InvalidExpression, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)
+		return 0, fail(invalidExpression, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)
 	}
 	return _MemoryLimit(bytes), nil
 }
@@ -126,7 +169,7 @@ func WithMemoryLimit(bytes int64) SandboxOption {
 func WithMaxConcurrency(jobs int) SandboxOption {
 	return func(s *_SandboxSettings) error {
 		if jobs < 1 {
-			return fail(InvalidExpression, "max concurrency must be at least 1, got %d", jobs)
+			return fail(invalidExpression, "max concurrency must be at least 1, got %d", jobs)
 		}
 		s.maxConcurrency = jobs
 		return nil
@@ -136,7 +179,7 @@ func WithMaxConcurrency(jobs int) SandboxOption {
 func WithBuildTimeout(timeout time.Duration) SandboxOption {
 	return func(s *_SandboxSettings) error {
 		if timeout <= 0 {
-			return fail(InvalidExpression, "build timeout must be positive, got %s", timeout)
+			return fail(invalidExpression, "build timeout must be positive, got %s", timeout)
 		}
 		s.buildTimeout = timeout
 		return nil
@@ -156,7 +199,7 @@ func WithCallDepthLimit(calls int) SandboxOption {
 
 func makeCallDepthLimit(calls int) (int, error) {
 	if calls < 1 || calls > maxCallDepthLimit {
-		return 0, fail(InvalidExpression, "call depth limit must be between 1 and %d, got %d", maxCallDepthLimit, calls)
+		return 0, fail(invalidExpression, "call depth limit must be between 1 and %d, got %d", maxCallDepthLimit, calls)
 	}
 	return calls, nil
 }
@@ -172,7 +215,7 @@ func configure(options []Option) (_ExpressionSettings, error) {
 	var configured = _ExpressionSettings{null: Loose, undefined: Strict}
 	for index, option := range options {
 		if option == nil {
-			return _ExpressionSettings{}, fail(InvalidExpression, "option %d is nil", index+1)
+			return _ExpressionSettings{}, fail(invalidExpression, "option %d is nil", index+1)
 		}
 		if err := option(&configured); err != nil {
 			return _ExpressionSettings{}, err
@@ -194,7 +237,7 @@ func configureSandbox(options []SandboxOption) (_SandboxSettings, error) {
 	var configured = _SandboxSettings{maxConcurrency: goruntime.GOMAXPROCS(0), buildTimeout: defaultBuildTimeout}
 	for index, option := range options {
 		if option == nil {
-			return _SandboxSettings{}, fail(InvalidExpression, "option %d is nil", index+1)
+			return _SandboxSettings{}, fail(invalidExpression, "option %d is nil", index+1)
 		}
 		if err := option(&configured); err != nil {
 			return _SandboxSettings{}, err
@@ -212,7 +255,7 @@ func (s _SandboxSettings) memoryLimitOrDefault() _MemoryLimit {
 
 func checkCoercion(name string, coercion Coercion) error {
 	if coercion != Loose && coercion != Strict {
-		return fail(InvalidExpression, "%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion)
+		return fail(invalidExpression, "%s coercion must be jaml.Loose or jaml.Strict, got %d", name, coercion)
 	}
 	return nil
 }
@@ -220,13 +263,13 @@ func checkCoercion(name string, coercion Coercion) error {
 func checkSigil(sigil string) error {
 	switch {
 	case sigil == "":
-		return fail(InvalidExpression, "a sigil must not be empty")
+		return fail(invalidExpression, "a sigil must not be empty")
 	case !utf8.ValidString(sigil):
-		return fail(InvalidExpression, "a sigil must be valid UTF-8")
+		return fail(invalidExpression, "a sigil must be valid UTF-8")
 	case strings.ContainsAny(sigil, "{}"):
-		return fail(InvalidExpression, "a sigil must not hold a brace, got %q", sigil)
+		return fail(invalidExpression, "a sigil must not hold a brace, got %q", sigil)
 	case strings.IndexFunc(sigil, unicode.IsSpace) >= 0:
-		return fail(InvalidExpression, "a sigil must not hold whitespace, got %q", sigil)
+		return fail(invalidExpression, "a sigil must not hold whitespace, got %q", sigil)
 	}
 	return nil
 }

@@ -233,7 +233,7 @@ func TestAFailingRespawnFailsEveryQueuedJobOnce(t *testing.T) {
 	var first error
 	for range 6 {
 		var err = <-failures
-		expectUnavailable(t, err, "$: starting the evaluator", "took longer than 300ms to start")
+		expectUnavailable(t, err, "$.v: starting the evaluator", "took longer than 300ms to start")
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected context.DeadlineExceeded in %v", err)
 		}

@@ -6,12 +6,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 type _Renderer struct {
 	compiled *_Compiled
 	settings _ExpressionSettings
 	engine   *_LazySession
+	spot     *_Spot
 	args     []_Datum
 	skips    *_Shape
 	depth    int
@@ -97,7 +99,7 @@ func (p _Place) refuseCodeAtSkips(produced any) error {
 		if produced == nil {
 			return nil
 		}
-		return fail(CoercionFailed, "code produced a value where Resolve expects a *jaml.Expression, which binds only to a document node").within(p.path.String())
+		return fail(coercionFailed, "code produced a value where Resolve expects a *jaml.Expression, which binds only to a document node").at(p.path.String())
 	}
 	switch typed := produced.(type) {
 	case map[string]any:
@@ -153,7 +155,7 @@ func (r *_Renderer) renderText(compiled _Text, path *_DataPath) (any, error) {
 		}
 		written, err := stringify(admitted)
 		if err != nil {
-			return nil, failWith(EvaluationFailed, _Quoted{code: piece.code.written(), reason: err}).within(path.String())
+			return nil, _Piece{path: path, code: *piece.code}.failed(err)
 		}
 		rendered.WriteString(written)
 	}
@@ -171,7 +173,7 @@ func (r *_Renderer) admit(result any, compiled _Expression, path *_DataPath) (an
 		return result, nil
 	}
 	if coercion == Strict {
-		return nil, failWith(CoercionFailed, _Quoted{code: compiled.written(), reason: fmt.Errorf("result is %s, which strict %s coercion refuses%s", absent, absent, hintFor(absent, compiled))}).within(path.String())
+		return nil, _Unplaced{kind: coercionFailed, label: compiled.written(), cause: fmt.Errorf("result is %s, which strict %s coercion refuses%s", absent, absent, hintFor(absent, compiled))}.at(path.String())
 	}
 	return nil, nil
 }
@@ -188,11 +190,35 @@ func (r *_Renderer) evaluate(compiled _Expression, path *_DataPath) (any, error)
 	if err != nil {
 		return nil, err
 	}
+	var piece = &_Piece{path: path, code: compiled}
+	r.spot.running.Store(piece)
 	result, err := session.evaluate(compiled, r.args)
+	r.spot.running.Store(nil)
 	if err != nil {
-		return nil, failWith(EvaluationFailed, _Quoted{code: compiled.written(), reason: err}).within(path.String())
+		return nil, piece.failed(err)
 	}
 	return result, nil
+}
+
+type _Spot struct {
+	selection *_DataPath
+	running   atomic.Pointer[_Piece]
+}
+
+type _Piece struct {
+	path *_DataPath
+	code _Expression
+}
+
+func (p _Piece) failed(cause error) _ExpressionError {
+	return _Unplaced{kind: evaluationFailed, label: p.code.written(), cause: cause}.at(p.path.String())
+}
+
+func (s *_Spot) blame(cause error) _ExpressionError {
+	if piece := s.running.Load(); piece != nil {
+		return piece.failed(cause)
+	}
+	return failWith(evaluationFailed, cause).at(s.selection.String())
 }
 
 func stringify(value any) (string, error) {
