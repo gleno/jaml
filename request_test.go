@@ -150,7 +150,7 @@ func TestTheScriptCacheEvictsTheLeastRecentlyUsedByWeight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var weight = weigh("var a = 1", first)
+	var weight = (&_CachedScript{source: "var a = 1", script: first}).weight()
 	var cache = newScriptCache(3 * weight)
 	for _, source := range []string{"var a = 1", "var b = 1", "var c = 1"} {
 		if _, err := cache.compile(source); err != nil {
@@ -162,16 +162,14 @@ func TestTheScriptCacheEvictsTheLeastRecentlyUsedByWeight(t *testing.T) {
 		t.Fatal(err)
 	}
 	for source, kept := range map[string]bool{"var a = 1": true, "var b = 1": false, "var c = 1": true, "var d = 1": true} {
-		_, found := cache.recall(source)
-		expectEqual(t, found, kept)
+		expectEqual(t, cache.recall(source) != nil, kept)
 	}
 	expectEqual(t, cache.held, 3*weight)
 	var huge = "var e = '" + strings.Repeat("x", int(weight)) + "'"
 	if _, err := cache.compile(huge); err != nil {
 		t.Fatal(err)
 	}
-	_, found := cache.recall(huge)
-	expectEqual(t, found, false)
+	expectEqual(t, cache.recall(huge) != nil, false)
 	expectEqual(t, cache.held, 3*weight)
 }
 
@@ -228,4 +226,21 @@ func TestAnOutlineThatCannotBeSentSaysTheUnitHoldsCode(t *testing.T) {
 	if incoming.Code == nil || !incoming.Code.holds([]string{"anything"}) {
 		t.Fatalf("a degraded outline: %#v", incoming.Code)
 	}
+}
+
+func TestTheScriptCacheKeepsAFailedCompile(t *testing.T) {
+	var cache = newScriptCache(trustedScriptBudget)
+	var broken = "const f = " + nested("(a=%s)=>0", "0")(shapeBounds[parameterShape].limit+1)
+	_, first := cache.compile(broken)
+	if first == nil {
+		t.Fatal("the broken script compiled")
+	}
+	var kept = cache.recall(broken)
+	if kept == nil || kept.err != first {
+		t.Fatalf("the failure was not kept: %v", kept)
+	}
+	if _, again := cache.compile(broken); again != first {
+		t.Fatalf("compiled again: %v", again)
+	}
+	expectEqual(t, cache.held, int64(len(broken)+len(first.Error())))
 }

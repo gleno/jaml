@@ -151,6 +151,9 @@ func parseAfterOpens(code string) (*ast.Program, error) {
 }
 
 func holdsNoCode(source string) bool {
+	if !strings.HasPrefix(source, "#!") && !blankCode(source) {
+		return false
+	}
 	parsed, err := parser.ParseFile(nil, "", source, 0, parser.WithDisableSourceMaps)
 	return err == nil && len(parsed.Body) == 0
 }

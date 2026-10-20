@@ -5,17 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja/ast"
+	"github.com/dop251/goja/file"
 	"github.com/dop251/goja/parser"
+	"github.com/dop251/goja/token"
+	"github.com/dop251/goja/unistring"
 )
 
 const (
 	scriptOpens         = "\"use strict\";\n"
-	wrappedOpens        = "\"use strict\";\n(() => {"
 	scriptValueTarget   = "value"
 	trustedScriptBudget = 32 << 20
 	compiledPerSource   = 16
@@ -38,7 +39,7 @@ type _ScriptCache struct {
 type _CachedScript struct {
 	source string
 	script _Script
-	weight int64
+	err    error
 }
 
 var scripts = newScriptCache(trustedScriptBudget)
@@ -48,49 +49,49 @@ func newScriptCache(budget int64) *_ScriptCache {
 }
 
 func (c *_ScriptCache) compile(source string) (_Script, error) {
-	if cached, found := c.recall(source); found {
-		return cached, nil
+	if cached := c.recall(source); cached != nil {
+		return cached.script, cached.err
 	}
 	compiled, err := compileScript(source)
-	if err != nil {
-		return _Script{}, err
-	}
-	c.keep(&_CachedScript{source: source, script: compiled, weight: weigh(source, compiled)})
-	return compiled, nil
+	c.keep(&_CachedScript{source: source, script: compiled, err: err})
+	return compiled, err
 }
 
-func (c *_ScriptCache) recall(source string) (_Script, bool) {
+func (c *_ScriptCache) recall(source string) *_CachedScript {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var entry = c.entries[source]
 	if entry == nil {
-		return _Script{}, false
+		return nil
 	}
 	c.recent.MoveToFront(entry)
-	return entry.Value.(*_CachedScript).script, true
+	return entry.Value.(*_CachedScript)
 }
 
 func (c *_ScriptCache) keep(cached *_CachedScript) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if cached.weight > c.budget || c.entries[cached.source] != nil {
+	if cached.weight() > c.budget || c.entries[cached.source] != nil {
 		return
 	}
-	for c.held+cached.weight > c.budget {
+	for c.held+cached.weight() > c.budget {
 		var oldest = c.recent.Remove(c.recent.Back()).(*_CachedScript)
 		delete(c.entries, oldest.source)
-		c.held -= oldest.weight
+		c.held -= oldest.weight()
 	}
 	c.entries[cached.source] = c.recent.PushFront(cached)
-	c.held += cached.weight
+	c.held += cached.weight()
 }
 
 func scriptBudget(limit _MemoryLimit) int64 {
 	return int64(limit) / 8
 }
 
-func weigh(source string, compiled _Script) int64 {
-	return int64(len(source))*compiledPerSource + int64(len(compiled.names))*compiledPerName
+func (c *_CachedScript) weight() int64 {
+	if c.err != nil {
+		return int64(len(c.source) + len(c.err.Error()))
+	}
+	return int64(len(c.source))*compiledPerSource + int64(len(c.script.names))*compiledPerName
 }
 
 func compileScript(source string) (compiled _Script, err error) {
@@ -107,16 +108,24 @@ func compileScript(source string) (compiled _Script, err error) {
 		return _Script{}, placeScriptError(source, scriptOpens, err)
 	}
 	var names = declaredNames(program)
-	var wrapped = wrappedOpens + source + "\n;return [" + exports(names) + "]})"
-	parsed, err := parser.ParseFile(nil, "", wrapped, 0, parser.WithDisableSourceMaps)
+	compiledProgram, err := goja.CompileAST(exporting(program, names), true)
 	if err != nil {
-		return _Script{}, placeScriptError(source, wrappedOpens, err)
-	}
-	compiledProgram, err := goja.CompileAST(parsed, true)
-	if err != nil {
-		return _Script{}, placeScriptError(source, wrappedOpens, err)
+		return _Script{}, placeScriptError(source, scriptOpens, err)
 	}
 	return _Script{program: compiledProgram, names: names}, nil
+}
+
+func exporting(program *ast.Program, names []string) *ast.Program {
+	var directive = program.Body[0]
+	var end = file.Idx(program.File.Base() + len(program.File.Source()))
+	var exported = &ast.ReturnStatement{Return: end, Argument: &ast.ArrayLiteral{LeftBracket: end, RightBracket: end, Value: accessors(names, end)}}
+	var run = &ast.ArrowFunctionLiteral{
+		Start:           directive.Idx1(),
+		ParameterList:   &ast.ParameterList{Opening: directive.Idx1(), Closing: directive.Idx1()},
+		Body:            &ast.BlockStatement{LeftBrace: directive.Idx1(), List: append(slices.Clip(program.Body[1:]), exported), RightBrace: end},
+		DeclarationList: program.DeclarationList,
+	}
+	return &ast.Program{Body: []ast.Statement{directive, &ast.ExpressionStatement{Expression: run}}, File: program.File}
 }
 
 func placeScriptError(source, opens string, err error) error {
@@ -189,16 +198,23 @@ func patternNames(node ast.Expression, names []string) []string {
 	return names
 }
 
-func exports(names []string) string {
+func accessors(names []string, place file.Idx) []ast.Expression {
 	var target = scriptValueTarget
 	for slices.Contains(names, target) {
 		target += "_"
 	}
-	var written []string
-	for _, name := range names {
-		written = append(written, fmt.Sprintf("() => %s, (%s) => { %s = %s; }", name, target, name, target))
+	var named = func(name string) *ast.Identifier {
+		return &ast.Identifier{Name: unistring.NewFromString(name), Idx: place}
 	}
-	return strings.Join(written, ", ")
+	var arrow = func(parameters []*ast.Binding, body ast.Expression) *ast.ArrowFunctionLiteral {
+		return &ast.ArrowFunctionLiteral{Start: place, ParameterList: &ast.ParameterList{Opening: place, List: parameters, Closing: place}, Body: &ast.ExpressionBody{Expression: body}}
+	}
+	var written []ast.Expression
+	for _, name := range names {
+		var assignment = &ast.AssignExpression{Operator: token.ASSIGN, Left: named(name), Right: named(target)}
+		written = append(written, arrow(nil, named(name)), arrow([]*ast.Binding{{Target: named(target)}}, assignment))
+	}
+	return written
 }
 
 func (s *_Session) run(sources []string, values _BoundValues) error {

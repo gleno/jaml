@@ -198,6 +198,11 @@ func refuseDeepCode(source string, outer _FrameKind) error {
 	return placeScanError(source, err)
 }
 
+func blankCode(source string) bool {
+	var scan = newCodeScan(source, "", groupFrame)
+	return scan.skipSpace() == nil && scan.at == len(source)
+}
+
 func placeScanError(source string, err error) error {
 	switch failure := err.(type) {
 	case _ScanStop:
