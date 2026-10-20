@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -58,7 +59,7 @@ func admitScripts(scripts []string) ([]string, error) {
 		case !utf8.ValidString(source):
 			return nil, _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character")}
 		case len(source) > maxCodeBytes:
-			return nil, fail(invalidExpression, "script %d is longer than %d bytes", index+1, maxCodeBytes)
+			return nil, _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: fmt.Errorf("longer than %d bytes", maxCodeBytes)}
 		}
 	}
 	return scripts, nil

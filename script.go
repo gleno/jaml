@@ -216,7 +216,7 @@ func (c *_ScriptCache) compileAll(sources []string) ([]_Script, error) {
 	for index, source := range sources {
 		script, err := c.compile(source)
 		if err != nil {
-			return nil, _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: err}
+			return nil, _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: err}.at(rootPlace)
 		}
 		compiled[index] = script
 	}

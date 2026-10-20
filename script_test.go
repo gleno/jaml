@@ -66,7 +66,7 @@ func TestABrokenScriptIsAnInvalidExpression(t *testing.T) {
 			"let = ;":                       "script 1: syntax error at line 1",
 			"x = 1;\nreturn 2":              "script 1: syntax error at line 2",
 			"with (Math) { }":               "script 1: syntax error",
-			strings.Repeat(" ", 1<<16+1):    "script 1 is longer than 65536 bytes",
+			strings.Repeat(" ", 1<<16+1):    "script 1: longer than 65536 bytes",
 			"let ok = 1; let undefined = 2": "script 1",
 		} {
 			_, err := Resolve[int](WithScript(t.Context(), source), literal)
@@ -76,6 +76,34 @@ func TestABrokenScriptIsAnInvalidExpression(t *testing.T) {
 			}
 			expectError(t, err, InvalidExpression, fragment)
 		}
+	})
+}
+
+func TestEveryScriptRefusalIsAtTheRoot(t *testing.T) {
+	var tooDeep = strings.Repeat("(", 600) + "1" + strings.Repeat(")", 600)
+	var refusals = map[string][]string{
+		"let = ;":                    {"$: script 1: syntax error at line 1"},
+		tooDeep:                      {"$: script 1: code too deep"},
+		strings.Repeat(" ", 1<<16+1): {"$: script 1: longer than 65536 bytes"},
+		"let bad = '" + string([]byte{0xff}) + "'": {"$: script 1: syntax error at line 1, column 12", "Invalid UTF-8 character"},
+	}
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var leaf = mustJaml(t, sb, "a:\n  b: ${ 1 }\n").At("a", "b")
+		for source, fragments := range refusals {
+			for range 2 {
+				_, err := Resolve[int](WithScript(t.Context(), source), leaf)
+				expectError(t, err, InvalidExpression, fragments...)
+				expectFailure(t, err, "$", failureOf(t, err).Reason)
+			}
+		}
+	})
+}
+
+func TestEveryScriptCompilesBeforeAnyRuns(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var leaf = mustJaml(t, sb, "a:\n  b: ${ 1 }\n").At("a", "b")
+		_, err := Resolve[int](WithScript(WithScript(t.Context(), "throw new Error('runs first')"), "let = ;"), leaf)
+		expectError(t, err, InvalidExpression, "$: script 2: syntax error at line 1")
 	})
 }
 
