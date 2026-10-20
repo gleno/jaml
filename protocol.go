@@ -13,10 +13,11 @@ import (
 const (
 	evaluatorMarker      = "JAML_EVALUATOR"
 	evaluatorMemoryLimit = "JAML_MEMORY_LIMIT"
+	evaluatorBuiltins    = "JAML_BUILTINS"
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 13
+	protocolVersion      = 14
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3

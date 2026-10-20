@@ -42,11 +42,13 @@ func serveEvaluations(answers io.Writer) int {
 	if watch.orphaned() {
 		return exitOrphaned
 	}
-	chartTheIntrinsics()
+	if world.builtins == frozenBuiltins {
+		chartTheIntrinsics()
+	}
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	scripts = newScriptCache(scriptBudget(world.limit))
-	var serving = &_Evaluator{watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
+	var serving = &_Evaluator{builtins: world.builtins, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
 }
@@ -57,9 +59,10 @@ func stuckAfterCancel(job uint64) {
 }
 
 type _Evaluator struct {
-	watch   *_HeapWatch
-	replies *_ReplyWriter
-	jobs    *_JobTable
+	builtins _Builtins
+	watch    *_HeapWatch
+	replies  *_ReplyWriter
+	jobs     *_JobTable
 }
 
 func (e *_Evaluator) follow(requests *_FrameReader) int {
@@ -170,7 +173,7 @@ func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
 
 func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {
 	var path = selectedPath(request.Path).String()
-	run, err := held.prepare(request)
+	run, err := held.prepare(request, e.builtins)
 	if err != nil {
 		e.jobs.settle(job)
 		e.replies.write(e.replies.frames.failure(job, "", err))
@@ -252,7 +255,11 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 	if nonce == "" {
 		return _EvaluatorWorld{}, fmt.Errorf("no %s", evaluatorNonce)
 	}
-	return _EvaluatorWorld{limit: limit, nonce: nonce, parent: parent}, nil
+	builtins, known := builtinsNamed(os.Getenv(evaluatorBuiltins))
+	if !known {
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuiltins, os.Getenv(evaluatorBuiltins))
+	}
+	return _EvaluatorWorld{limit: limit, builtins: builtins, nonce: nonce, parent: parent}, nil
 }
 
 type _HeapWatch struct {

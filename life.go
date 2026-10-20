@@ -36,15 +36,17 @@ var (
 )
 
 type _EvaluatorWorld struct {
-	limit  _MemoryLimit
-	nonce  string
-	parent int
-	zone   []string
+	limit    _MemoryLimit
+	builtins _Builtins
+	nonce    string
+	parent   int
+	zone     []string
 }
 
 type _ChildSpec struct {
 	lifetime      context.Context
 	limit         _MemoryLimit
+	builtins      _Builtins
 	startDeadline time.Duration
 	buildTimeout  time.Duration
 }
@@ -94,7 +96,7 @@ func startLife(spec _ChildSpec) (*_Life, error) {
 	if bounded.Err() != nil {
 		return nil, startFailure(cancelled(bounded))
 	}
-	var world = currentWorld(spec.limit)
+	var world = currentWorld(spec)
 	born, greeted, err := world.start(spec)
 	if err != nil {
 		return nil, startFailure(err)
@@ -112,8 +114,8 @@ func startFailure(err error) error {
 	return fail(Unavailable, "starting the evaluator: %w", err)
 }
 
-func currentWorld(limit _MemoryLimit) _EvaluatorWorld {
-	return _EvaluatorWorld{limit: limit, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
+func currentWorld(spec _ChildSpec) _EvaluatorWorld {
+	return _EvaluatorWorld{limit: spec.limit, builtins: spec.builtins, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
 }
 
 func zoneEnv() []string {
@@ -148,6 +150,7 @@ func (w _EvaluatorWorld) env() []string {
 	var env = []string{
 		evaluatorMarker + "=1",
 		evaluatorMemoryLimit + "=" + strconv.FormatInt(int64(w.limit), 10),
+		evaluatorBuiltins + "=" + w.builtins.String(),
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),
 	}

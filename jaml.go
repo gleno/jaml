@@ -54,6 +54,7 @@ type _SandboxSettings struct {
 	memoryLimit    _MemoryLimit
 	maxConcurrency int
 	buildTimeout   time.Duration
+	builtins       _Builtins
 }
 
 type _MemoryLimit int64
@@ -123,6 +124,13 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption {
 			return fail(InvalidExpression, "build timeout must be positive, got %s", timeout)
 		}
 		s.buildTimeout = timeout
+		return nil
+	}
+}
+
+func withBuiltins(builtins _Builtins) SandboxOption {
+	return func(s *_SandboxSettings) error {
+		s.builtins = builtins
 		return nil
 	}
 }

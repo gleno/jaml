@@ -19,9 +19,10 @@ const (
 var errInterrupted = errors.New("interrupted")
 
 type _SessionPlan struct {
-	values  _BoundValues
-	scripts []string
-	pinned  _Pinned
+	values   _BoundValues
+	scripts  []string
+	pinned   _Pinned
+	builtins _Builtins
 }
 
 type _LazySession struct {
@@ -70,8 +71,8 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	vm.SetRandSource(plan.pinned.random())
 	var opened = &_Session{ctx: ctx, realm: captureRealm(vm)}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
-	var freezer _Freezer
-	if err := opened.enter(func(r _Realm) (err error) { freezer, err = r.intrinsicsFreezer(plan.scripts); return err }); err != nil {
+	settle, err := opened.builtinsSettler(plan)
+	if err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "%w", err)
 	}
@@ -83,7 +84,7 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 		opened.close()
 		return nil, err
 	}
-	if err := opened.freezeIntrinsics(freezer); err != nil {
+	if err := opened.enter(settle); err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "%w", err)
 	}

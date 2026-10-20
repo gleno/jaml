@@ -7,7 +7,7 @@ import (
 )
 
 type _Servable interface {
-	prepare(request _Work) (_Prepared, error)
+	prepare(request _Work, builtins _Builtins) (_Prepared, error)
 	outline() *_CodeOutline
 }
 
@@ -64,12 +64,12 @@ func compileBare(source string, configured _ExpressionSettings) (_Expression, er
 	return parsed.compile(bare)
 }
 
-func (d *_Document) prepare(request _Work) (_Prepared, error) {
+func (d *_Document) prepare(request _Work, builtins _Builtins) (_Prepared, error) {
 	chosen, err := d.selectPath(request.Path)
 	if err != nil {
 		return nil, err
 	}
-	var plan = _SessionPlan{values: request.Values, scripts: request.Scripts, pinned: request.Pinned}
+	var plan = _SessionPlan{values: request.Values, scripts: request.Scripts, pinned: request.Pinned, builtins: builtins}
 	return func(ctx context.Context) (_Rendered, error) {
 		var engine = &_LazySession{ctx: ctx, plan: plan}
 		defer engine.close()

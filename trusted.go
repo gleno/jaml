@@ -16,7 +16,6 @@ type _LocalUnit struct {
 }
 
 func newTrusted(configured _SandboxSettings) *_TrustedEngine {
-	chartTheIntrinsics()
 	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout}
 }
 
@@ -69,7 +68,7 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 		return _Refused{err: err}
 	}
 	defer u.engine.leave()
-	run, err := u.built.prepare(written.view())
+	run, err := u.built.prepare(written.view(), mutableBuiltins)
 	if err != nil {
 		return _Refused{err: err}
 	}

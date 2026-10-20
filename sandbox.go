@@ -65,6 +65,14 @@ type _Keep struct {
 }
 
 func MakeSecureSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
+	return makeSecureSandbox(ctx, slices.Concat(options, []SandboxOption{withBuiltins(frozenBuiltins)}))
+}
+
+func MakeSecureSandboxWithoutBuiltinsProtection(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
+	return makeSecureSandbox(ctx, slices.Concat(options, []SandboxOption{withBuiltins(mutableBuiltins)}))
+}
+
+func makeSecureSandbox(ctx context.Context, options []SandboxOption) (*Sandbox, error) {
 	if err := isolationSupported(); err != nil {
 		return nil, err
 	}
@@ -219,7 +227,7 @@ func (s *Sandbox) framed(ctx context.Context, err error) error {
 }
 
 func unmadeSandbox() error {
-	return fail(InvalidExpression, "a sandbox not made by MakeSecureSandbox or MakeTrustedSandbox")
+	return fail(InvalidExpression, "a sandbox not made by MakeSecureSandbox, MakeSecureSandboxWithoutBuiltinsProtection or MakeTrustedSandbox")
 }
 
 func (e *Expression) At(path ...string) *Expression {

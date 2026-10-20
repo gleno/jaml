@@ -22,7 +22,7 @@ type _BoundValues map[string]_Datum
 
 var refusedNames = sync.OnceValue(func() map[string]bool {
 	var names = map[string]bool{}
-	opened, err := openSession(context.Background(), _SessionPlan{})
+	opened, err := openSession(context.Background(), _SessionPlan{builtins: mutableBuiltins})
 	if err != nil {
 		panic(err)
 	}
