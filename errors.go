@@ -107,10 +107,12 @@ func located(path string, err error) _ExpressionError {
 	return failWith(evaluationFailed, err).at(path)
 }
 
-type _MemoryExhausted string
+type _MemoryExhausted struct {
+	limit _MemoryLimit
+}
 
 func (m _MemoryExhausted) Error() string {
-	return string(m)
+	return fmt.Sprintf("exceeded the memory limit of %d bytes", m.limit)
 }
 
 func (m _MemoryExhausted) Is(target error) bool {

@@ -101,12 +101,12 @@ func TestATimedOutJobBlamesNoOtherJobsDeath(t *testing.T) {
 	overdue, stop := context.WithCancelCause(t.Context())
 	stop(_WallLimit(time.Millisecond).exhausted())
 	var errand = &_Errand{ctx: t.Context()}
-	var starved = _Lost{cause: _MemoryExhausted("exceeded the memory limit of 64 bytes")}
+	var starved = _Lost{cause: _MemoryLimit(64).exhausted()}
 	judged, replayed := errand.judge(_Shared{}, overran(overdue, starved))
 	if !replayed || judged != _Outcome(starved) {
 		t.Fatalf("a job past its limit whose shared child died of another's memory settled %#v instead of replaying", judged)
 	}
-	var wedgedBy = _Lost{cause: fmt.Errorf("%w: %w", errSilent, _MemoryExhausted("exceeded the memory limit of 64 bytes"))}
+	var wedgedBy = _Lost{cause: fmt.Errorf("%w: %w", errSilent, _MemoryLimit(64).exhausted())}
 	var err = located("$.v", refusal(t, overran(overdue, wedgedBy)))
 	expectError(t, err, WallLimit, "$.v: exceeded the wall time limit of 1ms: the evaluator stopped answering", "exceeded the memory limit of 64 bytes")
 	for _, foreign := range []error{MemoryLimit, errSilent} {

@@ -74,12 +74,13 @@ func TestAMemoryBombIsAMemoryLimit(t *testing.T) {
 	var document = mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ (() => { const a = []; for (;;) a.push({k: a.length}) })() }\"\n")
 	var out any
 	var err = resolveInto(within(t, 20*time.Second), &out, document.At("v"))
-	expectError(t, err, MemoryLimit, "$.v: exceeded the memory limit of 67108864 bytes: evaluation failed: expression error")
 	expectError(t, err, EvaluationFailed)
+	expectEqual(t, err.Error(), "$.v: exceeded the memory limit of 67108864 bytes: evaluation failed: expression error")
+	expectFailure(t, err, "$.v", "exceeded the memory limit of 67108864 bytes")
 }
 
 func TestARuntimeOutOfMemoryIsAMemoryLimit(t *testing.T) {
-	if !errors.Is(_MemoryExhausted("evaluator died (exit status 2): "+runtimeOutOfMemory), MemoryLimit) {
+	if !errors.Is(_MemoryLimit(64<<20).exhausted(), MemoryLimit) {
 		t.Fatal("a runtime out-of-memory death is not a MemoryLimit")
 	}
 	if errors.Is(fail(evaluationFailed, "boom"), MemoryLimit) {

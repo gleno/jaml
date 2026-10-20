@@ -163,6 +163,10 @@ func (r _Runtime) depth() int {
 
 type _MemoryLimit int64
 
+func (l _MemoryLimit) exhausted() error {
+	return _MemoryExhausted{limit: l}
+}
+
 func makeMemoryLimit(bytes int64) (_MemoryLimit, error) {
 	if bytes < smallestMemoryLimit || bytes > largestMemoryLimit {
 		return 0, fail(invalidExpression, "memory limit must be between 16 MiB (%d) and 1 TiB (%d) bytes, got %d", smallestMemoryLimit, largestMemoryLimit, bytes)

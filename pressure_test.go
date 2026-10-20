@@ -22,7 +22,7 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 		want    string
 	}{
 		"under half live":          {28, false, "killed from outside jaml"},
-		"past three quarters live": {60, true, "near the memory limit"},
+		"past three quarters live": {60, true, "$: exceeded the memory limit of 67108864 bytes"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

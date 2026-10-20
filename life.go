@@ -350,16 +350,14 @@ func (greeting _Hello) vouch(nonce string) error {
 func (c _Collected) verdict(r _Remains) error {
 	var reason = r.stderr.reason()
 	switch {
-	case c.state.ExitCode() == exitMemoryLimit:
-		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", r.limit))
+	case c.state.ExitCode() == exitMemoryLimit || refusedAnAllocation(reason):
+		return r.limit.exhausted()
 	case c.state.ExitCode() == exitStuckAfterCancel:
 		return _StuckDeath(fmt.Sprintf("evaluator exited (%s): a job stuck after cancel was still inside a built-in %s after it was told to stop", c.state, cancelGrace))
-	case refusedAnAllocation(reason):
-		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes: evaluator died (%s): %s", r.limit, c.state, reason))
 	case killedOutright(c.state) && r.killCause != nil:
 		return r.killCause
 	case killedOutright(c.state) && r.stderr.holds(pressureMarker):
-		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", c.state, r.limit))
+		return r.limit.exhausted()
 	case killedOutright(c.state):
 		return _OutsideDeath(fmt.Sprintf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", c.state, peakNote(c.state)))
 	case reason != "":
@@ -372,13 +370,13 @@ func (u _Uncollected) verdict(r _Remains) error {
 	var reason = r.stderr.reason()
 	switch {
 	case refusedAnAllocation(reason):
-		return _MemoryExhausted(fmt.Sprintf("evaluator ended but its exit could not be collected (%v): %s", u.waited, reason))
+		return r.limit.exhausted()
 	case r.killCause != nil:
 		return r.killCause
 	case reason != "":
 		return fmt.Errorf("evaluator ended but its exit could not be collected (%w): %s", u.waited, reason)
 	case r.stderr.holds(pressureMarker):
-		return _MemoryExhausted(fmt.Sprintf("evaluator ended near the memory limit of %d bytes but its exit could not be collected: %v", r.limit, u.waited))
+		return r.limit.exhausted()
 	}
 	return fmt.Errorf("evaluator ended but its exit could not be collected: %w", u.waited)
 }
