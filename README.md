@@ -394,6 +394,11 @@ type Thrown struct {
 	Message string
 	Value   any
 }
+
+type Failure struct {
+	Path   string
+	Reason string
+}
 ```
 
 ### Errors
@@ -419,6 +424,18 @@ All derive from `ExpressionError`, so `errors.Is(err, jaml.ExpressionError)` mat
 $.config.servers[0].port: ${port}: ReferenceError: port is not defined: evaluation failed: expression error
 $.config: its own context, the one it was made or copied with, has ended: closed: expression error
 ```
+
+Every jaml error also carries its parts as a `*jaml.Failure`, so you can show the reason without cutting up the message:
+
+```go
+var failure *jaml.Failure
+if errors.As(err, &failure) {
+	_ = failure.Path   // "$.config.servers[0].port", or "$" for the root
+	_ = failure.Reason // "ReferenceError: port is not defined"
+}
+```
+
+`Path` is the location the message leads with. `Reason` is the rest of the message without the location, the quoted code and the kind: `result is undefined, which strict undefined coercion refuses`, `syntax error at line 2, column 16 of the expression: Unexpected number`, `not a function literal: write an arrow function or a function expression`. For code that threw, `Reason` is `Thrown.Message`, and the `*jaml.Thrown` stays reachable too.
 
 A `Closed` error names which context ended: the expression's own (the one passed to `MakeExpression…` or `Copy`), or the sandbox's. A strict undefined result from an arrow whose body is a block adds a hint, since `() => { ok: true }` is a block with a label, not an object: write `() => ({ ok: true })`.
 

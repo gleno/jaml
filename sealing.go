@@ -104,6 +104,11 @@ func (w *_WireWriter) failure(err error) error {
 			return err
 		}
 	}
+	if described.Code != "" {
+		if err := w.labelled(`,"code":`, described.Code); err != nil {
+			return err
+		}
+	}
 	if err := w.labelled(`,"message":`, described.Message); err != nil {
 		return err
 	}

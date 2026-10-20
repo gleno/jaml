@@ -141,7 +141,7 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 func TestAnExpressionFollowsTheTemplateDefaults(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var out any
-		expectError(t, resolveInto(t.Context(), &out, mustExpression(t, sb, "x => undefined"), 1), CoercionFailed, "$: x => undefined is undefined, which strict undefined coercion refuses")
+		expectError(t, resolveInto(t.Context(), &out, mustExpression(t, sb, "x => undefined"), 1), CoercionFailed, "$: x => undefined: result is undefined, which strict undefined coercion refuses")
 		loose, err := sb.MakeExpression(t.Context(), "x => undefined", WithUndefinedCoercion(Loose))
 		if err != nil {
 			t.Fatal(err)

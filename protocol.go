@@ -17,7 +17,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 14
+	protocolVersion      = 15
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -106,6 +106,7 @@ func (f _Frames) requests(source io.Reader) *_FrameReader {
 type _Failure struct {
 	Kind    string         `json:"kind"`
 	At      string         `json:"at,omitempty"`
+	Code    string         `json:"code,omitempty"`
 	Message string         `json:"message"`
 	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
 }
@@ -173,7 +174,7 @@ func describeFailure(err error) _Failure {
 	if !isOwn {
 		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
 	}
-	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Message: failed.cause.Error()}
+	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Code: failed.code, Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
@@ -228,7 +229,7 @@ func (f _Failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return _ExpressionError{kind: kind, path: f.At, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+	return _ExpressionError{kind: kind, path: f.At, code: f.Code, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {

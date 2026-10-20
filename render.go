@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -152,7 +153,7 @@ func (r *_Renderer) renderText(compiled _Text, path *_DataPath) (any, error) {
 		}
 		written, err := stringify(admitted)
 		if err != nil {
-			return nil, fail(EvaluationFailed, "%s: %w", piece.code.written(), err).within(path.String())
+			return nil, failWith(EvaluationFailed, _Quoted{code: piece.code.written(), reason: err}).within(path.String())
 		}
 		rendered.WriteString(written)
 	}
@@ -170,7 +171,7 @@ func (r *_Renderer) admit(result any, compiled _Expression, path *_DataPath) (an
 		return result, nil
 	}
 	if coercion == Strict {
-		return nil, fail(CoercionFailed, "%s is %s, which strict %s coercion refuses%s", compiled.written(), absent, absent, hintFor(absent, compiled)).within(path.String())
+		return nil, failWith(CoercionFailed, _Quoted{code: compiled.written(), reason: fmt.Errorf("result is %s, which strict %s coercion refuses%s", absent, absent, hintFor(absent, compiled))}).within(path.String())
 	}
 	return nil, nil
 }
@@ -189,7 +190,7 @@ func (r *_Renderer) evaluate(compiled _Expression, path *_DataPath) (any, error)
 	}
 	result, err := session.evaluate(compiled, r.args)
 	if err != nil {
-		return nil, fail(EvaluationFailed, "%s: %w", compiled.written(), err).within(path.String())
+		return nil, failWith(EvaluationFailed, _Quoted{code: compiled.written(), reason: err}).within(path.String())
 	}
 	return result, nil
 }

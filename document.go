@@ -46,7 +46,7 @@ func makeDocument(ctx context.Context, written string, configured _ExpressionSet
 func compileRaw(source string, configured _ExpressionSettings) (*_Document, error) {
 	compiled, err := compileBare(source, configured)
 	if err != nil {
-		return nil, fail(InvalidExpression, "%s: %w", bare.around(source), err)
+		return nil, failWith(InvalidExpression, _Quoted{code: bare.around(source), reason: err})
 	}
 	return &_Document{root: source, compiled: &_Compiled{texts: map[string]_Text{source: {whole: &compiled}}}, settings: configured}, nil
 }

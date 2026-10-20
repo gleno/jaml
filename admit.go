@@ -16,7 +16,7 @@ func admitSource(source string) error {
 	if utf8.ValidString(source) {
 		return nil
 	}
-	return fail(InvalidExpression, "%s: %w", bare.around(source), syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character"))
+	return failWith(InvalidExpression, _Quoted{code: bare.around(source), reason: syntaxErrorAt(source, firstInvalidByte(source), "Invalid UTF-8 character")})
 }
 
 func admitPath(path []string) error {

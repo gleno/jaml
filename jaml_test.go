@@ -142,6 +142,10 @@ func expectError(t *testing.T, err error, sentinel error, fragments ...string) {
 	if !errors.Is(err, ExpressionError) {
 		t.Fatalf("expected every error to be an ExpressionError, got %v", err)
 	}
+	var failure *Failure
+	if !errors.As(err, &failure) || !strings.HasPrefix(err.Error(), failure.Path) || !strings.Contains(err.Error(), failure.Reason) {
+		t.Fatalf("expected a Failure that fits %q, got %+v", err, failure)
+	}
 	for _, fragment := range fragments {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("expected %q in %q", fragment, err.Error())

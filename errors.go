@@ -4,14 +4,44 @@ import "fmt"
 
 const rootPlace = "$"
 
+type Failure struct {
+	Path   string
+	Reason string
+}
+
+func (f *Failure) Error() string {
+	return f.Path + ": " + f.Reason
+}
+
 type _ExpressionError struct {
 	kind  error
 	path  string
+	code  string
 	cause error
 }
 
+type _Quoted struct {
+	code   string
+	reason error
+}
+
+func (q _Quoted) Error() string {
+	return q.code + ": " + q.reason.Error()
+}
+
+func (q _Quoted) Unwrap() error {
+	return q.reason
+}
+
 func fail(kind error, format string, args ...any) _ExpressionError {
-	return _ExpressionError{kind: kind, cause: fmt.Errorf(format, args...)}
+	return failWith(kind, fmt.Errorf(format, args...))
+}
+
+func failWith(kind error, err error) _ExpressionError {
+	if quoted, isQuoted := err.(_Quoted); isQuoted {
+		return _ExpressionError{kind: kind, code: quoted.code, cause: quoted.reason}
+	}
+	return _ExpressionError{kind: kind, cause: err}
 }
 
 func (e _ExpressionError) within(path string) _ExpressionError {
@@ -27,7 +57,22 @@ func (e _ExpressionError) place() string {
 }
 
 func (e _ExpressionError) Error() string {
-	return e.place() + e.joint() + e.cause.Error() + ": " + e.kind.Error()
+	return e.place() + e.joint() + e.quoted() + e.cause.Error() + ": " + e.kind.Error()
+}
+
+func (e _ExpressionError) quoted() string {
+	if e.code == "" {
+		return ""
+	}
+	return e.code + ": "
+}
+
+func (e _ExpressionError) As(target any) bool {
+	failure, wanted := target.(**Failure)
+	if wanted {
+		*failure = &Failure{Path: e.place(), Reason: e.cause.Error()}
+	}
+	return wanted
 }
 
 func (e _ExpressionError) joint() string {
