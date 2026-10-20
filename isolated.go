@@ -63,13 +63,16 @@ func (u *_RemoteUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 	if err != nil {
 		return _Refused{err: err}
 	}
+	var outgoing = _Outgoing{body: written.body, console: ask.console}
 	return u.dispatcher.carry(ctx, func(e *_Errand, l *_Life) _Outcome {
 		for range servingAttempts {
 			var r = l.reside(u, e.report)
 			if _, built := r.result.(_Built); !built {
 				return r.result
 			}
-			var served = l.serve(e.ctx, _Outgoing{unit: r.build, body: written.body})
+			var asked = outgoing
+			asked.unit = r.build
+			var served = l.serve(e.ctx, asked)
 			if failed, isRefused := served.(_Refused); !isRefused || !errors.Is(failed.err, errMissing) {
 				return served
 			}

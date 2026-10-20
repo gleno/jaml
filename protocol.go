@@ -20,7 +20,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 21
+	protocolVersion      = 22
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -68,6 +68,7 @@ type _Work struct {
 	Skips     *_Shape      `json:"skips,omitempty"`
 	Pinned    _Pinned      `json:"pinned"`
 	TimeLimit _TimeLimit   `json:"limit,omitempty"`
+	Console   bool         `json:"console,omitempty"`
 }
 
 type _Reply struct {
@@ -78,6 +79,13 @@ type _Reply struct {
 	Skipped [][]string    `json:"skipped,omitempty"`
 	Failure *_Failure     `json:"failure,omitempty"`
 	Missing bool          `json:"missing,omitempty"`
+	Line    *_LineOnWire  `json:"line,omitempty"`
+}
+
+type _LineOnWire struct {
+	Path  []string `json:"path,omitempty"`
+	Level Level    `json:"level"`
+	Text  string   `json:"text"`
 }
 
 type _Frames struct {

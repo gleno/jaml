@@ -63,7 +63,7 @@ An expression you drop without ending its context is still forgotten: once the g
 - **A pinned order.** Code runs in the order the document is written, so scripts with state behave the same every time.
 - **Results are data.** Code must produce JSON data: scalars, lists, objects. Symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances (an array or object counts as data only with its plain prototype or none), functions inside data, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does. A field typed `*jaml.Expression` is not evaluated: it receives a view you resolve later.
-- **The world of an evaluation travels on the context.** Values, scripts, the clock, the random seed and the time limit.
+- **The world of an evaluation travels on the context.** Values, scripts, the clock, the random seed, the time limit and the console.
 - **Thrown values as data.** What code threw is reachable as `*jaml.Thrown`, with its message and a JSON snapshot of the value.
 - **Three sandboxes, chosen up front.** A secure sandbox runs everything in one child process with a memory ceiling, and survives anything a document does. `MakeSecureSandbox` also protects the pieces of code of a `Resolve` from each other by freezing the JavaScript built-ins and the values, so no piece of code can change what another sees; `MakeSecureSandboxWithoutBuiltinsProtection` leaves both ordinary and is cheaper per `Resolve`. A trusted sandbox runs in your process, unprotected.
 - **Safe to share.** Sandboxes and expressions are safe for concurrent use from any number of goroutines.
@@ -252,6 +252,18 @@ ctx = jaml.WithTimeLimit(ctx, 100*time.Millisecond)
 
 jaml's own work on your data, binding a value, reading a result or a thrown value, stops within a few hundred values of the limit or of the context's end, in every sandbox, and never ends a child. In a secure sandbox the child keeps the clock, and a job still inside a built-in 250 ms after its limit ends the child the way a job stuck after cancel does: that job fails with `TimeLimit`, naming the piece of code that was running and quoting it as a trusted sandbox does (`$.check: ${…}: exceeded the time limit of 100ms and was still inside a built-in 250ms after it was told to stop`), and the other jobs of the child are replayed. In a trusted sandbox the clock starts when the job takes its slot, and a built-in that never returns to the interpreter runs on, as it does past a context's end.
 
+### Console
+
+```go
+ctx = jaml.WithConsole(ctx, func(line jaml.Line) {
+	log.Printf("%v %v: %s", line.Level, line.Path, line.Text)
+})
+```
+
+Without `WithConsole`, code sees no `console` global, as before. With it, code sees a frozen `console` with `log`, `info`, `warn`, `error` and `debug`, and every line it writes reaches your sink as a `Line`: its `Level` (`Log`, `Info`, `Warn`, `Error` or `Debug`), its `Text`, and its `Path`, the steps from the document's root to the piece of code that wrote it, or to the selected part for a line a script writes. The arguments of one call are joined by spaces: a string as it is, `undefined` and a function as `String()` gives them, anything else as `JSON.stringify` writes it, and `String()` again when that throws, as it does for a cycle or a BigInt. As with the other options, the innermost `WithConsole` wins, and `WithConsole(ctx, nil)` turns the console off. A value named `console` cannot be bound while the console is on.
+
+Lines stream out of a secure sandbox's child as they are written, so they survive whatever stops the `Resolve`: its time limit, a memory kill of the child, or its context's end. Your sink is called in the order the lines were written, from one goroutine per `Resolve`, and every line written before the job ended or was stopped reaches it before `Resolve` returns; a slow sink holds up only its own `Resolve`. A job replayed after a crash writes its lines again, and jaml passes on only those your sink has not seen, so each line arrives once. One `Resolve` keeps at most 1000 lines and 1 MiB of text; a line longer than 8 KiB is cut to fit and ends with `…`, and once a cap is reached the rest are dropped and one last `Warn` line says how many. A trusted sandbox calls your sink the same way, in your process.
+
 ### Thrown values
 
 ```go
@@ -407,6 +419,7 @@ func WithScript(ctx context.Context, source string) context.Context
 func WithFixedClock(ctx context.Context, time time.Time) context.Context
 func WithRandomSeed(ctx context.Context, seed uint64) context.Context
 func WithTimeLimit(ctx context.Context, limit time.Duration) context.Context
+func WithConsole(ctx context.Context, sink func(Line)) context.Context
 
 func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
 func WithUndefinedCoercion(coercion Coercion) Option // Loose or Strict (default)
@@ -426,6 +439,12 @@ type Thrown struct {
 type Failure struct {
 	Path   string
 	Reason string
+}
+
+type Line struct {
+	Path  []string
+	Level Level // Log, Info, Warn, Error or Debug
+	Text  string
 }
 ```
 

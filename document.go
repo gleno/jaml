@@ -18,7 +18,7 @@ type _Host struct {
 
 type _Prepared struct {
 	spot   *_Spot
-	render func(ctx context.Context) (_Rendered, error)
+	render func(ctx context.Context, speak func(Line)) (_Rendered, error)
 }
 
 type _Rendered struct {
@@ -83,13 +83,14 @@ func (d *_Document) prepare(request _Work, host _Host) (_Prepared, error) {
 	}
 	var plan = _SessionPlan{values: request.Values, scripts: scripts, pinned: request.Pinned, runtime: host.runtime}
 	var spot = &_Spot{selection: chosen.path}
-	return _Prepared{spot: spot, render: func(ctx context.Context) (_Rendered, error) {
-		var engine = &_LazySession{ctx: ctx, plan: plan}
+	args, skips := request.Args, request.Skips
+	return _Prepared{spot: spot, render: func(ctx context.Context, speak func(Line)) (_Rendered, error) {
+		var engine = &_LazySession{ctx: ctx, plan: plan, speak: spot.speaking(speak)}
 		defer engine.close()
 		if err := engine.warm(); err != nil {
 			return _Rendered{}, err
 		}
-		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, spot: spot, args: request.Args, skips: request.Skips, depth: chosen.path.depth()}
+		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, spot: spot, args: args, skips: skips, depth: chosen.path.depth()}
 		tree, err := renderer.render(chosen.node, renderer.place(chosen))
 		if err != nil {
 			return _Rendered{}, err

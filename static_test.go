@@ -129,7 +129,7 @@ func renderedBytes(t *testing.T, d *_Document, request _Work) (string, [][]strin
 	if err != nil {
 		return "", nil, err
 	}
-	result, err := prepared.render(t.Context())
+	result, err := prepared.render(t.Context(), nil)
 	if err != nil {
 		return "", nil, err
 	}

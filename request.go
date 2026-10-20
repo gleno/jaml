@@ -30,6 +30,7 @@ type _Ask struct {
 	pinned    _Pinned
 	timeLimit _TimeLimit
 	codeFree  bool
+	console   *_Console
 }
 
 type _RequestBody struct {
@@ -48,8 +49,9 @@ func (b *_RequestBody) overseen(ctx context.Context, buildTimeout time.Duration)
 }
 
 type _Outgoing struct {
-	unit uint64
-	body *_RequestBody
+	unit    uint64
+	body    *_RequestBody
+	console *_Console
 }
 
 type _Span struct {
@@ -94,6 +96,11 @@ func (ww *_WrittenWork) fill(w *_WireWriter) error {
 	}
 	if ww.ask.timeLimit != 0 {
 		if err := w.raw(`,"limit":` + strconv.FormatInt(int64(ww.ask.timeLimit), 10)); err != nil {
+			return err
+		}
+	}
+	if ww.ask.console != nil {
+		if err := w.raw(`,"console":true`); err != nil {
 			return err
 		}
 	}
@@ -207,7 +214,7 @@ func (ww _WrittenWork) view() _Work {
 	for index, span := range ww.args {
 		args[index] = ww.datum(span)
 	}
-	return _Work{Path: ww.ask.path, Values: values, Scripts: ww.ask.scripts, Args: args, Skips: ww.ask.skips, Pinned: ww.ask.pinned, TimeLimit: ww.ask.timeLimit}
+	return _Work{Path: ww.ask.path, Values: values, Scripts: ww.ask.scripts, Args: args, Skips: ww.ask.skips, Pinned: ww.ask.pinned, TimeLimit: ww.ask.timeLimit, Console: ww.ask.console != nil}
 }
 
 func (ww _WrittenWork) datum(span _Span) _Datum {

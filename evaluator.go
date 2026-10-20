@@ -191,7 +191,7 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 		defer stop()
 		var unwatch = context.AfterFunc(bounded, func() { e.overran(job, prepared.spot, bounded) })
 		defer unwatch()
-		result, err := prepared.render(bounded)
+		result, err := prepared.render(bounded, e.speaker(job, request.Console))
 		var told = e.jobs.settle(job)
 		switch {
 		case err != nil:

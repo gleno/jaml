@@ -26,6 +26,7 @@ type _SessionPlan struct {
 type _LazySession struct {
 	ctx    context.Context
 	plan   _SessionPlan
+	speak  func(Level, string)
 	opened *_Session
 }
 
@@ -33,7 +34,7 @@ func (l *_LazySession) open() (*_Session, error) {
 	if l.opened != nil {
 		return l.opened, nil
 	}
-	opened, err := openSession(l.ctx, l.plan)
+	opened, err := l.begin()
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +64,11 @@ type _Session struct {
 }
 
 func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
+	return (&_LazySession{ctx: ctx, plan: plan}).begin()
+}
+
+func (l *_LazySession) begin() (*_Session, error) {
+	ctx, plan := l.ctx, l.plan
 	var vm = goja.New()
 	vm.SetMaxCallStackSize(plan.runtime.depth())
 	vm.SetTimeSource(plan.pinned.now)
@@ -74,6 +80,10 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	var opened = &_Session{ctx: ctx, realm: realm}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
 	if err := opened.enter(realm.protection.guard); err != nil {
+		opened.close()
+		return nil, failWith(evaluationFailed, err)
+	}
+	if err := opened.installConsole(l.speak); err != nil {
 		opened.close()
 		return nil, failWith(evaluationFailed, err)
 	}

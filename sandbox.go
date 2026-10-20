@@ -307,6 +307,8 @@ func (h *_Handle) admit(ctx context.Context) error {
 func (h *_Handle) answer(ctx context.Context, ask _Ask, decode func(settled _Answered) error) error {
 	defer goruntime.KeepAlive(h)
 	ask.pinned = pin(ctx)
+	ask.console = consoleFor(ctx, ask.path)
+	defer ask.console.finish()
 	var job = jobWithin(ctx, h.lifetime)
 	defer job.end()
 	var result = h.keep.unit.serve(job, ask)

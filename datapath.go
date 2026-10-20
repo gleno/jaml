@@ -37,6 +37,21 @@ func (p *_DataPath) atStep(step string) *_DataPath {
 	return p.atKey(step)
 }
 
+func (p *_DataPath) steps() []string {
+	if p == nil {
+		return nil
+	}
+	var steps = make([]string, p.depth())
+	for step := p; step != nil; step = step.parent {
+		if step.keyed {
+			steps[step.levels-1] = step.key
+		} else {
+			steps[step.levels-1] = strconv.Itoa(step.index)
+		}
+	}
+	return steps
+}
+
 func (p *_DataPath) depth() int {
 	if p == nil {
 		return 0

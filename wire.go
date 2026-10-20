@@ -38,8 +38,10 @@ type _Residency struct {
 }
 
 type _Switchboard struct {
-	mu      sync.Mutex
-	pending map[uint64]*_Expectation
+	mu       sync.Mutex
+	pending  map[uint64]*_Expectation
+	consoles map[uint64]*_Console
+	hungUp   bool
 }
 
 type _Expectation struct {
@@ -261,7 +263,7 @@ func (l *_Life) send(ctx context.Context, outgoing _Outgoing) (_Call, error) {
 	defer func() { <-l.wire.writer }()
 	var job = l.wire.sent + 1
 	l.wire.sent = job
-	var replies = l.board.expect(job, outgoing.body.op)
+	var replies = l.board.expect(job, outgoing.body.op, outgoing.console)
 	defer l.backstop(alreadyDone, l.wire.stall)()
 	if err := l.wire.write(outgoing.body.stamp(job, outgoing.unit)); err != nil {
 		l.end()
@@ -345,6 +347,7 @@ func (l *_Life) backstop(told <-chan struct{}, quiet *_Quiet) func() {
 
 func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 	defer close(l.drained)
+	defer l.board.hangUp()
 	var err = replies.greeting()
 	greeted <- err
 	if err != nil {
@@ -357,7 +360,7 @@ func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 			return
 		}
 		if err == nil {
-			err = l.board.deliver(incoming)
+			err = l.board.route(incoming)
 		}
 		if err != nil {
 			l.kill(err)
@@ -366,12 +369,56 @@ func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 	}
 }
 
-func (b *_Switchboard) expect(job uint64, op _Opcode) <-chan _Reply {
+func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) <-chan _Reply {
 	var replies = make(chan _Reply, 1)
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.pending[job] = &_Expectation{op: op, replies: replies}
-	b.mu.Unlock()
+	if console != nil && !b.hungUp && console.attend() {
+		if b.consoles == nil {
+			b.consoles = map[uint64]*_Console{}
+		}
+		b.consoles[job] = console
+	}
 	return replies
+}
+
+func (b *_Switchboard) route(incoming _Reply) error {
+	if incoming.Line != nil {
+		return b.echo(incoming)
+	}
+	return b.deliver(incoming)
+}
+
+func (b *_Switchboard) echo(incoming _Reply) error {
+	switch {
+	case incoming.outcomes() != 0 || incoming.Code != nil || incoming.Skipped != nil:
+		return fmt.Errorf("job %d: the evaluator sent a console line with an answer", incoming.Job)
+	case !incoming.Line.Level.known():
+		return fmt.Errorf("job %d: the evaluator sent a console line at an unknown level %d", incoming.Job, incoming.Line.Level)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if console := b.consoles[incoming.Job]; console != nil {
+		console.echo(Line(*incoming.Line))
+	}
+	return nil
+}
+
+func (b *_Switchboard) hangUp() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.hungUp = true
+	for job := range b.consoles {
+		b.unheed(job)
+	}
+}
+
+func (b *_Switchboard) unheed(job uint64) {
+	if console := b.consoles[job]; console != nil {
+		delete(b.consoles, job)
+		console.leave()
+	}
 }
 
 func (b *_Switchboard) deliver(incoming _Reply) error {
@@ -385,6 +432,7 @@ func (b *_Switchboard) deliver(incoming _Reply) error {
 		return fmt.Errorf("job %d: %w", incoming.Job, err)
 	}
 	delete(b.pending, incoming.Job)
+	b.unheed(incoming.Job)
 	waiting.replies <- incoming
 	return nil
 }

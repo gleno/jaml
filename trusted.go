@@ -88,7 +88,7 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 	defer u.engine.leave()
 	bounded, stop := written.ask.timeLimit.bound(ctx)
 	defer stop()
-	result, err := prepared.render(bounded)
+	result, err := prepared.render(bounded, ask.console.speaker())
 	if err != nil {
 		return _Refused{err: err}
 	}
