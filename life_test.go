@@ -135,31 +135,70 @@ func TestACancelBehindABigRequestStillLands(t *testing.T) {
 }
 
 func TestForgottenRebuildsLeaveNothingResident(t *testing.T) {
-	var sb = mustIsolated(t, WithMemoryLimit(64<<20), WithBuildTimeout(30*time.Second))
+	var sb = mustIsolated(t, WithMemoryLimit(64<<20), WithBuildTimeout(30*time.Second), WithMaxConcurrency(1))
 	var documents = make([]*Expression, 12/min(raceSlowdown, 3))
 	var ends = make([]context.CancelFunc, len(documents))
-	var half time.Duration
 	for index := range documents {
 		ctx, end := context.WithCancel(t.Context())
-		var started = time.Now()
 		made, err := sb.MakeExpressionFromJaml(ctx, listOfPlainServers(30000)+fmt.Sprintf("v: %d\n", index))
 		if err != nil {
 			t.Fatal(err)
 		}
-		half = max(half, time.Since(started)/2)
 		documents[index], ends[index] = made, end
 		killChild(t, sb)
 	}
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 6 }\n"), nil, "v"), 6)
 	var before = childPID(t, sb)
 	for index, document := range documents {
-		time.AfterFunc(half, ends[index])
-		var out int
-		expectError(t, resolveInto(t.Context(), &out, document.At("v")), Closed)
-		time.Sleep(2 * half)
+		var resolved = make(chan error, 1)
+		go func() {
+			var out int
+			resolved <- resolveInto(t.Context(), &out, document.At("v"))
+		}()
+		var resume = haltMidRebuild(t, currentChild(t, sb), document)
+		ends[index]()
+		expectError(t, <-resolved, Closed)
+		resume()
 	}
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 6 }\n"), nil, "v"), 6)
 	expectEqual(t, childPID(t, sb), before)
+}
+
+func haltMidRebuild(t *testing.T, child *_Life, document *Expression) func() {
+	t.Helper()
+	var unit = document.held.keep.unit.(*_RemoteUnit)
+	var pid = child.cmd.Process.Pid
+	var deadline = time.Now().Add(30 * time.Second)
+	for {
+		if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+			t.Fatalf("the evaluator holding the forgotten rebuilds is gone: %v", err)
+		}
+		if rebuilding(child, unit) {
+			return func() { _ = syscall.Kill(pid, syscall.SIGCONT) }
+		}
+		if err := syscall.Kill(pid, syscall.SIGCONT); err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the forgotten document was never rebuilt")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func rebuilding(child *_Life, unit *_RemoteUnit) bool {
+	child.wire.mu.Lock()
+	defer child.wire.mu.Unlock()
+	var residency = child.wire.residents[unit]
+	if residency == nil || residency.build == 0 {
+		return false
+	}
+	select {
+	case <-residency.settled:
+		return false
+	default:
+		return true
+	}
 }
 
 func TestACallCancelledWhileQueuedNamesItsPath(t *testing.T) {
