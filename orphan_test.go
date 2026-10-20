@@ -3,6 +3,7 @@
 package jaml
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -37,11 +38,23 @@ func TestAnOrphanedEvaluatorExits(t *testing.T) {
 	}
 	var deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if syscall.Kill(pid, 0) != nil {
+		if gone(pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	syscall.Kill(pid, syscall.SIGKILL)
 	t.Fatalf("orphaned evaluator %d kept running", pid)
+}
+
+func gone(pid int) bool {
+	if syscall.Kill(pid, 0) != nil {
+		return true
+	}
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	var fields = strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+	return len(fields) > 0 && fields[0] == "Z"
 }
