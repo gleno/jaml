@@ -17,12 +17,12 @@ const (
 	addressPerThread      = 8 << 20
 )
 
-func confineTheAddressSpace(limit _MemoryLimit) error {
+func confineTheAddressSpace(limit _MemoryLimit, jobs int) error {
 	held, err := addressSpaceHeld()
 	if err != nil {
 		return fmt.Errorf("reading the address space: %w", err)
 	}
-	var ceiling = held + addressGrowthPerLimit*uint64(limit) + addressSlack + addressPerThread*uint64(goruntime.GOMAXPROCS(0))
+	var ceiling = held + addressGrowthPerLimit*uint64(limit) + addressSlack + addressPerThread*uint64(goruntime.GOMAXPROCS(0)+jobs)
 	var current syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_AS, &current); err != nil {
 		return fmt.Errorf("reading the address space limit: %w", err)

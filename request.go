@@ -29,6 +29,7 @@ type _Ask struct {
 	skips     *_Shape
 	pinned    _Pinned
 	timeLimit _TimeLimit
+	cpuLimit  _CPULimit
 	codeFree  bool
 	console   *_Console
 }
@@ -96,6 +97,11 @@ func (ww *_WrittenWork) fill(w *_WireWriter) error {
 	}
 	if ww.ask.timeLimit != 0 {
 		if err := w.raw(`,"limit":` + strconv.FormatInt(int64(ww.ask.timeLimit), 10)); err != nil {
+			return err
+		}
+	}
+	if ww.ask.cpuLimit != 0 {
+		if err := w.raw(`,"cpu":` + strconv.FormatInt(int64(ww.ask.cpuLimit), 10)); err != nil {
 			return err
 		}
 	}

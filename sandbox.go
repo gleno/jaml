@@ -28,13 +28,17 @@ type _Outcome interface{ isOutcome() }
 type _Answered struct {
 	data    []byte
 	skipped [][]string
+	used    Usage
 }
 
 type _Built struct {
 	outline *_CodeOutline
 }
 
-type _Refused struct{ err error }
+type _Refused struct {
+	err  error
+	used *Usage
+}
 
 func (_Built) isOutcome()    {}
 func (_Answered) isOutcome() {}
@@ -312,6 +316,7 @@ func (h *_Handle) answer(ctx context.Context, ask _Ask, decode func(settled _Ans
 	var job = jobWithin(ctx, h.lifetime)
 	defer job.end()
 	var result = h.keep.unit.serve(job, ask)
+	reportUsage(ctx, result)
 	switch {
 	case h.ended():
 		return fail(closed, "%s ended while it ran", h.endedContext())

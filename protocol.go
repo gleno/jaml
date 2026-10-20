@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"time"
 )
 
 const (
@@ -17,10 +18,12 @@ const (
 	evaluatorCallDepth   = "JAML_CALL_DEPTH"
 	evaluatorScripts     = "JAML_SCRIPT_CACHE"
 	evaluatorBuildTime   = "JAML_BUILD_TIMEOUT"
+	evaluatorBuildCPU    = "JAML_BUILD_CPU_LIMIT"
+	evaluatorJobs        = "JAML_MAX_CONCURRENCY"
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 22
+	protocolVersion      = 23
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -68,6 +71,7 @@ type _Work struct {
 	Skips     *_Shape      `json:"skips,omitempty"`
 	Pinned    _Pinned      `json:"pinned"`
 	TimeLimit _TimeLimit   `json:"limit,omitempty"`
+	CPULimit  _CPULimit    `json:"cpu,omitempty"`
 	Console   bool         `json:"console,omitempty"`
 }
 
@@ -80,6 +84,27 @@ type _Reply struct {
 	Failure *_Failure     `json:"failure,omitempty"`
 	Missing bool          `json:"missing,omitempty"`
 	Line    *_LineOnWire  `json:"line,omitempty"`
+	Usage   *_UsageOnWire `json:"usage,omitempty"`
+}
+
+type _UsageOnWire struct {
+	CPU  int64 `json:"cpu"`
+	Wall int64 `json:"wall"`
+}
+
+func (u *_UsageOnWire) reported() *Usage {
+	if u == nil {
+		return nil
+	}
+	var measured = u.measured()
+	return &measured
+}
+
+func (u *_UsageOnWire) measured() Usage {
+	if u == nil {
+		return Usage{}
+	}
+	return Usage{CPU: time.Duration(u.CPU), Wall: time.Duration(u.Wall)}
 }
 
 type _LineOnWire struct {

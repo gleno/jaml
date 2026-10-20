@@ -63,7 +63,7 @@ An expression you drop without ending its context is still forgotten: once the g
 - **A pinned order.** Code runs in the order the document is written, so scripts with state behave the same every time.
 - **Results are data.** Code must produce JSON data: scalars, lists, objects. Symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances (an array or object counts as data only with its plain prototype or none), functions inside data, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does. A field typed `*jaml.Expression` is not evaluated: it receives a view you resolve later.
-- **The world of an evaluation travels on the context.** Values, scripts, the clock, the random seed, the time limit and the console.
+- **The world of an evaluation travels on the context.** Values, scripts, the clock, the random seed, the time limits, the meter and the console.
 - **Thrown values as data.** What code threw is reachable as `*jaml.Thrown`, with its message and a JSON snapshot of the value.
 - **Three sandboxes, chosen up front.** A secure sandbox runs everything in one child process with a memory ceiling, and survives anything a document does. `MakeSecureSandbox` also protects the pieces of code of a `Resolve` from each other by freezing the JavaScript built-ins and the values, so no piece of code can change what another sees; `MakeSecureSandboxWithoutBuiltinsProtection` leaves both ordinary and is cheaper per `Resolve`. A trusted sandbox runs in your process, unprotected.
 - **Safe to share.** Sandboxes and expressions are safe for concurrent use from any number of goroutines.
@@ -252,6 +252,26 @@ ctx = jaml.WithTimeLimit(ctx, 100*time.Millisecond)
 
 jaml's own work on your data, binding a value, reading a result or a thrown value, stops within a few hundred values of the limit or of the context's end, in every sandbox, and never ends a child. In a secure sandbox the child keeps the clock, and a job still inside a built-in 250 ms after its limit ends the child the way a job stuck after cancel does: that job fails with `TimeLimit`, naming the piece of code that was running and quoting it as a trusted sandbox does (`$.check: ${…}: exceeded the time limit of 100ms and was still inside a built-in 250ms after it was told to stop`), and the other jobs of the child are replayed. In a trusted sandbox the clock starts when the job takes its slot, and a built-in that never returns to the interpreter runs on, as it does past a context's end.
 
+### CPU time limit
+
+```go
+ctx = jaml.WithCPULimit(ctx, 100*time.Millisecond)
+```
+
+`WithTimeLimit` counts wall time, so on a loaded host an innocent `Resolve` can run out of it while it waits for a core. `WithCPULimit` bounds the job's own time instead: the CPU time of the thread that runs it, over the same work as the time limit, from the moment the job starts running. Every job runs on an OS thread of its own for as long as it runs, so the time a sibling job, another process or the host's scheduling takes never counts. A `Resolve` that computes longer is interrupted and fails with `CPULimit`, an `EvaluationFailed` naming the path (`$.check: ${…}: exceeded the CPU time limit of 100ms`); a job still inside a built-in 250 ms after its budget ends a secure sandbox's child the way the time limit does, with the same message trailing `and was still inside a built-in 250ms after it was told to stop`. Setting it twice keeps the smaller limit; a limit that is not positive is an `InvalidInput` error from `Resolve`.
+
+The two limits are separate, each with its own cause, so set both: a CPU budget sized for the script, and a wall limit a few times larger as a backstop. A job that fails with `CPULimit` was running away; one that fails with `TimeLimit` but not `CPULimit` was starved, by the host or by its siblings, and deserves a retry rather than a bug report. `WithBuildCPULimit` is the same budget for making an expression and for compiling a `Resolve`'s scripts: a build that computes longer fails with `CPULimit` (`$: the build exceeded its CPU time limit of 100ms`), located at `$` like a build timeout, and a secure sandbox's child that is still compiling 250 ms later is ended as stuck; a trusted build returns at once while its compile step finishes in the background, as it does past `WithBuildTimeout`. A budget is checked at least every millisecond, so a job stops within about a millisecond of it, later only when the host is too loaded to run the check.
+
+The thread's clock is read with `clock_gettime`. On Linux the budget is enforced against it. On macOS the clock of another thread cannot be read without cgo, so there a CPU budget is enforced against the job's wall time, like `WithTimeLimit` with the `CPULimit` cause, and a loaded Mac can blame a script that was only starved; the time a `Resolve` reports (below) is still its thread's own CPU time. Elsewhere CPU time reads as zero and a budget counts wall time too.
+
+### Meter
+
+```go
+ctx = jaml.WithMeter(ctx, func(used jaml.Usage) { log.Printf("cpu %s wall %s", used.CPU, used.Wall) })
+```
+
+`WithMeter` reports what a `Resolve` used: `CPU`, the thread's own time, and `Wall`, the time from the moment the job started running until it finished or was stopped, measured where the job runs, so the wait for a slot, for a child to start and the transport of the request and the answer never count, nor does compiling its scripts. The sink is called once, before `Resolve` returns, for a job that ran: one that succeeded, one that threw, one that ran out of a limit or was cancelled while it ran. A call refused before it ran, with `InvalidInput`, `Closed` or a build failure, reports nothing, and so does a job whose child died under it, because the child took the numbers with it; a job replayed after a crash reports its replay only.
+
 ### Console
 
 ```go
@@ -350,6 +370,7 @@ func MakeTrustedSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox
 func WithMemoryLimit(bytes int64) SandboxOption        // secure only; 16 MiB to 1 TiB; default 256 MiB
 func WithMaxConcurrency(jobs int) SandboxOption        // at least 1; default GOMAXPROCS
 func WithBuildTimeout(timeout time.Duration) SandboxOption // positive; default 5s
+func WithBuildCPULimit(limit time.Duration) SandboxOption  // positive; default none; the build's and a Resolve's script compiles' own CPU time
 func WithScriptCacheLimit(bytes int64) SandboxOption  // positive; default an eighth of the memory limit, 32 MiB trusted
 func WithCallDepthLimit(calls int) SandboxOption       // 1 to 32768; default 4096; counts your calls only
 ```
@@ -362,7 +383,7 @@ func WithCallDepthLimit(calls int) SandboxOption       // 1 to 32768; default 40
 
 Protection, frozen built-ins and frozen values, keeps the pieces of code of one `Resolve` apart: none can change what a later one sees. Without it, a piece of code can change a built-in or a value for every piece of code that runs after it in the same `Resolve`, so key order can matter. Your process's safety is the same either way: the child process, its memory ceiling and its isolation do not depend on protection, a value's name stays read-only, and every `Resolve` starts in a fresh runtime, so nothing leaks from one `Resolve` to the next. Pick `MakeSecureSandbox` when the pieces of code of one document, or of several documents resolved together, come from sources that do not trust each other; the freeze costs about 0.65 ms per `Resolve` that runs code, and about 2 ms when it runs scripts. Protection does not keep a script apart from the document: a script runs before the freeze, so it may redefine any built-in (`Array.prototype.map`, `JSON.stringify`, `Object.prototype.admin`) for every piece of code of its `Resolve`. Give a script the trust you give the document itself.
 
-Every sandbox runs at most `WithMaxConcurrency` jobs at once, in arrival order; a job is making an expression or a `Resolve`. `WithBuildTimeout` bounds making itself, not the time a job waits for its slot; the context bounds both. A build whose context or timeout ends stops between YAML nodes and pieces of code, and the call returns at once with the cause. A build that finishes as its timeout ends keeps whichever came first, in every sandbox. A build that finishes after its context or its sandbox's context ended still fails with that cause; an expression is never handed back already closed. A bad option is an `InvalidExpression` error.
+Every sandbox runs at most `WithMaxConcurrency` jobs at once, in arrival order; a job is making an expression or a `Resolve`. `WithBuildTimeout` bounds making itself, not the time a job waits for its slot; the context bounds both. `WithBuildCPULimit` bounds the CPU time making spends, the way `WithCPULimit` does for a `Resolve`, and fails a build that computes past it with `CPULimit`. A build whose context or timeout ends stops between YAML nodes and pieces of code, and the call returns at once with the cause. A build that finishes as its timeout ends keeps whichever came first, in every sandbox. A build that finishes after its context or its sandbox's context ended still fails with that cause; an expression is never handed back already closed. A bad option is an `InvalidExpression` error.
 
 ### Trusted
 
@@ -419,6 +440,8 @@ func WithScript(ctx context.Context, source string) context.Context
 func WithFixedClock(ctx context.Context, time time.Time) context.Context
 func WithRandomSeed(ctx context.Context, seed uint64) context.Context
 func WithTimeLimit(ctx context.Context, limit time.Duration) context.Context
+func WithCPULimit(ctx context.Context, limit time.Duration) context.Context
+func WithMeter(ctx context.Context, sink func(Usage)) context.Context
 func WithConsole(ctx context.Context, sink func(Line)) context.Context
 
 func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
@@ -428,6 +451,7 @@ func WithSigil(sigil string) Option                  // MakeExpressionFromJaml o
 func WithMemoryLimit(bytes int64) SandboxOption
 func WithMaxConcurrency(jobs int) SandboxOption
 func WithBuildTimeout(timeout time.Duration) SandboxOption
+func WithBuildCPULimit(limit time.Duration) SandboxOption
 func WithScriptCacheLimit(bytes int64) SandboxOption
 func WithCallDepthLimit(calls int) SandboxOption
 
@@ -446,6 +470,11 @@ type Line struct {
 	Level Level // Log, Info, Warn, Error or Debug
 	Text  string
 }
+
+type Usage struct {
+	CPU  time.Duration // the thread's own time
+	Wall time.Duration // from the job's start to its end, where it ran
+}
 ```
 
 ### Errors
@@ -461,9 +490,10 @@ var (
 	Closed            // the expression's own context or its sandbox's has ended; the message says which
 	Unsupported       // a secure sandbox on a platform that cannot run one, or a child that is not a jaml evaluator
 	Unavailable       // a secure sandbox's evaluator could not be started, first or after a respawn (exec failure, start deadline, death before greeting, protocol version mismatch), or was killed from outside jaml while it replayed a job alone
-	InvalidInput      // Resolve refused what the call brought, before running it: a value or argument that is not JSON data, nests deeper than 4096, holds text that is not valid UTF-8 or a number beyond a 64-bit float (`1e400`), a value named like a JavaScript global or not in valid UTF-8, a time limit that is not positive, or a secure sandbox's request past its cap
+	InvalidInput      // Resolve refused what the call brought, before running it: a value or argument that is not JSON data, nests deeper than 4096, holds text that is not valid UTF-8 or a number beyond a 64-bit float (`1e400`), a value named like a JavaScript global or not in valid UTF-8, a time limit or a CPU time limit that is not positive, or a secure sandbox's request past its cap
 	MemoryLimit       // derives from EvaluationFailed: a secure sandbox's job ran out of memory
-	TimeLimit         // derives from EvaluationFailed: a Resolve ran longer than WithTimeLimit allows
+	TimeLimit         // derives from EvaluationFailed: a Resolve ran longer in wall time than WithTimeLimit allows
+	CPULimit          // derives from EvaluationFailed: a Resolve computed longer than WithCPULimit allows, or a build or a script compile longer than WithBuildCPULimit
 	CallDepthLimit    // derives from EvaluationFailed: JavaScript calls nested deeper than WithCallDepthLimit allows (4096 by default)
 	EvaluatorDied     // derives from EvaluationFailed: a secure sandbox's child crashed, not for memory and not killed from outside, again when its job was replayed alone
 )

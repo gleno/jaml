@@ -8,6 +8,7 @@ import (
 type _TrustedEngine struct {
 	gate         chan struct{}
 	buildTimeout time.Duration
+	buildCPU     _CPULimit
 	host         _Host
 }
 
@@ -17,7 +18,7 @@ type _LocalUnit struct {
 }
 
 func newTrusted(configured _SandboxSettings) *_TrustedEngine {
-	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, host: _Host{runtime: configured.runtime, scripts: newScriptCache(configured.trustedScriptBudget())}}
+	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, buildCPU: configured.buildCPULimit, host: _Host{runtime: configured.runtime, scripts: newScriptCache(configured.trustedScriptBudget())}}
 }
 
 func (e *_TrustedEngine) enter(ctx context.Context) error {
@@ -55,14 +56,18 @@ func (e *_TrustedEngine) raced(ctx context.Context, work func(bound context.Cont
 		return err
 	}
 	var race = raceBuild(ctx, e.buildTimeout)
-	go func() {
+	go onALockedThread(func() {
 		defer e.leave()
-		if err := work(race.bound); err != nil {
+		budgeted, release := e.buildCPU.enforce(race.bound, startMeter(), true)
+		defer release()
+		var unwatch = context.AfterFunc(budgeted, func() { race.record(_Refused{err: cancelled(budgeted)}) })
+		defer unwatch()
+		if err := work(budgeted); err != nil {
 			race.finish(_Refused{err: err})
 			return
 		}
 		race.finish(_Built{})
-	}()
+	})
 	if failed, isRefused := race.await().(_Refused); isRefused {
 		return failed.err
 	}
@@ -86,15 +91,25 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 		return _Refused{err: err}
 	}
 	defer u.engine.leave()
-	bounded, stop := written.ask.timeLimit.bound(ctx)
-	defer stop()
-	result, err := prepared.render(bounded, ask.console.speaker())
-	if err != nil {
-		return _Refused{err: err}
-	}
-	data, err := encodeResult(result)
-	if err != nil {
-		return _Refused{err: err}
-	}
-	return _Answered{data: data, skipped: result.skipped}
+	var served _Outcome
+	onALockedThread(func() {
+		var meter = startMeter()
+		bounded, stop := written.ask.timeLimit.bound(ctx)
+		defer stop()
+		budgeted, release := written.ask.cpuLimit.enforce(bounded, meter, false)
+		defer release()
+		result, err := prepared.render(budgeted, ask.console.speaker())
+		var used = meter.used()
+		if err != nil {
+			served = _Refused{err: err, used: &used}
+			return
+		}
+		data, err := encodeResult(result)
+		if err != nil {
+			served = _Refused{err: err, used: &used}
+			return
+		}
+		served = _Answered{data: data, skipped: result.skipped, used: used}
+	})
+	return served
 }

@@ -12,7 +12,7 @@ const answerSize = 16 << 20
 
 func sealedAnswer(t *testing.T, f _Frames, tree any) []byte {
 	t.Helper()
-	return f.answer(1, _Rendered{tree: tree})
+	return f.answer(1, _Rendered{tree: tree}, Usage{})
 }
 
 func TestAnAnswerIsWrittenOnceIntoItsFrame(t *testing.T) {
@@ -120,11 +120,11 @@ func TestAnAnswerFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 		if err != nil {
 			t.Fatalf("wireJSON(%#v): %v", value, err)
 		}
-		want, err := wireJSON(_Reply{Job: 42, Data: data, Skipped: [][]string{{"a", "\u2028"}, {}}})
+		want, err := wireJSON(_Reply{Job: 42, Data: data, Skipped: [][]string{{"a", "\u2028"}, {}}, Usage: &_UsageOnWire{CPU: 3, Wall: 7}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		expectEqual(t, string(f.answer(42, _Rendered{tree: value, skipped: [][]string{{"a", "\u2028"}, {}}})), string(want))
+		expectEqual(t, string(f.answer(42, _Rendered{tree: value, skipped: [][]string{{"a", "\u2028"}, {}}}, Usage{CPU: 3, Wall: 7})), string(want))
 	}
 }
 
@@ -177,10 +177,10 @@ func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
 
 func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 	var f = _Frames{limit: 1 << 10}
-	var overhead = len(`{"job":1,"data":"\u2028"}`)
+	var overhead = len(`{"job":1,"data":"\u2028","usage":{"cpu":0,"wall":0}}`)
 	var fitting = strings.Repeat("x", f.limit-overhead) + "\u2028"
-	expectEqual(t, len(f.answer(1, _Rendered{tree: fitting})), f.limit)
-	var refused = string(f.answer(1, _Rendered{tree: fitting + "x"}))
+	expectEqual(t, len(f.answer(1, _Rendered{tree: fitting}, Usage{})), f.limit)
+	var refused = string(f.answer(1, _Rendered{tree: fitting + "x"}, Usage{}))
 	if !strings.Contains(refused, "the answer is larger than 1024 bytes") {
 		t.Fatalf("a frame one byte past the cap was sent: %.80s", refused)
 	}

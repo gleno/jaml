@@ -50,7 +50,7 @@ var bombsPastTheCeiling = map[string]string{
 }
 
 func addressAllowance() int64 {
-	return addressGrowthPerLimit*ceilingTestLimit + addressSlack + addressPerThread*int64(goruntime.GOMAXPROCS(0))
+	return addressGrowthPerLimit*ceilingTestLimit + addressSlack + addressPerThread*int64(goruntime.GOMAXPROCS(0)+goruntime.GOMAXPROCS(0))
 }
 
 type _ChildPeaks struct {

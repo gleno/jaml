@@ -25,7 +25,7 @@ func startIsolated(lifetime context.Context, configured _SandboxSettings) (*_Iso
 	if err != nil {
 		return nil, err
 	}
-	var spec = _ChildSpec{lifetime: lifetime, limit: configured.memoryLimitOrDefault(), runtime: configured.runtime, scriptBudget: scriptBudget, startDeadline: evaluatorStartDeadline, buildTimeout: configured.buildTimeout}
+	var spec = _ChildSpec{lifetime: lifetime, limit: configured.memoryLimitOrDefault(), runtime: configured.runtime, scriptBudget: scriptBudget, startDeadline: evaluatorStartDeadline, buildTimeout: configured.buildTimeout, buildCPU: configured.buildCPULimit, jobs: configured.maxConcurrency}
 	first, err := startLife(spec)
 	if err != nil {
 		return nil, err

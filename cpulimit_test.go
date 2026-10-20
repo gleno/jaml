@@ -1,0 +1,308 @@
+package jaml
+
+import (
+	"context"
+	"errors"
+	goruntime "runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+const busyMillisecond = "busy: ${ (() => { let n = 0; for (let i = 0; i < 5e4; i++) { n += i % 7 } return n })() }\nquick: ${ 1 + 1 }\n"
+
+func TestARunPastItsCPULimitFailsWithCPULimit(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, spinning)
+		var started = time.Now()
+		var out any
+		var err = resolveInto(WithCPULimit(t.Context(), 100*time.Millisecond), &out, document.At("spin"))
+		expectError(t, err, CPULimit, "$.spin: ${(() => { while (true) {} })()}: exceeded the CPU time limit of 100ms: evaluation failed: expression error")
+		expectError(t, err, EvaluationFailed)
+		expectFailure(t, err, "$.spin", "exceeded the CPU time limit of 100ms")
+		for _, foreign := range []error{TimeLimit, context.DeadlineExceeded, context.Canceled} {
+			if errors.Is(err, foreign) {
+				t.Fatalf("a CPU time limit looked like %v: %v", foreign, err)
+			}
+		}
+		if waited := time.Since(started); waited > 2*time.Second {
+			t.Fatalf("a 100ms CPU time limit held its caller for %s", waited)
+		}
+		expectEqual(t, mustResolve[int](t, WithCPULimit(t.Context(), time.Second), document.At("quick")), 2)
+	})
+}
+
+func TestEachLimitKeepsItsOwnCause(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var spin = mustJaml(t, sb, spinning).At("spin")
+		var out any
+		var wallFirst = WithCPULimit(WithTimeLimit(t.Context(), 50*time.Millisecond), 10*time.Second)
+		var err = resolveInto(wallFirst, &out, spin)
+		expectError(t, err, TimeLimit, "exceeded the time limit of 50ms")
+		if errors.Is(err, CPULimit) {
+			t.Fatalf("a wall time limit was blamed on the CPU budget: %v", err)
+		}
+		var cpuFirst = WithCPULimit(WithTimeLimit(t.Context(), 10*time.Second), 50*time.Millisecond)
+		err = resolveInto(cpuFirst, &out, spin)
+		expectError(t, err, CPULimit, "exceeded the CPU time limit of 50ms")
+		if errors.Is(err, TimeLimit) {
+			t.Fatalf("a CPU budget was blamed on the wall time limit: %v", err)
+		}
+	})
+}
+
+func TestTheSmallestCPULimitWins(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var spin = mustJaml(t, sb, spinning).At("spin")
+		var out any
+		var inner = WithCPULimit(WithCPULimit(t.Context(), 50*time.Millisecond), time.Minute)
+		expectError(t, resolveInto(inner, &out, spin), CPULimit, "exceeded the CPU time limit of 50ms")
+		var outer = WithCPULimit(WithCPULimit(t.Context(), time.Minute), 60*time.Millisecond)
+		expectError(t, resolveInto(outer, &out, spin), CPULimit, "exceeded the CPU time limit of 60ms")
+	})
+}
+
+func TestANonPositiveCPULimitIsRefused(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var out any
+		var err = resolveInto(WithCPULimit(t.Context(), 0), &out, mustJaml(t, sb, spinning).At("quick"))
+		expectError(t, err, InvalidInput, "$: a CPU time limit must be positive, got 0s")
+	})
+}
+
+type _MeterLog struct {
+	mu   sync.Mutex
+	seen []Usage
+}
+
+func (l *_MeterLog) record(used Usage) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.seen = append(l.seen, used)
+}
+
+func (l *_MeterLog) only(t *testing.T) Usage {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.seen) != 1 {
+		t.Fatalf("the meter was called %d times, want once: %v", len(l.seen), l.seen)
+	}
+	return l.seen[0]
+}
+
+func (l *_MeterLog) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.seen)
+}
+
+func metered(t *testing.T, ctx context.Context) (context.Context, *_MeterLog) {
+	t.Helper()
+	var log = &_MeterLog{}
+	return WithMeter(ctx, log.record), log
+}
+
+func expectPlausible(t *testing.T, used Usage) {
+	t.Helper()
+	if used.Wall <= 0 || used.CPU < 0 {
+		t.Fatalf("implausible usage %+v", used)
+	}
+	if used.CPU > used.Wall+5*time.Millisecond {
+		t.Fatalf("a single thread used %s of CPU in %s of wall time", used.CPU, used.Wall)
+	}
+}
+
+func TestAResolveReportsTheTimeItUsed(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, busyMillisecond)
+		ctx, meter := metered(t, t.Context())
+		if got := mustResolve[int](t, ctx, document.At("busy")); got <= 0 {
+			t.Fatalf("busy produced %d", got)
+		}
+		var used = meter.only(t)
+		expectPlausible(t, used)
+		if goruntime.GOOS == "linux" || goruntime.GOOS == "darwin" {
+			if used.CPU < 100*time.Microsecond {
+				t.Fatalf("a job that loops 50000 times reported only %s of CPU", used.CPU)
+			}
+		}
+		ctx, meter = metered(t, t.Context())
+		expectEqual(t, mustResolve[int](t, ctx, document.At("quick")), 2)
+		expectPlausible(t, meter.only(t))
+	})
+}
+
+func TestAFailedResolveStillReportsTheTimeItUsed(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var spin = mustJaml(t, sb, spinning).At("spin")
+		ctx, meter := metered(t, WithCPULimit(t.Context(), 50*time.Millisecond))
+		var out any
+		expectError(t, resolveInto(ctx, &out, spin), CPULimit)
+		var used = meter.only(t)
+		expectPlausible(t, used)
+		if goruntime.GOOS == "linux" && used.CPU < 40*time.Millisecond {
+			t.Fatalf("a job stopped by a 50ms CPU budget reported only %s of CPU", used.CPU)
+		}
+		var thrower = mustExpression(t, sb, "(() => { throw new Error('boom') })()")
+		ctx, meter = metered(t, t.Context())
+		expectError(t, resolveInto(ctx, &out, thrower), EvaluationFailed, "boom")
+		expectPlausible(t, meter.only(t))
+	})
+}
+
+func TestAResolveRefusedBeforeRunningReportsNothing(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var quick = mustJaml(t, sb, spinning).At("quick")
+		ctx, meter := metered(t, WithCPULimit(t.Context(), 0))
+		var out any
+		expectError(t, resolveInto(ctx, &out, quick), InvalidInput)
+		ctx, meter2 := metered(t, t.Context())
+		expectError(t, resolveInto(ctx, &out, quick, make(chan int)), InvalidInput)
+		if meter.count()+meter2.count() != 0 {
+			t.Fatalf("a refused call reported usage: %v %v", meter.seen, meter2.seen)
+		}
+	})
+}
+
+func TestAWallLimitedJobWaitingForASlotReportsOnlyItsOwnTime(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, spinning)
+		var blocker = make(chan error, 1)
+		go func() {
+			var out any
+			blocker <- resolveInto(within(t, 300*time.Millisecond), &out, document.At("spin"))
+		}()
+		time.Sleep(100 * time.Millisecond)
+		ctx, meter := metered(t, WithCPULimit(t.Context(), 50*time.Millisecond))
+		expectEqual(t, mustResolve[int](t, ctx, document.At("quick")), 2)
+		if used := meter.only(t); used.Wall > 100*time.Millisecond {
+			t.Fatalf("waiting for a slot was reported as the job's own time: %+v", used)
+		}
+		expectError(t, <-blocker, EvaluationFailed, "deadline exceeded")
+	}, WithMaxConcurrency(1))
+}
+
+func TestAHostileBuildIsBoundedByTheBuildCPULimit(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var started = time.Now()
+		_, err := sb.MakeExpressionFromJaml(t.Context(), hostileText())
+		expectError(t, err, CPULimit, "$: the build exceeded its CPU time limit of 100ms")
+		if errors.Is(err, TimeLimit) || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a build past its CPU budget looked like a wall timeout: %v", err)
+		}
+		if waited := time.Since(started); waited > 3*time.Second {
+			t.Fatalf("a hostile build held construction for %s past its 100ms CPU budget", waited)
+		}
+		expectEqual(t, mustResolve[int](t, t.Context(), mustJaml(t, sb, "v: ${ 6 }\n").At("v")), 6)
+	}, WithBuildCPULimit(100*time.Millisecond))
+}
+
+func TestAHostileScriptCompileIsBoundedByTheBuildCPULimit(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var quick = mustJaml(t, sb, spinning).At("quick")
+		var hostile = "const v = [" + strings.Repeat("("+strings.Repeat("-1+", 4095)+"0),", 5) + "]"
+		var out any
+		var err = resolveInto(WithScript(t.Context(), hostile), &out, quick)
+		expectError(t, err, CPULimit, "the build exceeded its CPU time limit of 100ms")
+		expectEqual(t, mustResolve[int](t, t.Context(), quick), 2)
+	}, WithBuildCPULimit(100*time.Millisecond))
+}
+
+func TestANonPositiveBuildCPULimitIsRefused(t *testing.T) {
+	_, err := MakeTrustedSandbox(t.Context(), WithBuildCPULimit(0))
+	expectError(t, err, InvalidExpression, "build CPU time limit must be positive, got 0s")
+}
+
+func TestASiblingBurningCPUNeverChargesAnInnocentJob(t *testing.T) {
+	if !threadClockIsReadable() {
+		t.Skip("a CPU budget on this platform counts wall time")
+	}
+	var burners = 2 * goruntime.GOMAXPROCS(0)
+	var sb = mustIsolated(t, WithMaxConcurrency(burners+1))
+	var document = mustJaml(t, sb, busyMillisecond)
+	var spin = mustJaml(t, sb, spinning).At("spin")
+	var child = currentChild(t, sb)
+	var burned = make(chan error, burners)
+	for range burners {
+		go func() {
+			var out any
+			burned <- resolveInto(WithTimeLimit(t.Context(), time.Second), &out, spin)
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	var slowest Usage
+	for range 20 {
+		ctx, meter := metered(t, WithCPULimit(t.Context(), 20*time.Millisecond))
+		if _, err := Resolve[int](ctx, document.At("busy")); err != nil {
+			t.Fatalf("an innocent job beside %d CPU burners failed: %v", burners, err)
+		}
+		if used := meter.only(t); used.Wall > slowest.Wall {
+			slowest = used
+		}
+	}
+	t.Logf("the slowest innocent job used %+v beside %d burners", slowest, burners)
+	if slowest.CPU >= 20*time.Millisecond {
+		t.Fatalf("an innocent job was charged %s of CPU", slowest.CPU)
+	}
+	var burnersEnded = time.Now()
+	for range burners {
+		expectError(t, <-burned, TimeLimit)
+	}
+	t.Logf("the burners ended %s after they were due", time.Since(burnersEnded))
+	if !child.alive() {
+		t.Fatalf("the child died under the burners: %v", child.lost().cause)
+	}
+}
+
+func threadClockIsReadable() bool {
+	var readable bool
+	onALockedThread(func() {
+		_, readable = currentThreadClock().cpu()
+	})
+	return readable
+}
+
+func TestTheThreadClockFollowsTheLockedThread(t *testing.T) {
+	if !threadClockIsReadable() {
+		t.Skip("no cross-thread CPU clock on this platform")
+	}
+	var fromOutside = make(chan time.Duration, 1)
+	onALockedThread(func() {
+		var meter = startMeter()
+		var until = time.Now().Add(30 * time.Millisecond)
+		var n = 0
+		for time.Now().Before(until) {
+			n++
+		}
+		go func() { fromOutside <- meter.spent() }()
+		var outside = <-fromOutside
+		var own = meter.used().CPU
+		if n == 0 || own < 20*time.Millisecond || outside < 20*time.Millisecond {
+			t.Fatalf("30ms of spinning read as %s from its thread and %s from outside", own, outside)
+		}
+		if outside > own+5*time.Millisecond {
+			t.Fatalf("the clock read from outside, %s, ran ahead of the thread's own %s", outside, own)
+		}
+	})
+}
+
+func TestACPULimitArmsNothingWithoutALimit(t *testing.T) {
+	var meter = startMeter()
+	ctx, release := _CPULimit(0).enforce(t.Context(), meter, false)
+	defer release()
+	if ctx != t.Context() {
+		t.Fatal("no limit still wrapped the context")
+	}
+}
+
+func TestARunStuckInABuiltInPastItsCPULimitEndsTheChildAndFailsWithCPULimit(t *testing.T) {
+	var sb = mustIsolated(t)
+	var runaway = mustExpression(t, sb, "/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')")
+	var child = currentChild(t, sb)
+	var out any
+	var err = resolveInto(WithCPULimit(t.Context(), 50*time.Millisecond), &out, runaway)
+	expectError(t, err, CPULimit, "$: /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b'): exceeded the CPU time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
+	expectStuckAfterCancel(t, child)
+}

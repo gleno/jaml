@@ -40,7 +40,11 @@ func (e *Expression) decodeInto(ctx context.Context, destination any, args []any
 	if err != nil {
 		return err
 	}
-	var ask = _Ask{path: e.path, values: valuesOf(ctx), scripts: scriptsOf(ctx), args: args, skips: skips, timeLimit: timeLimit}
+	cpuLimit, err := cpuLimitOf(ctx)
+	if err != nil {
+		return err
+	}
+	var ask = _Ask{path: e.path, values: valuesOf(ctx), scripts: scriptsOf(ctx), args: args, skips: skips, timeLimit: timeLimit, cpuLimit: cpuLimit}
 	return e.held.answer(ctx, ask, func(settled _Answered) error {
 		if err := json.Unmarshal(settled.data, destination); err != nil {
 			return err

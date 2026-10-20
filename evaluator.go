@@ -38,7 +38,7 @@ func serveEvaluations(answers io.Writer) int {
 		return exitProtocolBroken
 	}
 	adoptTheHostsZone()
-	if err := confineTheAddressSpace(world.limit); err != nil {
+	if err := confineTheAddressSpace(world.limit, world.jobs); err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
 		return exitProtocolBroken
 	}
@@ -52,7 +52,7 @@ func serveEvaluations(answers io.Writer) int {
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
-	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
+	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, buildCPU: world.buildCPU, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	go watch.pulse(replies.beat)
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
@@ -66,6 +66,7 @@ func stuckAfterCancel(job uint64) {
 type _Evaluator struct {
 	host         _Host
 	buildTimeout time.Duration
+	buildCPU     _CPULimit
 	watch        *_HeapWatch
 	replies      *_ReplyWriter
 	jobs         *_JobTable
@@ -151,18 +152,27 @@ func (e *_Evaluator) accept(incoming _Request) error {
 }
 
 func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
-	var built _Servable
-	var err error
-	e.watch.during(func() { built, err = plan.build(ctx) })
-	switch {
-	case err != nil:
-		e.jobs.settle(job)
-		e.replies.write(e.replies.frames.failure(job, rootPlace, err))
-	case e.jobs.keep(job, built):
-		e.replies.write(e.builtFrame(job, built))
-	default:
-		e.replies.write(e.replies.frames.failure(job, rootPlace, cancelled(ctx)))
-	}
+	onALockedThread(func() {
+		budgeted, release := e.buildCPU.enforce(ctx, startMeter(), true)
+		defer release()
+		var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
+		defer unwatch()
+		var built _Servable
+		var err error
+		e.watch.during(func() { built, err = plan.build(budgeted) })
+		switch {
+		case err == nil && budgeted.Err() != nil:
+			e.jobs.settle(job)
+			e.replies.write(e.replies.frames.failure(job, rootPlace, cancelled(budgeted)))
+		case err != nil:
+			e.jobs.settle(job)
+			e.replies.write(e.replies.frames.failure(job, rootPlace, err))
+		case e.jobs.keep(job, built):
+			e.replies.write(e.builtFrame(job, built))
+		default:
+			e.replies.write(e.replies.frames.failure(job, rootPlace, cancelled(budgeted)))
+		}
+	})
 }
 
 func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
@@ -178,53 +188,76 @@ func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
 }
 
 func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {
-	var path = selectedPath(request.Path).String()
-	prepared, err := e.prepare(job, held, request)
-	if err != nil {
-		e.jobs.settle(job)
-		e.replies.write(e.replies.frames.failure(job, path, err))
-		return
-	}
-	var sealed []byte
-	e.watch.during(func() {
-		bounded, stop := request.TimeLimit.bound(ctx)
-		defer stop()
-		var unwatch = context.AfterFunc(bounded, func() { e.overran(job, prepared.spot, bounded) })
-		defer unwatch()
-		result, err := prepared.render(bounded, e.speaker(job, request.Console))
-		var told = e.jobs.settle(job)
-		switch {
-		case err != nil:
-			sealed = e.replies.frames.failure(job, path, err)
-		case told:
-			sealed = e.replies.frames.failure(job, path, cancelled(bounded))
-		default:
-			sealed = e.replies.frames.answer(job, result)
+	onALockedThread(func() {
+		var path = selectedPath(request.Path).String()
+		prepared, err := e.prepare(ctx, job, held, request)
+		if err != nil {
+			e.jobs.settle(job)
+			e.replies.write(e.replies.frames.failure(job, path, err))
+			return
 		}
+		var sealed []byte
+		e.watch.during(func() {
+			var meter = startMeter()
+			bounded, stop := request.TimeLimit.bound(ctx)
+			defer stop()
+			budgeted, release := request.CPULimit.enforce(bounded, meter, false)
+			defer release()
+			var unwatch = context.AfterFunc(budgeted, func() { e.overran(job, prepared.spot, budgeted) })
+			defer unwatch()
+			result, err := prepared.render(budgeted, e.speaker(job, request.Console))
+			var used = meter.used()
+			var told = e.jobs.settle(job)
+			switch {
+			case err != nil:
+				sealed = e.replies.frames.measuredFailure(job, path, err, used)
+			case told:
+				sealed = e.replies.frames.measuredFailure(job, path, cancelled(budgeted), used)
+			default:
+				sealed = e.replies.frames.answer(job, result, used)
+			}
+		})
+		e.replies.write(sealed)
 	})
-	e.replies.write(sealed)
 }
 
-func (e *_Evaluator) prepare(job uint64, held _Servable, request _Work) (_Prepared, error) {
+func (e *_Evaluator) prepare(ctx context.Context, job uint64, held _Servable, request _Work) (_Prepared, error) {
 	var overdue = fmt.Errorf("cancelled: %w", overdueBuild(e.buildTimeout))
 	var watch = time.AfterFunc(e.buildTimeout, func() {
 		e.jobs.overrun(job, func() { e.replies.write(e.replies.frames.failure(job, rootPlace, overdue)) })
 	})
+	budgeted, release := e.buildCPU.enforce(ctx, startMeter(), true)
+	defer release()
+	var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
+	defer unwatch()
 	prepared, err := held.prepare(request, e.host)
-	if !watch.Stop() {
+	switch {
+	case !watch.Stop():
 		return _Prepared{}, overdue
+	case budgeted.Err() != nil && ctx.Err() == nil:
+		return _Prepared{}, cancelled(budgeted)
 	}
 	return prepared, err
 }
 
-func (e *_Evaluator) overran(job uint64, spot *_Spot, bounded context.Context) {
-	var exhausted, overran = context.Cause(bounded).(_TimeExhausted)
+func (e *_Evaluator) overran(job uint64, spot *_Spot, budgeted context.Context) {
+	exhausted, overran := exhaustedCause(budgeted)
 	if !overran {
 		return
 	}
 	e.jobs.overrun(job, func() {
 		var stuck = spot.blame(fmt.Errorf("%w and was still inside a built-in %s after it was told to stop", exhausted, cancelGrace))
 		e.replies.write(e.replies.frames.failure(job, stuck.path, stuck))
+	})
+}
+
+func (e *_Evaluator) overranCompiling(job uint64, budgeted context.Context) {
+	exhausted, overran := exhaustedCause(budgeted)
+	if !overran {
+		return
+	}
+	e.jobs.overrun(job, func() {
+		e.replies.write(e.replies.frames.failure(job, rootPlace, fmt.Errorf("%w and was still compiling %s after it was told to stop", exhausted, cancelGrace)))
 	})
 }
 
@@ -312,7 +345,15 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 	if err != nil || buildTimeout < 1 {
 		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuildTime, os.Getenv(evaluatorBuildTime))
 	}
-	return _EvaluatorWorld{limit: limit, runtime: _Runtime{builtins: builtins, callDepth: callDepth}, scriptBudget: scriptBudget, buildTimeout: time.Duration(buildTimeout), nonce: nonce, parent: parent}, nil
+	buildCPU, err := strconv.ParseInt(os.Getenv(evaluatorBuildCPU), 10, 64)
+	if err != nil || buildCPU < 0 {
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuildCPU, os.Getenv(evaluatorBuildCPU))
+	}
+	jobs, err := strconv.Atoi(os.Getenv(evaluatorJobs))
+	if err != nil || jobs < 0 {
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorJobs, os.Getenv(evaluatorJobs))
+	}
+	return _EvaluatorWorld{limit: limit, runtime: _Runtime{builtins: builtins, callDepth: callDepth}, scriptBudget: scriptBudget, buildTimeout: time.Duration(buildTimeout), buildCPU: _CPULimit(buildCPU), jobs: jobs, nonce: nonce, parent: parent}, nil
 }
 
 type _HeapWatch struct {

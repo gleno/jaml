@@ -235,11 +235,11 @@ func wedged(verdict error) bool {
 func servedFrom(incoming _Reply) _Outcome {
 	switch {
 	case incoming.Failure != nil:
-		return _Refused{err: incoming.Failure.rebuild()}
+		return _Refused{err: incoming.Failure.rebuild(), used: incoming.Usage.reported()}
 	case incoming.Missing:
 		return _Refused{err: errMissing}
 	}
-	return _Answered{data: incoming.Data, skipped: incoming.Skipped}
+	return _Answered{data: incoming.Data, skipped: incoming.Skipped, used: incoming.Usage.measured()}
 }
 
 func (l *_Life) unsent(err error) _Outcome {

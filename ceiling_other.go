@@ -2,6 +2,6 @@
 
 package jaml
 
-func confineTheAddressSpace(_MemoryLimit) error {
+func confineTheAddressSpace(_MemoryLimit, int) error {
 	return nil
 }

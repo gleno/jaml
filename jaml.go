@@ -51,6 +51,7 @@ const (
 	timeExhausted
 	callDepthExhausted
 	evaluatorDeath
+	cpuExhausted
 )
 
 var causes = [...]_KindEntry{
@@ -58,6 +59,7 @@ var causes = [...]_KindEntry{
 	timeExhausted:      {"TimeLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the time limit")},
 	callDepthExhausted: {"CallDepthLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the call depth limit")},
 	evaluatorDeath:     {"EvaluatorDied", kinds[evaluationFailed].sentinel.WithMessage("evaluator died")},
+	cpuExhausted:       {"CPULimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the CPU time limit")},
 }
 
 var (
@@ -74,6 +76,7 @@ var (
 	TimeLimit         = causes[timeExhausted].sentinel
 	CallDepthLimit    = causes[callDepthExhausted].sentinel
 	EvaluatorDied     = causes[evaluatorDeath].sentinel
+	CPULimit          = causes[cpuExhausted].sentinel
 )
 
 func (k _Kind) sentinel() fault.Fault {
@@ -141,6 +144,7 @@ type _SandboxSettings struct {
 	memoryLimit      _MemoryLimit
 	maxConcurrency   int
 	buildTimeout     time.Duration
+	buildCPULimit    _CPULimit
 	scriptCacheLimit int64
 	runtime          _Runtime
 }
@@ -224,6 +228,16 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption {
 			return fail(invalidExpression, "build timeout must be positive, got %s", timeout)
 		}
 		s.buildTimeout = timeout
+		return nil
+	}
+}
+
+func WithBuildCPULimit(limit time.Duration) SandboxOption {
+	return func(s *_SandboxSettings) error {
+		if limit <= 0 {
+			return fail(invalidExpression, "build CPU time limit must be positive, got %s", limit)
+		}
+		s.buildCPULimit = _CPULimit(limit)
 		return nil
 	}
 }

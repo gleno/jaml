@@ -46,6 +46,8 @@ type _EvaluatorWorld struct {
 	runtime      _Runtime
 	scriptBudget int64
 	buildTimeout time.Duration
+	buildCPU     _CPULimit
+	jobs         int
 	nonce        string
 	parent       int
 	zone         []string
@@ -58,6 +60,8 @@ type _ChildSpec struct {
 	scriptBudget  int64
 	startDeadline time.Duration
 	buildTimeout  time.Duration
+	buildCPU      _CPULimit
+	jobs          int
 }
 
 type _Life struct {
@@ -124,7 +128,7 @@ func startFailure(err error) error {
 }
 
 func currentWorld(spec _ChildSpec) _EvaluatorWorld {
-	return _EvaluatorWorld{limit: spec.limit, runtime: spec.runtime, scriptBudget: spec.scriptBudget, buildTimeout: spec.buildTimeout, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
+	return _EvaluatorWorld{limit: spec.limit, runtime: spec.runtime, scriptBudget: spec.scriptBudget, buildTimeout: spec.buildTimeout, buildCPU: spec.buildCPU, jobs: spec.jobs, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
 }
 
 func zoneEnv() []string {
@@ -163,6 +167,8 @@ func (w _EvaluatorWorld) env() []string {
 		evaluatorCallDepth + "=" + strconv.Itoa(w.runtime.depth()),
 		evaluatorScripts + "=" + strconv.FormatInt(w.scriptBudget, 10),
 		evaluatorBuildTime + "=" + strconv.FormatInt(int64(w.buildTimeout), 10),
+		evaluatorBuildCPU + "=" + strconv.FormatInt(int64(w.buildCPU), 10),
+		evaluatorJobs + "=" + strconv.Itoa(w.jobs),
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),
 	}
@@ -459,11 +465,10 @@ func (s *_ReplyStream) read(target any) error {
 }
 
 func cancelled(ctx context.Context) error {
-	var cause = context.Cause(ctx)
-	if exhausted, overran := cause.(_TimeExhausted); overran {
+	if exhausted, overran := exhaustedCause(ctx); overran {
 		return exhausted
 	}
-	return fmt.Errorf("cancelled: %w", cause)
+	return fmt.Errorf("cancelled: %w", context.Cause(ctx))
 }
 
 func closeAll(files ...*os.File) {
