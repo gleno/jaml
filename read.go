@@ -16,7 +16,7 @@ import (
 const (
 	maxResultValues = 1 << 20
 	maxDataDepth    = 4096
-	notYAML         = ", which is not YAML data"
+	notData         = ", which is not data"
 )
 
 var (
@@ -189,12 +189,12 @@ func (r *_DataReader) read(value goja.Value, path *_DataPath) (any, error) {
 	case *goja.Object:
 		return r.readObject(typed, path)
 	case *goja.Symbol:
-		return r.stranger(path, "is a symbol"+notYAML, true)
+		return r.stranger(path, "is a symbol"+notData, true)
 	case goja.String:
 		if text, wellFormed := wellFormedText(typed); wellFormed {
 			return text, nil
 		}
-		return r.stranger(path, "is a string with an unpaired surrogate"+notYAML, false)
+		return r.stranger(path, "is a string with an unpaired surrogate"+notData, false)
 	}
 	return r.readPrimitive(value, path)
 }
@@ -208,20 +208,20 @@ func (r *_DataReader) readPrimitive(primitive goja.Value, path *_DataPath) (any,
 	case float64:
 		return r.readFloat(exported, path)
 	case *big.Int:
-		return r.stranger(path, "is a BigInt"+notYAML, false)
+		return r.stranger(path, "is a BigInt"+notData, false)
 	default:
-		return r.stranger(path, "is a value of no JavaScript type jaml knows"+notYAML, false)
+		return r.stranger(path, "is a value of no JavaScript type jaml knows"+notData, false)
 	}
 }
 
 func (r *_DataReader) readFloat(number float64, path *_DataPath) (any, error) {
 	switch {
 	case math.IsNaN(number):
-		return r.stranger(path, "is NaN"+notYAML, false)
+		return r.stranger(path, "is NaN"+notData, false)
 	case math.IsInf(number, 1):
-		return r.stranger(path, "is Infinity"+notYAML, false)
+		return r.stranger(path, "is Infinity"+notData, false)
 	case math.IsInf(number, -1):
-		return r.stranger(path, "is -Infinity"+notYAML, false)
+		return r.stranger(path, "is -Infinity"+notData, false)
 	case number == 0:
 		return float64(0), nil
 	default:
@@ -231,13 +231,13 @@ func (r *_DataReader) readFloat(number float64, path *_DataPath) (any, error) {
 
 func (r *_DataReader) readObject(object *goja.Object, path *_DataPath) (any, error) {
 	if object.ExportType() == proxyType {
-		return r.stranger(path, "is a proxy"+notYAML, false)
+		return r.stranger(path, "is a proxy"+notData, false)
 	}
 	if _, isFunction := goja.AssertFunction(object); isFunction {
-		return r.stranger(path, "is a function"+notYAML, true)
+		return r.stranger(path, "is a function"+notData, true)
 	}
 	if r.ancestors[object] {
-		return r.stranger(path, "is a cyclic reference"+notYAML, false)
+		return r.stranger(path, "is a cyclic reference"+notData, false)
 	}
 	if path.depth() >= maxDataDepth {
 		return r.stranger(path, nestsTooDeep, false)
@@ -261,7 +261,7 @@ func (r *_DataReader) refuseInstance(object *goja.Object, path *_DataPath) error
 	if err := r.attempt(path, func() { described = r.realm.describeInstance(object) }); err != nil {
 		return err
 	}
-	return fmt.Errorf("%s is %s%s", describeResultAt(path), described, notYAML)
+	return fmt.Errorf("%s is %s%s", describeResultAt(path), described, notData)
 }
 
 func (r *_DataReader) attempt(path *_DataPath, run func()) error {
@@ -347,7 +347,7 @@ func (r *_DataReader) keysOf(object *goja.Object, path *_DataPath) ([]string, er
 			keys = append(keys, key)
 			continue
 		}
-		if _, err := r.stranger(path, "has a key with an unpaired surrogate"+notYAML, true); err != nil {
+		if _, err := r.stranger(path, "has a key with an unpaired surrogate"+notData, true); err != nil {
 			return nil, err
 		}
 	}

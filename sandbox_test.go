@@ -111,7 +111,7 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 		fragments []string
 	}{
 		"endless thunks":       {source: "(() => { const f = () => f; return f })()", fragments: []string{"still a function after 16 calls"}},
-		"function in a list":   {source: "() => [() => 1]", call: true, fragments: []string{"result[0] is a function, which is not YAML data"}},
+		"function in a list":   {source: "() => [() => 1]", call: true, fragments: []string{"result[0] is a function, which is not data"}},
 		"nested function":      {source: "() => ({f: () => 1})", call: true, fragments: []string{"result.f is a function"}},
 		"argument not data":    {source: "x => x", call: true, args: []any{func() {}}, fragments: []string{"binding arguments: argument 1 is not JSON data"}},
 		"argument too deep":    {source: "x => 1", call: true, args: []any{1, nestedVar(4097)}, fragments: []string{"binding arguments: argument 2 nests deeper than 4096"}},

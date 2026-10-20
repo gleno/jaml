@@ -12,7 +12,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 			"nested func":           {"${ [1, {f() {}}] }", []string{"result[1].f is a function"}},
 			"symbol":                {"${ Symbol('s') }", []string{"result is a symbol"}},
 			"nested symbol":         {"${ {s: Symbol.iterator} }", []string{"result.s is a symbol"}},
-			"bigint":                {"${ 10n }", []string{"result is a BigInt, which is not YAML data"}},
+			"bigint":                {"${ 10n }", []string{"result is a BigInt, which is not data"}},
 			"nan":                   {"${ 0/0 }", []string{"result is NaN"}},
 			"infinity":              {"${ 1/0 }", []string{"result is Infinity"}},
 			"neg infinity":          {"${ [-1/0] }", []string{"result[0] is -Infinity"}},
@@ -29,7 +29,7 @@ func TestResultsMustBeYAMLData(t *testing.T) {
 			"boxed":                 {"${ new String('s') }", []string{"result is an instance of String"}},
 			"typed array":           {"${ new Uint8Array(2) }", []string{"result is a"}},
 			"arguments":             {"${ (function() { return arguments })(1) }", []string{"result is an instance of Arguments"}},
-			"array subclass":        {"${ (() => { class Stack extends Array {}; const s = new Stack(); s.push(1); return s })() }", []string{"result is an instance of Stack, which is not YAML data"}},
+			"array subclass":        {"${ (() => { class Stack extends Array {}; const s = new Stack(); s.push(1); return s })() }", []string{"result is an instance of Stack, which is not data"}},
 			"nested array subclass": {"${ {list: (class Stack extends Array {}).of(1, 2)} }", []string{"result.list is an instance of Stack"}},
 			"array prototype":       {"${ Object.setPrototypeOf([1, , 3], { get 1() { return 'from proto' }, __proto__: Array.prototype }) }", []string{"result is an array with a custom prototype"}},
 		}
@@ -124,9 +124,9 @@ func TestProxiesAreRefusedBeforeAnyTrapRuns(t *testing.T) {
 	var cases = map[string]struct {
 		source, refused string
 	}{
-		"over a list":     {"new Proxy([1], {})", "result is a proxy, which is not YAML data"},
-		"over an object":  {"new Proxy({a: 1}, {})", "result is a proxy, which is not YAML data"},
-		"over a function": {"[new Proxy(() => 1, {})]", "result[0] is a proxy, which is not YAML data"},
+		"over a list":     {"new Proxy([1], {})", "result is a proxy, which is not data"},
+		"over an object":  {"new Proxy({a: 1}, {})", "result is a proxy, which is not data"},
+		"over a function": {"[new Proxy(() => 1, {})]", "result[0] is a proxy, which is not data"},
 		"revoked":         {"(() => { const p = Proxy.revocable({}, {}); p.revoke(); return p.proxy })()", "result is a proxy"},
 		"nested":          {"({p: [new Proxy({}, {})]})", "result.p[0] is a proxy"},
 		"trapped":         {"new Proxy({}, {ownKeys() { throw new Error('trap ran') }, getPrototypeOf() { throw new Error('trap ran') }})", "result is a proxy"},
@@ -142,10 +142,10 @@ func TestUnpairedSurrogatesAreRefused(t *testing.T) {
 	var cases = map[string]struct {
 		source, refused string
 	}{
-		"a lone high value":     {`'\\uD800'`, "result is a string with an unpaired surrogate, which is not YAML data"},
+		"a lone high value":     {`'\\uD800'`, "result is a string with an unpaired surrogate, which is not data"},
 		"a lone low value":      {`['ok', 'x\\uDC00y']`, "result[1] is a string with an unpaired surrogate"},
 		"a sliced pair":         {`({s: '😀'.slice(0, 1)})`, "result.s is a string with an unpaired surrogate"},
-		"a lone key":            {`({o: {'\\uD800': 1, ok: 2}})`, "result.o has a key with an unpaired surrogate, which is not YAML data"},
+		"a lone key":            {`({o: {'\\uD800': 1, ok: 2}})`, "result.o has a key with an unpaired surrogate, which is not data"},
 		"two keys that collide": {`({'\\uD800': 1, '\\uD801': 2})`, "result has a key with an unpaired surrogate"},
 	}
 	for name, c := range cases {

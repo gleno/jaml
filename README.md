@@ -210,6 +210,17 @@ total, err := jaml.Resolve[int](jaml.WithValues(ctx, map[string]any{"a": 1, "b":
 check, err := sandbox.MakeExpression(specCtx, source, jaml.AsFunction())
 ```
 
+`MakeExpression` takes bare code. When you hold value code as text, `${` and `}` included, as a YAML value would hold it, let jaml find where the code ends: marshal it into a one-key document and resolve that key. jaml's own scan decides where the code closes, so braces in strings, regex literals and comments never end it:
+
+```go
+written, err := yaml.Marshal(map[string]string{"v": "${p => /}/.test(p)}"})
+document, err := sandbox.MakeExpressionFromJaml(appCtx, string(written))
+check := document.At("v")
+matched, err := jaml.Resolve[bool](ctx, check, "a}b") // true
+```
+
+A text that is not one piece of value code is refused the way a document refuses it, located at `$.v`.
+
 `jaml.AsFunction()` makes `MakeExpression` accept only a function literal: an arrow function or a function expression, named or not, optionally in parentheses. Anything else is an `InvalidExpression` error, decided on the parsed syntax alone, so nothing is evaluated and the check costs no more than compiling: an identifier bound to a function (`parseInt`), a call (`(() => f)()`), an object, a class, or a sequence (`x => x, 1`) is "not a function literal". Async functions and generators are refused too, because what they return is a promise or an iterator, never data. Every sandbox gives the same answer. `MakeExpressionFromJaml` refuses the option with `InvalidExpression`.
 
 ### Sigil

@@ -38,7 +38,7 @@ func TestAFailureCarriesThePathAndTheReasonAlone(t *testing.T) {
 
 		expectFailure(t, resolveInto(t.Context(), &out, document.At("a", "c")), "$.a.c", "result is undefined, which strict undefined coercion refuses")
 		expectFailure(t, resolveInto(t.Context(), &out, document.At("a", "nothing")), "$.a", `has no key "nothing"`)
-		expectFailure(t, resolveInto(t.Context(), &out, mustExpression(t, sb, "r => r / 0"), 1), "$", "result is Infinity"+notYAML)
+		expectFailure(t, resolveInto(t.Context(), &out, mustExpression(t, sb, "r => r / 0"), 1), "$", "result is Infinity"+notData)
 
 		_, err = sb.MakeExpression(t.Context(), "1 +", AsFunction())
 		expectFailure(t, err, "$", "syntax error at the end of the expression: Unexpected end of input")
