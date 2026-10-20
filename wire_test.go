@@ -163,24 +163,37 @@ func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 	var panicked = &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = panicked.Write([]byte(pressureMarker + "\npanic: boom\n\ngoroutine 1 [running]:\n"))
 	var silent = &_HeadBuffer{limit: stderrHeadBytes}
+	var refusedMapping = &_HeadBuffer{limit: stderrHeadBytes}
+	_, _ = refusedMapping.Write([]byte("fatal error: runtime: out of memory\n\nruntime stack:\n"))
+	var refusedReservation = &_HeadBuffer{limit: stderrHeadBytes}
+	_, _ = refusedReservation.Write([]byte("runtime: out of memory: cannot allocate 34359738368-byte block (3866624 in use)\nfatal error: out of memory\n\ngoroutine 1 [running]:\n"))
+	var refusedMetadata = &_HeadBuffer{limit: stderrHeadBytes}
+	_, _ = refusedMetadata.Write([]byte("fatal error: out of memory allocating heap arena metadata\n"))
+	var refusedThread = &_HeadBuffer{limit: stderrHeadBytes}
+	_, _ = refusedThread.Write([]byte("runtime/cgo: pthread_create failed: Resource temporarily unavailable\nSIGABRT: abort\nPC=0x0 m=3 sigcode=18446744073709551610\n"))
 	var cases = map[string]struct {
 		ending  _Ending
 		remains _Remains
 		memory  bool
 		want    string
 	}{
-		"an exit 86 beats our kill":           {_Collected{state: exited(t, "exit 86").ProcessState}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
-		"a panic beats our kill":              {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: panicked, killCause: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
-		"our kill names its reason":           {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
-		"a foreign kill under pressure":       {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
-		"a foreign kill without pressure":     {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
-		"a plain exit names its status":       {_Collected{state: exited(t, "exit 3").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},
-		"a pressure marker is not a reason":   {_Collected{state: exited(t, "exit 5").ProcessState}, _Remains{stderr: marked, limit: 64 << 20}, false, "evaluator died (exit status 5)"},
-		"an uncollected exit names its wait":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator ended but its exit could not be collected: no child processes"},
-		"an uncollected exit after our kill":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
-		"an uncollected exit keeps its panic": {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: panicked, limit: 64 << 20}, false, "could not be collected (no child processes): panic: boom"},
-		"an uncollected exit under pressure":  {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
-		"an exit 89 is stuck after cancel":    {_Collected{state: exited(t, "exit 89").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "a job stuck after cancel was still inside a built-in 250ms after it was told to stop"},
+		"an exit 86 beats our kill":                  {_Collected{state: exited(t, "exit 86").ProcessState}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes"},
+		"a panic beats our kill":                     {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: panicked, killCause: ours, limit: 64 << 20}, false, "evaluator died (exit status 2): panic: boom"},
+		"our kill names its reason":                  {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
+		"a foreign kill under pressure":              {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
+		"a foreign kill without pressure":            {_Collected{state: exited(t, "kill -9 $$").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator died (signal: killed): killed from outside jaml"},
+		"a plain exit names its status":              {_Collected{state: exited(t, "exit 3").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator died (exit status 3)"},
+		"a pressure marker is not a reason":          {_Collected{state: exited(t, "exit 5").ProcessState}, _Remains{stderr: marked, limit: 64 << 20}, false, "evaluator died (exit status 5)"},
+		"an uncollected exit names its wait":         {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, limit: 64 << 20}, false, "evaluator ended but its exit could not be collected: no child processes"},
+		"an uncollected exit after our kill":         {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: silent, killCause: ours, limit: 64 << 20}, false, ours.Error()},
+		"an uncollected exit keeps its panic":        {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: panicked, limit: 64 << 20}, false, "could not be collected (no child processes): panic: boom"},
+		"an uncollected exit under pressure":         {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
+		"a refused mapping is the memory limit":      {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedMapping, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes: evaluator died (exit status 2): fatal error: runtime: out of memory"},
+		"a refused reservation is the memory limit":  {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedReservation, limit: 64 << 20}, true, "evaluator died (exit status 2): fatal error: out of memory"},
+		"refused metadata is the memory limit":       {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedMetadata, limit: 64 << 20}, true, "out of memory allocating heap arena metadata"},
+		"an uncollected refusal is the memory limit": {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: refusedReservation, limit: 64 << 20}, true, "could not be collected (no child processes): fatal error: out of memory"},
+		"a refused thread is the memory limit":       {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedThread, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes: evaluator died (exit status 2): runtime/cgo: pthread_create failed"},
+		"an exit 89 is stuck after cancel":           {_Collected{state: exited(t, "exit 89").ProcessState}, _Remains{stderr: silent, limit: 64 << 20}, false, "a job stuck after cancel was still inside a built-in 250ms after it was told to stop"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

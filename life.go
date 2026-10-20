@@ -22,6 +22,8 @@ import (
 const (
 	stderrHeadBytes        = 4096
 	runtimeOutOfMemory     = "fatal error: runtime: out of memory"
+	heapOutOfMemory        = "fatal error: out of memory"
+	threadOutOfMemory      = "runtime/cgo: pthread_create failed: Resource temporarily unavailable"
 	pressureMarker         = "jaml evaluator: the live heap passed three quarters of its ceiling"
 	cancelGrace            = 250 * time.Millisecond
 	backstopSilence        = 20 * cancelGrace
@@ -344,8 +346,8 @@ func (c _Collected) verdict(r _Remains) error {
 		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", r.limit))
 	case c.state.ExitCode() == exitStuckAfterCancel:
 		return fmt.Errorf("evaluator exited (%s): a job stuck after cancel was still inside a built-in %s after it was told to stop", c.state, cancelGrace)
-	case reason == runtimeOutOfMemory:
-		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s): %s", c.state, reason))
+	case refusedAnAllocation(reason):
+		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes: evaluator died (%s): %s", r.limit, c.state, reason))
 	case killedOutright(c.state) && r.killCause != nil:
 		return r.killCause
 	case killedOutright(c.state) && r.stderr.holds(pressureMarker):
@@ -361,7 +363,7 @@ func (c _Collected) verdict(r _Remains) error {
 func (u _Uncollected) verdict(r _Remains) error {
 	var reason = r.stderr.reason()
 	switch {
-	case reason == runtimeOutOfMemory:
+	case refusedAnAllocation(reason):
 		return _MemoryExhausted(fmt.Sprintf("evaluator ended but its exit could not be collected (%v): %s", u.waited, reason))
 	case r.killCause != nil:
 		return r.killCause
@@ -371,6 +373,10 @@ func (u _Uncollected) verdict(r _Remains) error {
 		return _MemoryExhausted(fmt.Sprintf("evaluator ended near the memory limit of %d bytes but its exit could not be collected: %v", r.limit, u.waited))
 	}
 	return fmt.Errorf("evaluator ended but its exit could not be collected: %w", u.waited)
+}
+
+func refusedAnAllocation(reason string) bool {
+	return reason == runtimeOutOfMemory || reason == threadOutOfMemory || strings.HasPrefix(reason, heapOutOfMemory)
 }
 
 type _OutsideDeath string

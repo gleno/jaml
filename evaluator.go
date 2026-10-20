@@ -38,6 +38,10 @@ func serveEvaluations(answers io.Writer) int {
 		return exitProtocolBroken
 	}
 	adoptTheHostsZone()
+	if err := confineTheAddressSpace(world.limit); err != nil {
+		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
+		return exitProtocolBroken
+	}
 	var watch = watchTheHeap(world)
 	if watch.orphaned() {
 		return exitOrphaned

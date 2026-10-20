@@ -71,7 +71,7 @@ func TestATrustedSandboxIsNeverUnavailable(t *testing.T) {
 }
 
 func TestAMemoryBombIsAMemoryLimit(t *testing.T) {
-	var document = mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ 'x'.repeat(1e9).length }\"\n")
+	var document = mustJaml(t, mustIsolated(t, WithMemoryLimit(64<<20)), "v: \"${ (() => { const a = []; for (;;) a.push({k: a.length}) })() }\"\n")
 	var out any
 	var err = resolveInto(within(t, 20*time.Second), &out, document.At("v"))
 	expectError(t, err, MemoryLimit, "$.v: exceeded the memory limit of 67108864 bytes: evaluation failed: expression error")
