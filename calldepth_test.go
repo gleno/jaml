@@ -43,3 +43,44 @@ func TestACallDepthLimitOutOfRangeIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestACallDepthLimitOfOneStillRunsACall(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		expectEqual(t, mustResolve[int](t, t.Context(), mustExpression(t, sb, "1")), 1)
+	}, WithCallDepthLimit(1))
+}
+
+func TestACallDepthLimitOfThreeRefusesRecursion(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var out any
+		var err = resolveInto(t.Context(), &out, mustExpression(t, sb, "(f => f(f))(f => f(f))"))
+		expectError(t, err, EvaluationFailed, "$: ", "exceeded the maximum call depth of 3")
+	}, WithCallDepthLimit(3))
+}
+
+func TestProtectionCostsNoCallDepth(t *testing.T) {
+	var endings = map[string]string{"push": "[].push(1)", "sort": "[2, 1].sort((a, b) => a - b)", "read": "({}).toString"}
+	for name, ending := range endings {
+		t.Run(name, func(t *testing.T) {
+			var reached = map[string]int{}
+			for _, kind := range allSandboxKinds {
+				var sb = mustSandbox(t, kind, WithCallDepthLimit(50))
+				reached[kind.name] = deepestCall(t, mustExpression(t, sb, "(function f(k) { return k === 0 ? ("+ending+") : f(k - 1) })(depth)"))
+			}
+			expectEqual(t, reached, map[string]int{trustedKind.name: reached[trustedKind.name], isolatedKind.name: reached[trustedKind.name], unprotectedKind.name: reached[trustedKind.name]})
+		})
+	}
+}
+
+func deepestCall(t *testing.T, expression *Expression) int {
+	t.Helper()
+	for depth := range 60 {
+		var out any
+		if err := resolveInto(withValues(t, map[string]any{"depth": depth}), &out, expression); err != nil {
+			expectError(t, err, EvaluationFailed, "exceeded the maximum call depth of 50")
+			return depth - 1
+		}
+	}
+	t.Fatal("no call reached the limit of 50")
+	return 0
+}

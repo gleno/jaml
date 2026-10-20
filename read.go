@@ -29,6 +29,7 @@ type _Undefined struct{}
 type _Realm struct {
 	vm              *goja.Runtime
 	runtime         _Runtime
+	protection      _Protection
 	objectPrototype *goja.Object
 	arrayPrototype  *goja.Object
 	ownKeys         goja.Callable
@@ -36,12 +37,16 @@ type _Realm struct {
 	parse           goja.Callable
 }
 
-func captureRealm(vm *goja.Runtime, runtime _Runtime) _Realm {
+func captureRealm(vm *goja.Runtime, runtime _Runtime) (_Realm, error) {
+	protection, err := runtime.protect(vm)
+	if err != nil {
+		return _Realm{}, err
+	}
 	var object = vm.Get("Object").ToObject(vm)
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
 	freeze, _ := goja.AssertFunction(object.Get("freeze"))
 	var arrayPrototype = vm.Get("Array").ToObject(vm).Get("prototype").ToObject(vm)
-	return _Realm{vm: vm, runtime: runtime, objectPrototype: object.Get("prototype").ToObject(vm), arrayPrototype: arrayPrototype, ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}
+	return _Realm{vm: vm, runtime: runtime, protection: protection, objectPrototype: object.Get("prototype").ToObject(vm), arrayPrototype: arrayPrototype, ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}, nil
 }
 
 type _Native struct {

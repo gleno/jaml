@@ -20,18 +20,19 @@ const (
 
 const (
 	expressionFile = "jaml:expression"
-	freezerFile    = "jaml:freezer"
-	chartFile      = "jaml:chart"
 )
 
 var engineWriteRefusal = regexp.MustCompile(`^(|Cannot assign to read only property '.*'|Cannot add property .*, object is not extensible|Cannot set property .*, object is not extensible|Cannot delete property '.*' of .*|length is not writable|.* is not extensible)$`)
 
 func (r _Realm) explainWrite(compiled _Expression, err error) error {
 	var exception *goja.Exception
-	if !r.runtime.protected() || !errors.As(err, &exception) || !compiled.writesWhere(exception) || !r.refusesWrite(exception.Value()) {
+	if !errors.As(err, &exception) || !compiled.writesWhere(exception) || !r.refusesWrite(exception.Value()) {
 		return err
 	}
-	return &Thrown{Message: "TypeError: " + readOnlyRefusal, Value: r.snapshot(exception.Value())}
+	if refused := r.protection.refuseWrite(r, exception.Value()); refused != nil {
+		return refused
+	}
+	return err
 }
 
 func (r _Realm) refusesWrite(thrown goja.Value) bool {

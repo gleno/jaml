@@ -68,10 +68,13 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	vm.SetMaxCallStackSize(plan.runtime.depth())
 	vm.SetTimeSource(plan.pinned.now)
 	vm.SetRandSource(plan.pinned.random())
-	var opened = &_Session{ctx: ctx, realm: captureRealm(vm, plan.runtime)}
-	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
-	settle, err := opened.builtinsSettler(plan)
+	realm, err := captureRealm(vm, plan.runtime)
 	if err != nil {
+		return nil, fail(EvaluationFailed, "%w", err)
+	}
+	var opened = &_Session{ctx: ctx, realm: realm}
+	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
+	if err := opened.enter(realm.protection.guard); err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "%w", err)
 	}
@@ -83,7 +86,7 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 		opened.close()
 		return nil, err
 	}
-	if err := opened.enter(settle); err != nil {
+	if err := opened.enter(func(r _Realm) error { return r.protection.freeze(r, plan.survey()) }); err != nil {
 		opened.close()
 		return nil, fail(EvaluationFailed, "%w", err)
 	}
@@ -145,7 +148,7 @@ func (r _Realm) bindValue(name string, value _Datum) error {
 		return bound
 	}}.on(r.vm)
 	var refuse = _Native{name: "set " + name, length: 1, call: func(goja.FunctionCall) goja.Value {
-		panic(r.vm.NewTypeError(r.runtime.readOnlyRefusal()))
+		panic(r.vm.NewTypeError(r.protection.refusal()))
 	}}.on(r.vm)
 	for _, accessor := range []goja.Value{read, refuse} {
 		if _, err := r.freeze(goja.Undefined(), accessor); err != nil {
@@ -160,8 +163,8 @@ func (r _Realm) bindValue(name string, value _Datum) error {
 
 func (r _Realm) thaw(shown string, value _Datum) goja.Value {
 	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(value.text()))
-	if err == nil && r.runtime.protected() {
-		err = r.deepFreeze(parsed)
+	if err == nil {
+		err = r.protection.settle(r, parsed)
 	}
 	var exception *goja.Exception
 	switch {

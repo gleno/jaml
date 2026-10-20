@@ -1,9 +1,6 @@
 package jaml
 
-import (
-	"context"
-	"testing"
-)
+import "testing"
 
 const builtInWrites = `[() => { Array.prototype.admin = true }, () => { Function.prototype.call = () => 'hijacked' }, () => { Math = {} }].map((write) => { try { write(); return 'written' } catch (e) { return e.name } })`
 
@@ -32,19 +29,12 @@ func TestNoBuiltInChangeReachesTheNextResolve(t *testing.T) {
 	})
 }
 
-func TestATrustedResolveDoesNotFreezeTheBuiltIns(t *testing.T) {
-	var frozen = testing.AllocsPerRun(10, func() {
-		opened, err := openSession(context.Background(), _SessionPlan{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		opened.close()
-	})
-	var expression = mustExpression(t, mustSandbox(t, trustedKind), "[1, 2].map((n) => n + 1).length")
-	var resolved = testing.AllocsPerRun(10, func() {
+func TestAnUnprotectedResolveRunsNoProtection(t *testing.T) {
+	var expression = mustExpression(t, mustSandbox(t, trustedKind), "1 + 1")
+	var resolved = testing.AllocsPerRun(20, func() {
 		mustResolve[int](t, t.Context(), expression)
 	})
-	if resolved*2 > frozen {
-		t.Fatalf("a trusted Resolve allocated %v times, against %v for opening a session that freezes the built-ins", resolved, frozen)
+	if resolved > 400 {
+		t.Fatalf("a trusted Resolve of 1 + 1 allocated %v times", resolved)
 	}
 }

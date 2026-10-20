@@ -149,9 +149,11 @@ func TestAScriptShadowingDescriptorFieldsCannotDefeatTheFreeze(t *testing.T) {
 }
 
 func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
-	var realm = captureRealm(goja.New(), _Runtime{})
-	settle, err := realm.builtinsSettler(_SessionPlan{})
+	realm, err := captureRealm(goja.New(), _Runtime{builtins: frozenBuiltins})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := realm.protection.guard(realm); err != nil {
 		t.Fatal(err)
 	}
 	var getter = _Native{name: "get bound", call: func(goja.FunctionCall) goja.Value { return goja.Undefined() }}.on(realm.vm)
@@ -159,7 +161,7 @@ func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
 	if err := realm.vm.GlobalObject().DefineAccessorProperty("bound", getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
 		t.Fatal(err)
 	}
-	if err := settle(realm); err != nil {
+	if err := realm.protection.freeze(realm, replayTheChart); err != nil {
 		t.Fatal(err)
 	}
 	loose, err := realm.vm.RunString(intrinsicsCensus)
