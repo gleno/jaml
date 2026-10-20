@@ -258,7 +258,7 @@ const intrinsicsFreezer = `(() => {
 		}, new Seen());
 		return "(r)=>{const g=Object.getOwnPropertyDescriptor,p=Object.getPrototypeOf,f=Object.freeze,k=(o,n)=>Reflect.ownKeys(o)[n],o=[];" + routes + "return o;}";
 	};
-	return { freeze: freezeAll, chart: chartOf, guard: (refusal) => guard(refuserOf(refusal)) };
+	return { freeze: freezeAll, chart: chartOf };
 })()`
 
 var freezerProgram = sync.OnceValue(func() *goja.Program {
@@ -266,7 +266,7 @@ var freezerProgram = sync.OnceValue(func() *goja.Program {
 })
 
 var pristineChart = sync.OnceValues(func() (*goja.Program, error) {
-	var realm = captureRealm(goja.New(), defaultCallDepthLimit)
+	var realm = captureRealm(goja.New(), _Runtime{})
 	made, err := realm.vm.RunProgram(freezerProgram())
 	if err != nil {
 		return nil, err
@@ -288,19 +288,14 @@ type _Freezer struct {
 	chart  goja.Value
 }
 
-type _MethodGuard struct {
-	guard goja.Callable
-}
-
 func (r _Realm) builtinsSettler(plan _SessionPlan) (func(_Realm) error, error) {
 	made, err := r.vm.RunProgram(freezerProgram())
 	if err != nil {
 		return nil, fmt.Errorf("preparing to settle the built-ins: %w", r.explain(err))
 	}
 	var exports = made.ToObject(r.vm)
-	if plan.runtime.builtins == mutableBuiltins {
-		guard, _ := goja.AssertFunction(exports.Get("guard"))
-		return _MethodGuard{guard: guard}.apply, nil
+	if !plan.runtime.protected() {
+		return unguarded, nil
 	}
 	freeze, _ := goja.AssertFunction(exports.Get("freeze"))
 	if len(plan.scripts) > 0 {
@@ -324,10 +319,7 @@ func (f _Freezer) apply(r _Realm) error {
 	return nil
 }
 
-func (g _MethodGuard) apply(r _Realm) error {
-	if _, err := g.guard(goja.Undefined(), r.vm.ToValue(readOnlyRefusal)); err != nil {
-		return fmt.Errorf("guarding the built-in methods: %w", r.explain(err))
-	}
+func unguarded(_Realm) error {
 	return nil
 }
 

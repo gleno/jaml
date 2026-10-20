@@ -179,19 +179,23 @@ func TestValuesMergeByNameAndAreCopiedWhenBound(t *testing.T) {
 }
 
 func TestEveryLeafSeesTheValuesAsBound(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	eachProtection(t, func(t *testing.T, sb *Sandbox, protected bool) {
 		var document = mustJaml(t, sb, `
 replace: ${ (() => { try { user = 1 } catch (e) { return e.name } })() }
 remove: ${ (() => { try { delete globalThis.user } catch (e) { return e.name } })() }
-deep: ${ (() => { try { user.tags.push('x') } catch (e) { return e.name } })() }
+deep: ${ (() => { try { user.tags.push('x'); return 'pushed' } catch (e) { return e.name } })() }
 seen: ${ [user.name, user.tags.length, this.user === user] }
 `)
 		var ctx = withValues(t, map[string]any{"user": map[string]any{"name": "ada", "tags": []string{"a"}}})
+		var deep, tags = "pushed", float64(2)
+		if protected {
+			deep, tags = "TypeError", float64(1)
+		}
 		expectEqual(t, mustResolve[map[string]any](t, ctx, document), map[string]any{
 			"replace": "TypeError",
 			"remove":  "TypeError",
-			"deep":    "TypeError",
-			"seen":    []any{"ada", float64(1), true},
+			"deep":    deep,
+			"seen":    []any{"ada", tags, true},
 		})
 	})
 }

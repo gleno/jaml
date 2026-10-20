@@ -42,6 +42,12 @@ func (kinds _SandboxKinds) each(t *testing.T, body func(t *testing.T, sb *Sandbo
 	}
 }
 
+func eachProtection(t *testing.T, body func(t *testing.T, sb *Sandbox, protected bool)) {
+	t.Helper()
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) { body(t, sb, true) })
+	mutableKinds.each(t, func(t *testing.T, sb *Sandbox) { body(t, sb, false) })
+}
+
 func mustSandbox(t *testing.T, kind _SandboxKind, options ...SandboxOption) *Sandbox {
 	t.Helper()
 	if kind.isolated && isolationSupported() != nil {

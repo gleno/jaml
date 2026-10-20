@@ -13,7 +13,10 @@ import (
 	"github.com/dop251/goja/token"
 )
 
-const readOnlyRefusal = "cannot change a read-only value: values from WithValues and the built-ins are frozen, so change a copy instead, such as items.toSorted(), [...items].reverse() or { ...item, key: value }"
+const (
+	readOnlyRefusal = "cannot change a read-only value: values from WithValues and the built-ins are frozen, so change a copy instead, such as items.toSorted(), [...items].reverse() or { ...item, key: value }"
+	nameRefusal     = "cannot change a read-only value: a name from WithValues cannot be assigned, so change the value in place or keep the new one under another name"
+)
 
 const (
 	expressionFile = "jaml:expression"
@@ -25,7 +28,7 @@ var engineWriteRefusal = regexp.MustCompile(`^(|Cannot assign to read only prope
 
 func (r _Realm) explainWrite(compiled _Expression, err error) error {
 	var exception *goja.Exception
-	if !errors.As(err, &exception) || !compiled.writesWhere(exception) || !r.refusesWrite(exception.Value()) {
+	if !r.runtime.protected() || !errors.As(err, &exception) || !compiled.writesWhere(exception) || !r.refusesWrite(exception.Value()) {
 		return err
 	}
 	return &Thrown{Message: "TypeError: " + readOnlyRefusal, Value: r.snapshot(exception.Value())}

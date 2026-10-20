@@ -161,7 +161,7 @@ servers:
 }
 
 func TestValuesAreFrozenCopiesAnExpressionCannotMutate(t *testing.T) {
-	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "copied: ${ [...list, 4].length }\npushed: ${ (list.push(4), list.length) }\nsorted: ${ list.toSorted((a, b) => b - a) }\n")
 		var values = map[string]any{"list": []int{1, 2, 3}}
 		var ctx = valued(t.Context(), values)
@@ -169,6 +169,17 @@ func TestValuesAreFrozenCopiesAnExpressionCannotMutate(t *testing.T) {
 		expectEqual(t, mustResolve[[]int](t, ctx, document.At("sorted")), []int{3, 2, 1})
 		_, err := Resolve[int](ctx, document.At("pushed"))
 		expectError(t, err, EvaluationFailed, "$.pushed", "TypeError: cannot change a read-only value")
+		expectEqual(t, values["list"], []int{1, 2, 3})
+	})
+}
+
+func TestUnprotectedValuesAreCopiesAnExpressionMayChange(t *testing.T) {
+	mutableKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "pushed: ${ (list.push(4), list.length) }\n")
+		var values = map[string]any{"list": []int{1, 2, 3}}
+		var ctx = valued(t.Context(), values)
+		expectEqual(t, mustResolve[int](t, ctx, document.At("pushed")), 4)
+		expectEqual(t, mustResolve[int](t, ctx, document.At("pushed")), 4)
 		expectEqual(t, values["list"], []int{1, 2, 3})
 	})
 }

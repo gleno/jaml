@@ -42,7 +42,7 @@ func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
 		"Reflect.set(globalThis, 'user', 1)",
 		"Function('user = 1')()",
 	}
-	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		expectReadOnly(t, sb, writes)
 	})
 }

@@ -80,19 +80,19 @@ func TestAValueIsNotBoundUntilCodeReadsIt(t *testing.T) {
 
 func TestAValueReadsTheSameWayEverywhere(t *testing.T) {
 	var reads = "[typeof user, user === this.user, user === globalThis.user, 'user' in globalThis, Object.keys(globalThis).filter(k => ['alpha', 'user', 'zeta'].includes(k)), user.name, Object.isFrozen(user) && Object.isFrozen(user.tags), JSON.stringify({ ...globalThis }.user)]"
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	eachProtection(t, func(t *testing.T, sb *Sandbox, protected bool) {
 		var ctx = withValues(t, map[string]any{"zeta": 1, "user": map[string]any{"name": "a", "tags": []string{"x"}}, "alpha": 2})
 		expectEqual(t, mustResolve[[]any](t, ctx, mustExpression(t, sb, reads)), []any{
-			"object", true, true, true, []any{"alpha", "user", "zeta"}, "a", true, `{"name":"a","tags":["x"]}`,
+			"object", true, true, true, []any{"alpha", "user", "zeta"}, "a", protected, `{"name":"a","tags":["x"]}`,
 		})
 	})
 }
 
 func TestAValueReadInAScriptIsTheOneEveryLeafSees(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	eachProtection(t, func(t *testing.T, sb *Sandbox, protected bool) {
 		var ctx = WithValues(WithScript(t.Context(), "const seen = user; const frozen = Object.isFrozen(user.tags)"), map[string]any{"user": map[string]any{"tags": []string{"x"}}})
 		var document = mustJaml(t, sb, "a: ${ seen === user && frozen }\nb: ${ seen === user }\n")
-		expectEqual(t, mustResolve[map[string]any](t, ctx, document), map[string]any{"a": true, "b": true})
+		expectEqual(t, mustResolve[map[string]any](t, ctx, document), map[string]any{"a": protected, "b": true})
 	})
 }
 

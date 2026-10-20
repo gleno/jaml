@@ -65,6 +65,17 @@ type _Runtime struct {
 	callDepth int
 }
 
+func (r _Runtime) protected() bool {
+	return r.builtins == frozenBuiltins
+}
+
+func (r _Runtime) readOnlyRefusal() string {
+	if r.protected() {
+		return readOnlyRefusal
+	}
+	return nameRefusal
+}
+
 func (r _Runtime) depth() int {
 	if r.callDepth == 0 {
 		return defaultCallDepthLimit
