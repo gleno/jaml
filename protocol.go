@@ -20,6 +20,7 @@ const (
 	evaluatorBuildTime   = "JAML_BUILD_TIMEOUT"
 	evaluatorBuildCPU    = "JAML_BUILD_CPU_LIMIT"
 	evaluatorJobs        = "JAML_MAX_CONCURRENCY"
+	mallocArenas         = "MALLOC_ARENA_MAX"
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"

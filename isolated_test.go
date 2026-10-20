@@ -238,7 +238,7 @@ func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 					expectEqual(t, value, strconv.Itoa(goruntime.GOMAXPROCS(0)))
 				}
 			}
-			var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorBuiltins, evaluatorCallDepth, evaluatorScripts, evaluatorBuildTime, evaluatorBuildCPU, evaluatorJobs, evaluatorNonce, evaluatorParent}
+			var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorBuiltins, evaluatorCallDepth, evaluatorScripts, evaluatorBuildTime, evaluatorBuildCPU, evaluatorJobs, evaluatorNonce, evaluatorParent, mallocArenas}
 			for _, entry := range zoneEnv() {
 				name, _, _ := strings.Cut(entry, "=")
 				want = append(want, name)
