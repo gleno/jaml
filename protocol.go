@@ -17,7 +17,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 15
+	protocolVersion      = 16
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -58,12 +58,13 @@ type _Blueprint struct {
 }
 
 type _Work struct {
-	Path    []string     `json:"path,omitempty"`
-	Values  _BoundValues `json:"values,omitempty"`
-	Scripts []string     `json:"scripts,omitempty"`
-	Args    []_Datum     `json:"args,omitempty"`
-	Skips   *_Shape      `json:"skips,omitempty"`
-	Pinned  _Pinned      `json:"pinned"`
+	Path      []string     `json:"path,omitempty"`
+	Values    _BoundValues `json:"values,omitempty"`
+	Scripts   []string     `json:"scripts,omitempty"`
+	Args      []_Datum     `json:"args,omitempty"`
+	Skips     *_Shape      `json:"skips,omitempty"`
+	Pinned    _Pinned      `json:"pinned"`
+	TimeLimit _TimeLimit   `json:"limit,omitempty"`
 }
 
 type _Reply struct {
@@ -107,6 +108,7 @@ type _Failure struct {
 	Kind    string         `json:"kind"`
 	At      string         `json:"at,omitempty"`
 	Code    string         `json:"code,omitempty"`
+	Overran bool           `json:"overran,omitempty"`
 	Message string         `json:"message"`
 	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
 }
@@ -174,7 +176,7 @@ func describeFailure(err error) _Failure {
 	if !isOwn {
 		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
 	}
-	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Code: failed.code, Message: failed.cause.Error()}
+	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Code: failed.code, Overran: errors.Is(failed.cause, TimeLimit), Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
@@ -229,7 +231,7 @@ func (f _Failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return _ExpressionError{kind: kind, path: f.At, code: f.Code, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild()}}
+	return _ExpressionError{kind: kind, path: f.At, code: f.Code, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), overran: f.Overran}}
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {
@@ -242,6 +244,11 @@ func (t *_ThrownOnWire) rebuild() *Thrown {
 type _CarriedCause struct {
 	message string
 	thrown  *Thrown
+	overran bool
+}
+
+func (c _CarriedCause) Is(target error) bool {
+	return c.overran && target == TimeLimit
 }
 
 func (c _CarriedCause) Error() string {

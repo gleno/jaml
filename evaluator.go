@@ -181,18 +181,33 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 	}
 	var sealed []byte
 	e.watch.during(func() {
-		result, err := run(ctx)
+		bounded, stop := request.TimeLimit.bound(ctx)
+		defer stop()
+		var unwatch = context.AfterFunc(bounded, func() { e.overran(job, path, bounded) })
+		defer unwatch()
+		result, err := run(bounded)
 		var told = e.jobs.settle(job)
 		switch {
 		case err != nil:
 			sealed = e.replies.frames.failure(job, path, err)
 		case told:
-			sealed = e.replies.frames.failure(job, path, located(path, cancelled(ctx)))
+			sealed = e.replies.frames.failure(job, path, located(path, cancelled(bounded)))
 		default:
 			sealed = e.replies.frames.answer(job, result)
 		}
 	})
 	e.replies.write(sealed)
+}
+
+func (e *_Evaluator) overran(job uint64, path string, bounded context.Context) {
+	var exhausted, overran = context.Cause(bounded).(_TimeExhausted)
+	if !overran {
+		return
+	}
+	e.jobs.overrun(job, func() {
+		var stuck = fmt.Errorf("%w and was still inside a built-in %s after it was told to stop", exhausted, cancelGrace)
+		e.replies.write(e.replies.frames.failure(job, path, located(path, stuck)))
+	})
 }
 
 type _ReplyWriter struct {

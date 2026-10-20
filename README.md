@@ -63,7 +63,7 @@ An expression you drop without ending its context is still forgotten: once the g
 - **A pinned order.** Code runs in the order the document is written, so scripts with state behave the same every time.
 - **Results are data.** Code must produce JSON data: scalars, lists, objects. Symbols, BigInts, proxies, cycles, `NaN`, `Date`s, class instances (an array or object counts as data only with its plain prototype or none), functions inside data, and strings or keys holding an unpaired surrogate are errors naming the path to the offending value.
 - **Decoding is `encoding/json`.** Struct tags, embedded structs, `json.Unmarshaler`, `json.RawMessage`: whatever `json.Unmarshal` does, jaml does. A field typed `*jaml.Expression` is not evaluated: it receives a view you resolve later.
-- **The world of an evaluation travels on the context.** Values, scripts, the clock and the random seed.
+- **The world of an evaluation travels on the context.** Values, scripts, the clock, the random seed and the time limit.
 - **Thrown values as data.** What code threw is reachable as `*jaml.Thrown`, with its message and a JSON snapshot of the value.
 - **Three sandboxes, chosen up front.** A secure sandbox runs everything in one child process with a memory ceiling, and survives anything a document does. `MakeSecureSandbox` also freezes the JavaScript built-ins, so no piece of code can change what another sees; `MakeSecureSandboxWithoutBuiltinsProtection` leaves them ordinary and is cheaper per `Resolve`. A trusted sandbox runs in your process, with ordinary built-ins.
 - **Safe to share.** Sandboxes and expressions are safe for concurrent use from any number of goroutines.
@@ -229,6 +229,16 @@ ctx = jaml.WithRandomSeed(ctx, seed)
 
 Every `Resolve` pins a clock and a random seed when it is submitted: the ones on its context, or else the current time and a fresh random seed. `Date.now()` and `new Date()` return the pinned time for the whole call, and `Math.random()` draws from a generator seeded with the pinned seed. With both set, results are identical in every sandbox and on every run. The clock is pinned to the millisecond, the way JavaScript sees it: any instant is accepted, its zone and anything below a millisecond are dropped, and an instant beyond about 292 million years from 1970 is held at that bound, the same in every sandbox. Past the JavaScript `Date` range (±8.64e15 ms) `Date.now()` still returns the pinned number, and `new Date()` is an `Invalid Date`. Pinning at submission also means that a call replayed after a crash (see below) sees exactly what its first attempt saw.
 
+### Time limit
+
+```go
+ctx = jaml.WithTimeLimit(ctx, 100*time.Millisecond)
+```
+
+`WithTimeLimit` bounds how long one `Resolve` may run in the engine: its scripts, binding its values and every piece of code it evaluates, all counted together from the moment the job starts running. Time spent waiting for a concurrency slot, for a secure sandbox's child to start, for an expression to be built again in a fresh child, or behind a replay never counts. A `Resolve` that runs longer is interrupted and fails with `TimeLimit`, an `EvaluationFailed` naming the path (`$.check: ${…}: exceeded the time limit of 100ms`), so you can tell it from your context's deadline, which still bounds everything, waiting included. When a job is replayed after a crash (see Recovery), its replay runs from the start with the whole limit again. Setting it twice keeps the smaller limit, as deadlines do; a limit that is not positive is an `InvalidExpression` error from `Resolve`.
+
+In a secure sandbox the child keeps the clock, and a job still inside a built-in 250 ms after its limit ends the child the way a job stuck after cancel does: that job fails with `TimeLimit` ("exceeded the time limit of 100ms and was still inside a built-in 250ms after it was told to stop"), and the other jobs of the child are replayed. In a trusted sandbox the clock starts when the job takes its slot, and a built-in that never returns to the interpreter runs on, as it does past a context's end.
+
 ### Thrown values
 
 ```go
@@ -381,6 +391,7 @@ func WithValues(ctx context.Context, values map[string]any) context.Context
 func WithScript(ctx context.Context, source string) context.Context
 func WithFixedClock(ctx context.Context, time time.Time) context.Context
 func WithRandomSeed(ctx context.Context, seed uint64) context.Context
+func WithTimeLimit(ctx context.Context, limit time.Duration) context.Context
 
 func WithNullCoercion(coercion Coercion) Option      // Loose (default) or Strict
 func WithUndefinedCoercion(coercion Coercion) Option // Loose or Strict (default)
@@ -415,6 +426,7 @@ var (
 	Unsupported       // a secure sandbox on a platform that cannot run one, or a child that is not a jaml evaluator
 	Unavailable       // a secure sandbox's evaluator could not be started, first or after a respawn: exec failure, start deadline, death before greeting, protocol version mismatch
 	MemoryLimit       // derives from EvaluationFailed: a secure sandbox's job ran out of memory
+	TimeLimit         // derives from EvaluationFailed: a Resolve ran longer than WithTimeLimit allows
 )
 ```
 

@@ -72,7 +72,9 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 	if err != nil {
 		return _Refused{err: err}
 	}
-	result, err := run(ctx)
+	bounded, stop := written.ask.timeLimit.bound(ctx)
+	defer stop()
+	result, err := run(bounded)
 	if err != nil {
 		return _Refused{err: err}
 	}

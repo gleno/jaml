@@ -15,6 +15,7 @@ type _Working struct {
 	cancel  context.CancelFunc
 	dropped bool
 	grace   *time.Timer
+	last    func()
 }
 
 type _Held struct{ unit _Servable }
@@ -75,6 +76,15 @@ func (t *_JobTable) let(job uint64, told _Told) {
 	}
 }
 
+func (t *_JobTable) overrun(job uint64, last func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if working, isWorking := t.jobs[job].(_Working); isWorking {
+		working.last = last
+		t.jobs[job] = t.drop(job, working, _Told{halt: true})
+	}
+}
+
 func (t *_JobTable) drop(job uint64, working _Working, told _Told) _Working {
 	working.cancel()
 	working.dropped = true
@@ -87,7 +97,10 @@ func (t *_JobTable) drop(job uint64, working _Working, told _Told) _Working {
 func (t *_JobTable) expire(job uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, working := t.jobs[job].(_Working); working {
+	if working, isWorking := t.jobs[job].(_Working); isWorking {
+		if working.last != nil {
+			working.last()
+		}
 		t.stuck(job)
 	}
 }

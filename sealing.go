@@ -109,6 +109,11 @@ func (w *_WireWriter) failure(err error) error {
 			return err
 		}
 	}
+	if described.Overran {
+		if err := w.raw(`,"overran":true`); err != nil {
+			return err
+		}
+	}
 	if err := w.labelled(`,"message":`, described.Message); err != nil {
 		return err
 	}

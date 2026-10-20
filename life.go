@@ -441,7 +441,11 @@ func located(path string, err error) error {
 }
 
 func cancelled(ctx context.Context) error {
-	return fmt.Errorf("cancelled: %w", context.Cause(ctx))
+	var cause = context.Cause(ctx)
+	if exhausted, overran := cause.(_TimeExhausted); overran {
+		return exhausted
+	}
+	return fmt.Errorf("cancelled: %w", cause)
 }
 
 func closeAll(files ...*os.File) {

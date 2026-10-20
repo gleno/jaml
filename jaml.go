@@ -21,6 +21,7 @@ var (
 	Unsupported       = ExpressionError.WithMessage("unsupported")
 	Unavailable       = ExpressionError.WithMessage("unavailable")
 	MemoryLimit       = EvaluationFailed.WithMessage("exceeded the memory limit")
+	TimeLimit         = EvaluationFailed.WithMessage("exceeded the time limit")
 )
 
 type Coercion int

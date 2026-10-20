@@ -1,6 +1,9 @@
 package jaml
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 const rootPlace = "$"
 
@@ -94,4 +97,16 @@ func (m _MemoryExhausted) Error() string {
 
 func (m _MemoryExhausted) Is(target error) bool {
 	return target == MemoryLimit
+}
+
+type _TimeExhausted struct {
+	limit time.Duration
+}
+
+func (t _TimeExhausted) Error() string {
+	return fmt.Sprintf("exceeded the time limit of %s", t.limit)
+}
+
+func (t _TimeExhausted) Is(target error) bool {
+	return target == TimeLimit
 }

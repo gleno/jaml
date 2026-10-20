@@ -19,13 +19,14 @@ const (
 )
 
 type _Ask struct {
-	path     []string
-	values   map[string]any
-	scripts  []string
-	args     []any
-	skips    *_Shape
-	pinned   _Pinned
-	codeFree bool
+	path      []string
+	values    map[string]any
+	scripts   []string
+	args      []any
+	skips     *_Shape
+	pinned    _Pinned
+	timeLimit _TimeLimit
+	codeFree  bool
 }
 
 type _RequestBody struct {
@@ -78,6 +79,11 @@ func writeWork(ask _Ask, limit int) (_WrittenWork, error) {
 func (ww *_WrittenWork) fill(w *_WireWriter) error {
 	if err := w.pinned(ww.ask.pinned); err != nil {
 		return err
+	}
+	if ww.ask.timeLimit != 0 {
+		if err := w.raw(`,"limit":` + strconv.FormatInt(int64(ww.ask.timeLimit), 10)); err != nil {
+			return err
+		}
 	}
 	if len(ww.ask.path) > 0 {
 		if err := w.strings(`,"path":`, ww.ask.path); err != nil {
@@ -189,7 +195,7 @@ func (ww _WrittenWork) view() _Work {
 	for index, span := range ww.args {
 		args[index] = ww.datum(span)
 	}
-	return _Work{Path: ww.ask.path, Values: values, Scripts: ww.ask.scripts, Args: args, Skips: ww.ask.skips, Pinned: ww.ask.pinned}
+	return _Work{Path: ww.ask.path, Values: values, Scripts: ww.ask.scripts, Args: args, Skips: ww.ask.skips, Pinned: ww.ask.pinned, TimeLimit: ww.ask.timeLimit}
 }
 
 func (ww _WrittenWork) datum(span _Span) _Datum {
