@@ -76,7 +76,7 @@ func TestInterpolatedResultsNestAtMost4096DeepInBothKinds(t *testing.T) {
 
 func TestVarsNestAtMost4096DeepInBothKinds(t *testing.T) {
 	var text = "v: ${ typeof deep }\n"
-	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4097)}).expectRefused(t, EvaluationFailed, `binding values: value "deep" nests deeper than 4096`)
+	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4097)}).expectRefused(t, InvalidInput, `binding values: value "deep" nests deeper than 4096`)
 	evalInBothKinds(t, text, map[string]any{"deep": nestedVar(4096)}).expectAccepted(t)
 }
 

@@ -108,13 +108,14 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 		source    string
 		call      bool
 		args      []any
+		kind      error
 		fragments []string
 	}{
 		"endless thunks":       {source: "(() => { const f = () => f; return f })()", fragments: []string{"still a function after 16 calls"}},
 		"function in a list":   {source: "() => [() => 1]", call: true, fragments: []string{"result[0] is a function, which is not data"}},
 		"nested function":      {source: "() => ({f: () => 1})", call: true, fragments: []string{"result.f is a function"}},
-		"argument not data":    {source: "x => x", call: true, args: []any{func() {}}, fragments: []string{"binding arguments: argument 1 is not JSON data"}},
-		"argument too deep":    {source: "x => 1", call: true, args: []any{1, nestedVar(4097)}, fragments: []string{"binding arguments: argument 2 nests deeper than 4096"}},
+		"argument not data":    {source: "x => x", call: true, args: []any{func() {}}, kind: InvalidInput, fragments: []string{"binding arguments: argument 1 is not JSON data"}},
+		"argument too deep":    {source: "x => 1", call: true, args: []any{1, nestedVar(4097)}, kind: InvalidInput, fragments: []string{"binding arguments: argument 2 nests deeper than 4096"}},
 		"thrown while calling": {source: "() => { throw new TypeError('no') }", call: true, fragments: []string{"$: () => { throw new TypeError('no') }: TypeError: no"}},
 	}
 	for name, c := range cases {
@@ -133,7 +134,11 @@ func TestAFunctionNeverLeavesTheSandbox(t *testing.T) {
 					both.isolated = err
 				}
 			}
-			both.expectRefused(t, EvaluationFailed, c.fragments...)
+			var kind = c.kind
+			if kind == nil {
+				kind = EvaluationFailed
+			}
+			both.expectRefused(t, kind, c.fragments...)
 		})
 	}
 }

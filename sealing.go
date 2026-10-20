@@ -109,8 +109,8 @@ func (w *_WireWriter) failure(failed _ExpressionError) error {
 			return err
 		}
 	}
-	if described.Overran {
-		if err := w.raw(`,"overran":true`); err != nil {
+	if described.Cause != "" {
+		if err := w.labelled(`,"cause":`, described.Cause); err != nil {
 			return err
 		}
 	}

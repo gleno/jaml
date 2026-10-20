@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, Unavailable, MemoryLimit}
+var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, Unavailable, InvalidInput, MemoryLimit, TimeLimit, CallDepthLimit, EvaluatorDied}
 
 func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
@@ -212,4 +212,49 @@ func TestBindingVarsEndsWithItsContext(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestEveryRefusalOfTheCallersInputIsInvalidInput(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "v: ${ 1 }\nplain: 1\n")
+		var call = mustExpression(t, sb, "(a) => 1")
+		var out any
+		for name, err := range map[string]error{
+			"a value that is not data":     resolveInto(valued(t.Context(), map[string]any{"bad": make(chan int)}), &out, document.At("v")),
+			"a value too deep":             resolveInto(valued(t.Context(), map[string]any{"bad": nestedVar(4097)}), &out, document.At("plain")),
+			"a refused value name":         resolveInto(valued(t.Context(), map[string]any{"Math": 1}), &out, document.At("v")),
+			"a value not in UTF-8":         resolveInto(valued(t.Context(), map[string]any{"bad": "x\xffy"}), &out, document.At("v")),
+			"a value name not in UTF-8":    resolveInto(valued(t.Context(), map[string]any{"b\xffad": 1}), &out, document.At("v")),
+			"an argument that is not data": resolveInto(t.Context(), &out, call, func() {}),
+			"an argument not in UTF-8":     resolveInto(t.Context(), &out, call, "x\xffy"),
+			"a time limit not positive":    resolveInto(WithTimeLimit(t.Context(), 0), &out, document.At("v")),
+		} {
+			expectInvalidInput(t, name, err)
+		}
+	})
+	_SandboxKinds{isolatedKind, unprotectedKind}.each(t, func(t *testing.T, sb *Sandbox) {
+		var out any
+		var huge = strings.Repeat("x", 5<<20)
+		expectInvalidInput(t, "a request past the cap", resolveInto(valued(t.Context(), map[string]any{"big": huge}), &out, mustJaml(t, sb, "v: ${ big.length }\n").At("v")))
+	}, WithMemoryLimit(16<<20))
+}
+
+func expectInvalidInput(t *testing.T, name string, err error) {
+	t.Helper()
+	var failure *Failure
+	if !errors.Is(err, InvalidInput) || errors.Is(err, EvaluationFailed) || !errors.As(err, &failure) || failure.Path != "$" {
+		t.Fatalf("%s: want an InvalidInput at $ and nothing under EvaluationFailed, got %v (%+v)", name, err, failure)
+	}
+}
+
+func TestRecursionPastTheCallDepthLimitIsCallDepthLimit(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var out any
+		var err = resolveInto(t.Context(), &out, mustJaml(t, sb, "v: ${ (function f(n) { return f(n + 1) })(0) }\n").At("v"))
+		expectError(t, err, CallDepthLimit, "$.v: ")
+		expectFailure(t, err, "$.v", "exceeded the maximum call depth of 100")
+		if !errors.Is(err, EvaluationFailed) || errors.Is(err, TimeLimit) || errors.Is(err, MemoryLimit) || errors.Is(err, EvaluatorDied) {
+			t.Fatalf("a call depth refusal matched the wrong kinds: %v", err)
+		}
+	}, WithCallDepthLimit(100))
 }

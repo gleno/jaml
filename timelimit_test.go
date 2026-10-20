@@ -54,7 +54,7 @@ func TestANonPositiveTimeLimitIsRefused(t *testing.T) {
 	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var out any
 		var err = resolveInto(WithTimeLimit(t.Context(), 0), &out, mustJaml(t, sb, spinning).At("quick"))
-		expectError(t, err, InvalidExpression, "$: a time limit must be positive, got 0s")
+		expectError(t, err, InvalidInput, "$: a time limit must be positive, got 0s")
 	})
 }
 
@@ -82,7 +82,7 @@ func TestOnlyAnOverseenLimitTurnsAFailedJobIntoTimeLimit(t *testing.T) {
 	var answered = _Answered{data: []byte("5")}
 	var lost = _Lost{cause: errSilent}
 	var missing = _Refused{err: errMissing}
-	var stuck = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Overran: true, Message: "exceeded the time limit of 1ms"}.rebuild()}
+	var stuck = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Cause: "TimeLimit", Message: "exceeded the time limit of 1ms"}.rebuild()}
 	var echo = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Stopped: true, Message: "cancelled: context canceled"}.rebuild()}
 	var thrown = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Message: "Error: boom", Thrown: &_ThrownOnWire{Message: "boom", Value: _Borrowed(`"boom"`)}}.rebuild()}
 	for _, result := range []_Outcome{answered, lost, missing, stuck, echo, thrown} {

@@ -300,7 +300,7 @@ func TestVarsTooDeepNeverReachTheWire(t *testing.T) {
 	var before = childPID(t, sb)
 	var out int
 	var err = resolveInto(valued(within(t, 10*time.Second), map[string]any{"deep": nestedVar(10001)}), &out, document.At("v"))
-	expectError(t, err, EvaluationFailed, `value "deep" nests deeper than 4096`)
+	expectError(t, err, InvalidInput, `value "deep" nests deeper than 4096`)
 	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 1)
 	expectEqual(t, childPID(t, sb), before)
 }

@@ -29,13 +29,13 @@ func TestInvalidUTF8IsRefusedInEveryPosition(t *testing.T) {
 		for name, value := range invalidUTF8Everywhere {
 			t.Run(name, func(t *testing.T) {
 				var _, err = Resolve[string](withValues(t, map[string]any{"bad": value}), compiled, 1)
-				expectError(t, err, EvaluationFailed, `binding values: value "bad"`)
+				expectError(t, err, InvalidInput, `binding values: value "bad"`)
 				_, err = Resolve[string](t.Context(), compiled, value)
-				expectError(t, err, EvaluationFailed, "binding arguments: argument 1")
+				expectError(t, err, InvalidInput, "binding arguments: argument 1")
 			})
 		}
 		var _, err = Resolve[string](withValues(t, map[string]any{"b\xffad": 1}), compiled, 1)
-		expectError(t, err, EvaluationFailed, "is not named in valid UTF-8")
+		expectError(t, err, InvalidInput, "is not named in valid UTF-8")
 		_, err = Resolve[string](WithScript(t.Context(), "const s = '\xff'"), compiled, 1)
 		expectError(t, err, InvalidExpression, "script 1", "Invalid UTF-8 character")
 	})
@@ -66,9 +66,9 @@ func TestAReplacementEscapeWrittenAsJSONIsRefusedLikeInvalidUTF8(t *testing.T) {
 		for name, value := range written {
 			t.Run(name, func(t *testing.T) {
 				var _, err = Resolve[[]string](withValues(t, map[string]any{"bad": value}), compiled, 1)
-				expectError(t, err, EvaluationFailed, `binding values: value "bad" holds text that is not valid UTF-8`)
+				expectError(t, err, InvalidInput, `binding values: value "bad" holds text that is not valid UTF-8`)
 				_, err = Resolve[[]string](t.Context(), compiled, value)
-				expectError(t, err, EvaluationFailed, "binding arguments: argument 1 holds text that is not valid UTF-8")
+				expectError(t, err, InvalidInput, "binding arguments: argument 1 holds text that is not valid UTF-8")
 			})
 		}
 		var values = map[string]any{"real": replacement, "typed": escape}

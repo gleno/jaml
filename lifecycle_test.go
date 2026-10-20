@@ -64,6 +64,7 @@ const (
 	panicAtStartLimit    = 16<<20 + 7
 	oversizedAnswerLimit = 16<<20 + 8
 	olderProtocolLimit   = 16<<20 + 9
+	crashOnServeLimit    = 16<<20 + 10
 	slowStartLimit       = 64<<20 + 9
 	slowStart            = time.Second
 )
@@ -85,7 +86,7 @@ func impersonateAnEvaluator() bool {
 		return false
 	}
 	switch os.Getenv(evaluatorMemoryLimit) {
-	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit), strconv.Itoa(oversizedAnswerLimit), strconv.Itoa(olderProtocolLimit):
+	case strconv.Itoa(silentLimit), strconv.Itoa(foreignGreetingLimit), strconv.Itoa(futureProtocolLimit), strconv.Itoa(malformedAnswerLimit), strconv.Itoa(emptyAnswerLimit), strconv.Itoa(crashAtStartLimit), strconv.Itoa(panicAtStartLimit), strconv.Itoa(oversizedAnswerLimit), strconv.Itoa(olderProtocolLimit), strconv.Itoa(crashOnServeLimit):
 	default:
 		return false
 	}
@@ -108,12 +109,14 @@ func impersonateAnEvaluator() bool {
 		greeting.Version = 10
 		greetPlainly(replies, greeting)
 	case strconv.Itoa(malformedAnswerLimit):
-		answerBadly(requests, replies, greeting, "{\"job\": %d, \"data\": nope}")
+		answerBadly(requests, replies, greeting, badly("{\"job\": %d, \"data\": nope}"))
 	case strconv.Itoa(emptyAnswerLimit):
-		answerBadly(requests, replies, greeting, "{\"job\": %d}")
+		answerBadly(requests, replies, greeting, badly("{\"job\": %d}"))
+	case strconv.Itoa(crashOnServeLimit):
+		answerBadly(requests, replies, greeting, func(uint64) []byte { panic("an impostor's crash") })
 	case strconv.Itoa(oversizedAnswerLimit):
 		var frame = `{"job": %d, "data": "` + strings.Repeat("x", (oversizedAnswerLimit/4)-len(`{"job": 2, "data": ""}`)+1) + "\"}"
-		answerBadly(requests, replies, greeting, frame)
+		answerBadly(requests, replies, greeting, badly(frame))
 	}
 	_, _ = io.Copy(io.Discard, requests)
 	os.Exit(0)
@@ -125,7 +128,11 @@ func greetPlainly(replies *os.File, greeting _Hello) {
 	_, _ = replies.Write(append(encoded, '\n'))
 }
 
-func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) {
+func badly(format string) func(job uint64) []byte {
+	return func(job uint64) []byte { return fmt.Appendf(nil, format, job) }
+}
+
+func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer func(job uint64) []byte) {
 	greetPlainly(replies, greeting)
 	var incoming = framesFor(defaultMemoryLimit).requests(requests)
 	for {
@@ -138,7 +145,7 @@ func answerBadly(requests, replies *os.File, greeting _Hello, badAnswer string) 
 		case opBuild:
 			_, _ = replies.Write(headed(fmt.Appendf(nil, "{\"job\": %d, \"built\": true}", asked.Job)))
 		case opServe:
-			_, _ = replies.Write(headed(fmt.Appendf(nil, badAnswer, asked.Job)))
+			_, _ = replies.Write(headed(badAnswer(asked.Job)))
 		}
 	}
 }
@@ -438,7 +445,10 @@ func TestADocumentPastTheRequestCapIsRefusedBeforeItsBuild(t *testing.T) {
 			var sb = mustIsolated(t, WithMemoryLimit(16<<20), WithBuildTimeout(30*time.Second))
 			var before = childPID(t, sb)
 			_, err := sb.MakeExpressionFromJaml(within(t, 60*time.Second), text)
-			expectError(t, err, EvaluationFailed, "the request is larger than 4194304 bytes, mostly the document")
+			expectError(t, err, InvalidExpression, "the request is larger than 4194304 bytes, mostly the document")
+			if errors.Is(err, EvaluationFailed) || errors.Is(err, InvalidInput) {
+				t.Fatalf("a document past the cap is the author's, not an evaluation or the caller's input: %v", err)
+			}
 			expectEqual(t, childPID(t, sb), before)
 		})
 	}
@@ -600,4 +610,15 @@ func TestUnmadeValuesAreInvalid(t *testing.T) {
 			expectError(t, resolveInto(t.Context(), &out, compiled), InvalidExpression, "not made by")
 		})
 	}
+}
+
+func TestACrashThatRecursAloneIsEvaluatorDied(t *testing.T) {
+	_SandboxKinds{isolatedKind, unprotectedKind}.each(t, func(t *testing.T, sb *Sandbox) {
+		var err = evalBounded(t, mustJaml(t, sb, "v: ${ 1 }\n"), within(t, 30*time.Second), "v")
+		expectError(t, err, EvaluatorDied, "$.v: evaluator died (exit status 2): panic: an impostor's crash")
+		expectFailure(t, err, "$.v", "evaluator died (exit status 2): panic: an impostor's crash")
+		if !errors.Is(err, EvaluationFailed) || errors.Is(err, Unavailable) || errors.Is(err, MemoryLimit) || errors.Is(err, CallDepthLimit) {
+			t.Fatalf("a crash matched the wrong kinds: %v", err)
+		}
+	}, WithMemoryLimit(crashOnServeLimit))
 }

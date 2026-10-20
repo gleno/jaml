@@ -68,7 +68,7 @@ func writeWork(ask _Ask, limit int) (_WrittenWork, error) {
 	var written = _WrittenWork{ask: ask, names: slices.Sorted(maps.Keys(ask.values))}
 	var err = written.fill(w)
 	if errors.As(err, new(_PastLimit)) {
-		return _WrittenWork{}, fail(evaluationFailed, "the request is larger than %d bytes, mostly %s", limit, ask.bulkiest()).at(rootPlace)
+		return _WrittenWork{}, fail(invalidInput, "the request is larger than %d bytes, mostly %s", limit, ask.bulkiest()).at(rootPlace)
 	}
 	if err != nil {
 		return _WrittenWork{}, located(rootPlace, err)
@@ -130,7 +130,7 @@ func (ww *_WrittenWork) fillValues(w *_WireWriter) error {
 	}
 	for index, name := range ww.names {
 		if err := admitName(name); err != nil {
-			return _Unplaced{kind: evaluationFailed, label: bindingValues, cause: err}
+			return _Unplaced{kind: invalidInput, label: bindingValues, cause: err}
 		}
 		if index > 0 {
 			w.mark(',')
@@ -151,7 +151,7 @@ func (ww *_WrittenWork) fillValues(w *_WireWriter) error {
 func (ww *_WrittenWork) checkValues() error {
 	for _, name := range ww.names {
 		if err := admitName(name); err != nil {
-			return _Unplaced{kind: evaluationFailed, label: bindingValues, cause: err}
+			return _Unplaced{kind: invalidInput, label: bindingValues, cause: err}
 		}
 		if _, err := unboundedWriter().admitted(fmt.Sprintf("value %q", clip(name, keyExcerptLength)), ww.ask.values[name]); err != nil {
 			return bound(bindingValues, err)
@@ -185,7 +185,7 @@ func bound(binding string, err error) error {
 	if errors.As(err, new(_PastLimit)) {
 		return err
 	}
-	return _Unplaced{kind: evaluationFailed, label: binding, cause: err}
+	return _Unplaced{kind: invalidInput, label: binding, cause: err}
 }
 
 func (ww _WrittenWork) view() _Work {
@@ -208,7 +208,7 @@ func writePlan(plan _Blueprint, limit int) (*_RequestBody, error) {
 	var w = bodyWriter(limit)
 	if err := w.plan(plan); err != nil {
 		if errors.As(err, new(_PastLimit)) {
-			return nil, fail(evaluationFailed, "the request is larger than %d bytes, mostly the document", limit)
+			return nil, fail(invalidExpression, "the request is larger than %d bytes, mostly the document", limit)
 		}
 		return nil, err
 	}

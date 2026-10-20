@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"errors"
 	goruntime "runtime"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ const (
 	closed
 	unsupported
 	unavailable
+	invalidInput
 )
 
 type _KindEntry struct {
@@ -39,6 +41,23 @@ var kinds = [...]_KindEntry{
 	closed:            {"Closed", ExpressionError.WithMessage("closed")},
 	unsupported:       {"Unsupported", ExpressionError.WithMessage("unsupported")},
 	unavailable:       {"Unavailable", ExpressionError.WithMessage("unavailable")},
+	invalidInput:      {"InvalidInput", ExpressionError.WithMessage("invalid input")},
+}
+
+type _Cause int
+
+const (
+	memoryExhausted _Cause = iota
+	timeExhausted
+	callDepthExhausted
+	evaluatorDeath
+)
+
+var causes = [...]_KindEntry{
+	memoryExhausted:    {"MemoryLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the memory limit")},
+	timeExhausted:      {"TimeLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the time limit")},
+	callDepthExhausted: {"CallDepthLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the call depth limit")},
+	evaluatorDeath:     {"EvaluatorDied", kinds[evaluationFailed].sentinel.WithMessage("evaluator died")},
 }
 
 var (
@@ -50,12 +69,33 @@ var (
 	Closed            = kinds[closed].sentinel
 	Unsupported       = kinds[unsupported].sentinel
 	Unavailable       = kinds[unavailable].sentinel
-	MemoryLimit       = EvaluationFailed.WithMessage("exceeded the memory limit")
-	TimeLimit         = EvaluationFailed.WithMessage("exceeded the time limit")
+	InvalidInput      = kinds[invalidInput].sentinel
+	MemoryLimit       = causes[memoryExhausted].sentinel
+	TimeLimit         = causes[timeExhausted].sentinel
+	CallDepthLimit    = causes[callDepthExhausted].sentinel
+	EvaluatorDied     = causes[evaluatorDeath].sentinel
 )
 
 func (k _Kind) sentinel() fault.Fault {
 	return kinds[k].sentinel
+}
+
+func causeNamed(name string) (fault.Fault, bool) {
+	for _, entry := range causes {
+		if entry.name == name {
+			return entry.sentinel, true
+		}
+	}
+	return nil, false
+}
+
+func causeOf(err error) string {
+	for _, entry := range causes {
+		if errors.Is(err, entry.sentinel) {
+			return entry.name
+		}
+	}
+	return ""
 }
 
 func kindNamed(name string) (_Kind, bool) {

@@ -49,7 +49,7 @@ func TestFailuresAgreeInBothKinds(t *testing.T) {
 		"not data":             {_Agreement{text: "v: ${ [() => 1] }\n"}, EvaluationFailed},
 		"missing path":         {_Agreement{text: "v: ${ 1 }\n", path: []string{"w"}}, MissingPath},
 		"path into code":       {_Agreement{text: "v: \"${ ({a: 1}) }\"\n", path: []string{"v", "a"}}, MissingPath},
-		"immutable global var": {_Agreement{text: "v: ${ 1 }\n", vars: map[string]any{"undefined": 1}}, EvaluationFailed},
+		"immutable global var": {_Agreement{text: "v: ${ 1 }\n", vars: map[string]any{"undefined": 1}}, InvalidInput},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

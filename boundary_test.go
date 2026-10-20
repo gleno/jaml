@@ -56,7 +56,7 @@ func TestBadVarsAreRefusedBeforeRendering(t *testing.T) {
 				var out any
 				for _, path := range [][]string{{"plain"}, nil} {
 					var err = resolveInto(valued(t.Context(), vars), &out, document.At(path...))
-					expectError(t, err, EvaluationFailed, c.fragment)
+					expectError(t, err, InvalidInput, c.fragment)
 					expectNoTemplatePath(t, err)
 				}
 			})

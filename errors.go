@@ -128,3 +128,25 @@ func (t _TimeExhausted) Error() string {
 func (t _TimeExhausted) Is(target error) bool {
 	return target == TimeLimit
 }
+
+type _CallDepthExhausted struct {
+	depth int
+}
+
+func (c _CallDepthExhausted) Error() string {
+	return fmt.Sprintf("exceeded the maximum call depth of %d", c.depth)
+}
+
+func (c _CallDepthExhausted) Is(target error) bool {
+	return target == CallDepthLimit
+}
+
+type _EvaluatorDeath string
+
+func (d _EvaluatorDeath) Error() string {
+	return string(d)
+}
+
+func (d _EvaluatorDeath) Is(target error) bool {
+	return target == EvaluatorDied
+}

@@ -242,3 +242,26 @@ func TestEveryKindCrossesTheWire(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryCauseCrossesTheWire(t *testing.T) {
+	for _, cause := range []error{_MemoryExhausted("m"), _TimeExhausted{limit: time.Second}, _CallDepthExhausted{depth: 9}, _EvaluatorDeath("d")} {
+		var sent = failWith(evaluationFailed, cause).at("$.a")
+		var reply _Reply
+		if err := json.Unmarshal(_Frames{limit: 1 << 20}.failure(1, "$.a", sent), &reply); err != nil {
+			t.Fatal(err)
+		}
+		if err := reply.fits(opServe); err != nil {
+			t.Fatal(err)
+		}
+		var rebuilt = reply.Failure.rebuild()
+		for _, entry := range causes {
+			if errors.Is(rebuilt, entry.sentinel) != errors.Is(sent, entry.sentinel) {
+				t.Fatalf("%q came back as %q, which disagrees on %v", sent, rebuilt, entry.sentinel)
+			}
+		}
+	}
+	var unknown = _Reply{Job: 1, Failure: &_Failure{Kind: "EvaluationFailed", At: "$", Cause: "Nope", Message: "x"}}
+	if err := unknown.fits(opServe); err == nil {
+		t.Fatal("an unknown cause crossed the wire")
+	}
+}

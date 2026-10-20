@@ -105,7 +105,7 @@ func TestALabelPrintsBeforeTheReasonButStaysOutOfIt(t *testing.T) {
 		expectFailure(t, err, "$", "exceeded the time limit of 50ms")
 
 		err = resolveInto(WithValues(t.Context(), map[string]any{"x": make(chan int)}), &out, mustExpression(t, sb, "x"))
-		expectError(t, err, EvaluationFailed, "$: binding values: value \"x\"")
+		expectError(t, err, InvalidInput, "$: binding values: value \"x\"")
 		if strings.Contains(failureOf(t, err).Reason, "binding values") {
 			t.Fatalf("expected the binding label left out of the reason, got %+v", failureOf(t, err))
 		}

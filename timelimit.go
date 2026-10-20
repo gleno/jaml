@@ -19,7 +19,7 @@ func WithTimeLimit(ctx context.Context, limit time.Duration) context.Context {
 func timeLimitOf(ctx context.Context) (_TimeLimit, error) {
 	limit, limited := ctx.Value(_TimeLimitKey{}).(_TimeLimit)
 	if limited && limit <= 0 {
-		return 0, fail(invalidExpression, "a time limit must be positive, got %s", time.Duration(limit)).at(rootPlace)
+		return 0, fail(invalidInput, "a time limit must be positive, got %s", time.Duration(limit)).at(rootPlace)
 	}
 	return limit, nil
 }

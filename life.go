@@ -347,9 +347,9 @@ func (c _Collected) verdict(r _Remains) error {
 	case killedOutright(c.state):
 		return _OutsideDeath(fmt.Sprintf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", c.state, peakNote(c.state)))
 	case reason != "":
-		return fmt.Errorf("evaluator died (%s): %s", c.state, reason)
+		return _EvaluatorDeath(fmt.Sprintf("evaluator died (%s): %s", c.state, reason))
 	}
-	return fmt.Errorf("evaluator died (%s)", c.state)
+	return _EvaluatorDeath(fmt.Sprintf("evaluator died (%s)", c.state))
 }
 
 func (u _Uncollected) verdict(r _Remains) error {

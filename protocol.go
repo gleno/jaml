@@ -18,7 +18,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 18
+	protocolVersion      = 19
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -109,7 +109,7 @@ type _Failure struct {
 	Kind    string         `json:"kind"`
 	At      string         `json:"at,omitempty"`
 	Label   string         `json:"label,omitempty"`
-	Overran bool           `json:"overran,omitempty"`
+	Cause   string         `json:"cause,omitempty"`
 	Stopped bool           `json:"stopped,omitempty"`
 	Message string         `json:"message"`
 	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
@@ -160,7 +160,7 @@ func buildPanic(recovered any) error {
 
 func describeFailure(failed _ExpressionError) _Failure {
 	var unplaced = failed.unplaced
-	return _Failure{Kind: kinds[unplaced.kind].name, At: failed.path, Label: unplaced.label, Overran: errors.Is(unplaced.cause, TimeLimit), Stopped: errors.Is(unplaced.cause, context.Canceled), Message: unplaced.cause.Error()}
+	return _Failure{Kind: kinds[unplaced.kind].name, At: failed.path, Label: unplaced.label, Cause: causeOf(unplaced.cause), Stopped: errors.Is(unplaced.cause, context.Canceled), Message: unplaced.cause.Error()}
 }
 
 func (r _Reply) outcomes() int {
@@ -185,6 +185,8 @@ func (r _Reply) fits(op _Opcode) error {
 		return fmt.Errorf("the evaluator outlined code badly: %w", r.Code.checked())
 	case r.Failure != nil && !r.Failure.known():
 		return fmt.Errorf("the evaluator answered with an unknown failure kind %q", r.Failure.Kind)
+	case r.Failure != nil && !r.Failure.knownCause():
+		return fmt.Errorf("the evaluator answered with an unknown failure cause %q", r.Failure.Cause)
 	case r.Failure != nil && r.Failure.At == "":
 		return errors.New("the evaluator answered with a failure at no place")
 	case r.Failure != nil:
@@ -202,9 +204,15 @@ func (f _Failure) known() bool {
 	return known
 }
 
+func (f _Failure) knownCause() bool {
+	_, known := causeNamed(f.Cause)
+	return f.Cause == "" || known
+}
+
 func (f _Failure) rebuild() _ExpressionError {
 	var kind, _ = kindNamed(f.Kind)
-	return _Unplaced{kind: kind, label: f.Label, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), overran: f.Overran, stopped: f.Stopped}}.at(f.At)
+	var matched, _ = causeNamed(f.Cause)
+	return _Unplaced{kind: kind, label: f.Label, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), matched: matched, stopped: f.Stopped}}.at(f.At)
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {
@@ -217,12 +225,12 @@ func (t *_ThrownOnWire) rebuild() *Thrown {
 type _CarriedCause struct {
 	message string
 	thrown  *Thrown
-	overran bool
+	matched error
 	stopped bool
 }
 
 func (c _CarriedCause) Is(target error) bool {
-	return c.overran && target == TimeLimit || c.stopped && target == context.Canceled
+	return c.matched != nil && target == c.matched || c.stopped && target == context.Canceled
 }
 
 func (c _CarriedCause) Error() string {

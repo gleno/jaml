@@ -23,21 +23,22 @@ func TestARequestPastTheCapIsRefusedInTheHostNamingItsBulk(t *testing.T) {
 	for name, refused := range map[string]struct {
 		run  func() error
 		bulk string
+		kind error
 	}{
 		"one value": {func() error {
 			var out string
 			return resolveInto(valued(t.Context(), map[string]any{"big": huge, "small": 1}), &out, echo, 1)
-		}, `value "big"`},
+		}, `value "big"`, InvalidInput},
 		"values": {func() error {
 			var out string
 			return resolveInto(valued(t.Context(), map[string]any{"a": third, "b": third, "c": third}), &out, echo, 1)
-		}, "the values"},
-		"arguments":  {func() error { var out string; return resolveInto(t.Context(), &out, echo, huge) }, "the arguments"},
-		"scripts":    {func() error { var out string; return resolveInto(scripted, &out, echo, 1) }, "the scripts"},
-		"a document": {func() error { _, err := sb.MakeExpressionFromJaml(t.Context(), "v: "+huge+"\n"); return err }, "the document"},
+		}, "the values", InvalidInput},
+		"arguments":  {func() error { var out string; return resolveInto(t.Context(), &out, echo, huge) }, "the arguments", InvalidInput},
+		"scripts":    {func() error { var out string; return resolveInto(scripted, &out, echo, 1) }, "the scripts", InvalidInput},
+		"a document": {func() error { _, err := sb.MakeExpressionFromJaml(t.Context(), "v: "+huge+"\n"); return err }, "the document", InvalidExpression},
 	} {
 		t.Run(name, func(t *testing.T) {
-			expectError(t, refused.run(), EvaluationFailed, "the request is larger than 4194304 bytes, mostly "+refused.bulk)
+			expectError(t, refused.run(), refused.kind, "the request is larger than 4194304 bytes, mostly "+refused.bulk)
 		})
 	}
 	expectEqual(t, childPID(t, sb), before)
@@ -176,6 +177,6 @@ func TestValuesShipOnlyToCode(t *testing.T) {
 		t.Fatalf("a script on a code-free selection sent only %d bytes", sent.size)
 	}
 	var out any
-	expectError(t, resolveInto(valued(t.Context(), map[string]any{"f": func() {}}), &out, document.At("plain")), EvaluationFailed, `binding values: value "f" is not JSON data`)
-	expectError(t, resolveInto(valued(t.Context(), map[string]any{"Math": 1}), &out, document.At("plain")), EvaluationFailed, `value "Math" collides with a JavaScript global`)
+	expectError(t, resolveInto(valued(t.Context(), map[string]any{"f": func() {}}), &out, document.At("plain")), InvalidInput, `binding values: value "f" is not JSON data`)
+	expectError(t, resolveInto(valued(t.Context(), map[string]any{"Math": 1}), &out, document.At("plain")), InvalidInput, `value "Math" collides with a JavaScript global`)
 }

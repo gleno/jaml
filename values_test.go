@@ -20,7 +20,7 @@ func TestVarsNamedLikeJavaScriptGlobalsAreRefusedInBothKinds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			for _, text := range []string{"a: ${ 1 }\nb: ${ 2 }\n", "plain: 1\n"} {
 				var both = _Agreement{text: text, vars: map[string]any{name: 7, "fine": 1}}.eval(t, intoAny)
-				both.expectRefused(t, EvaluationFailed, `binding values: value "`+name+`" collides with a JavaScript global`)
+				both.expectRefused(t, InvalidInput, `binding values: value "`+name+`" collides with a JavaScript global`)
 				expectNoTemplatePath(t, both.trusted)
 			}
 		})
@@ -39,12 +39,12 @@ func TestVarsHoldingInvalidUTF8AreRefusedInBothKinds(t *testing.T) {
 	for name, vars := range cases {
 		t.Run(name, func(t *testing.T) {
 			var both = _Agreement{text: "v: ${ 1 }\n", vars: vars}.eval(t, intoAny)
-			both.expectRefused(t, EvaluationFailed, `binding values: value "bad" holds text that is not valid UTF-8`)
+			both.expectRefused(t, InvalidInput, `binding values: value "bad" holds text that is not valid UTF-8`)
 			expectNoTemplatePath(t, both.trusted)
 		})
 	}
 	var both = _Agreement{text: "v: ${ 1 }\n", vars: map[string]any{"b\xffad": 1}}.eval(t, intoAny)
-	both.expectRefused(t, EvaluationFailed, "is not named in valid UTF-8")
+	both.expectRefused(t, InvalidInput, "is not named in valid UTF-8")
 }
 
 func TestRealReplacementCharactersAndEscapedTextStillBind(t *testing.T) {
@@ -75,7 +75,7 @@ func TestBadVarsAreRefusedOnTemplatesWithoutExpressionsInBothKinds(t *testing.T)
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			var both = _Agreement{text: "a: 1\nb: [x, y]\nc: {d: e}\n", vars: c.vars}.eval(t, intoAny)
-			both.expectRefused(t, EvaluationFailed, c.fragment)
+			both.expectRefused(t, InvalidInput, c.fragment)
 			expectNoTemplatePath(t, both.trusted)
 		})
 	}
@@ -86,7 +86,7 @@ func TestEveryGlobalOfTheEngineIsRefusedAsAVarName(t *testing.T) {
 		var document = mustJaml(t, sb, "plain: 1\n")
 		for _, name := range goja.New().GlobalObject().GetOwnPropertyNames() {
 			var out any
-			expectError(t, resolveInto(valued(t.Context(), map[string]any{name: 1}), &out, document), EvaluationFailed, `value "`+name+`" collides with a JavaScript global`)
+			expectError(t, resolveInto(valued(t.Context(), map[string]any{name: 1}), &out, document), InvalidInput, `value "`+name+`" collides with a JavaScript global`)
 		}
 	})
 }
@@ -126,7 +126,7 @@ func TestVarsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) {
 	for name, value := range textThatIsNotUTF8 {
 		t.Run(name, func(t *testing.T) {
 			var both = _Agreement{text: "v: ${ typeof bad }\n", vars: map[string]any{"bad": value}}.eval(t, intoAny)
-			both.expectRefused(t, EvaluationFailed, `binding values: value "bad" holds text that is not valid UTF-8`)
+			both.expectRefused(t, InvalidInput, `binding values: value "bad" holds text that is not valid UTF-8`)
 		})
 	}
 }
@@ -137,7 +137,7 @@ func TestArgumentsWrittenAsTextThatIsNotUTF8AreRefusedInBothKinds(t *testing.T) 
 		for name, value := range textThatIsNotUTF8 {
 			t.Run(name, func(t *testing.T) {
 				var out any
-				expectError(t, resolveInto(t.Context(), &out, compiled, 1, value), EvaluationFailed, `binding arguments: argument 2 holds text that is not valid UTF-8`)
+				expectError(t, resolveInto(t.Context(), &out, compiled, 1, value), InvalidInput, `binding arguments: argument 2 holds text that is not valid UTF-8`)
 			})
 		}
 	})

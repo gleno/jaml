@@ -21,7 +21,7 @@ func TestTemplatesWithoutExpressionsStillCheckVars(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "a: 1\nb: [x, z]\n")
 		var out any
-		expectError(t, resolveInto(valued(t.Context(), map[string]any{"unmarshalable": func() {}}), &out, document), EvaluationFailed, `value "unmarshalable" is not JSON data`)
+		expectError(t, resolveInto(valued(t.Context(), map[string]any{"unmarshalable": func() {}}), &out, document), InvalidInput, `value "unmarshalable" is not JSON data`)
 	})
 }
 
@@ -29,7 +29,7 @@ func TestVarsThatAreNotJSONDataFailBeforeAnyExpression(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "v: ${1}\n")
 		var out int
-		expectError(t, resolveInto(valued(t.Context(), map[string]any{"f": func() {}}), &out, document.At("v")), EvaluationFailed, `binding values: value "f" is not JSON data`)
+		expectError(t, resolveInto(valued(t.Context(), map[string]any{"f": func() {}}), &out, document.At("v")), InvalidInput, `binding values: value "f" is not JSON data`)
 	})
 }
 
@@ -37,7 +37,7 @@ func TestVarsCannotRedefineImmutableGlobals(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "v: ${1}\n")
 		var out int
-		expectError(t, resolveInto(valued(t.Context(), map[string]any{"undefined": 1}), &out, document.At("v")), EvaluationFailed, `binding values: value "undefined" collides with a JavaScript global`)
+		expectError(t, resolveInto(valued(t.Context(), map[string]any{"undefined": 1}), &out, document.At("v")), InvalidInput, `binding values: value "undefined" collides with a JavaScript global`)
 	})
 }
 
