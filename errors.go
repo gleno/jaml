@@ -150,3 +150,9 @@ func (d _EvaluatorDeath) Error() string {
 func (d _EvaluatorDeath) Is(target error) bool {
 	return target == EvaluatorDied
 }
+
+type _StuckDeath string
+
+func (d _StuckDeath) Error() string {
+	return string(d)
+}

@@ -345,7 +345,7 @@ func (c _Collected) verdict(r _Remains) error {
 	case c.state.ExitCode() == exitMemoryLimit:
 		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes", r.limit))
 	case c.state.ExitCode() == exitStuckAfterCancel:
-		return fmt.Errorf("evaluator exited (%s): a job stuck after cancel was still inside a built-in %s after it was told to stop", c.state, cancelGrace)
+		return _StuckDeath(fmt.Sprintf("evaluator exited (%s): a job stuck after cancel was still inside a built-in %s after it was told to stop", c.state, cancelGrace))
 	case refusedAnAllocation(reason):
 		return _MemoryExhausted(fmt.Sprintf("exceeded the memory limit of %d bytes: evaluator died (%s): %s", r.limit, c.state, reason))
 	case killedOutright(c.state) && r.killCause != nil:

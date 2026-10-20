@@ -17,6 +17,11 @@ type _Lost struct{ cause error }
 
 func (_Lost) isOutcome() {}
 
+func (l _Lost) attributed() bool {
+	_, stuck := l.cause.(_StuckDeath)
+	return stuck
+}
+
 type _Availability interface{ isAvailability() }
 
 type _Absent struct{}
@@ -84,6 +89,7 @@ func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
 }
 
 func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
+	var requeued = false
 	for {
 		held, err := d.admit(e)
 		if err != nil {
@@ -92,7 +98,9 @@ func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 		}
 		final, replay := e.judge(held, work(e, held.held()))
 		if replay {
-			d.suspect(e)
+			var shared = !requeued && final.(_Lost).attributed()
+			requeued = requeued || shared
+			d.requeue(e, shared)
 			continue
 		}
 		e.report(final)
@@ -160,12 +168,16 @@ func (d *_Dispatcher) release(held _Lease) {
 	d.dispatch()
 }
 
-func (d *_Dispatcher) suspect(e *_Errand) {
+func (d *_Dispatcher) requeue(e *_Errand, shared bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.running--
-	d.mode = recovering
-	d.suspects = append(d.suspects, e)
+	if shared {
+		d.waiting = slices.Insert(d.waiting, 0, e)
+	} else {
+		d.mode = recovering
+		d.suspects = append(d.suspects, e)
+	}
 	d.dispatch()
 }
 
@@ -196,7 +208,7 @@ func (d *_Dispatcher) lose(l *_Life) {
 		return
 	}
 	d.child = _Absent{}
-	if d.running > 0 {
+	if d.running > 0 && !l.lost().attributed() {
 		d.mode = recovering
 	}
 }

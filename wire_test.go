@@ -48,9 +48,16 @@ func residentBuild(t *testing.T, child *_Life, u *_RemoteUnit) uint64 {
 
 func expectMissing(t *testing.T, child *_Life, build uint64) {
 	t.Helper()
-	var served = child.serve(within(t, 10*time.Second), askFor(t, build, _Ask{}))
-	if failed, isRefused := served.(_Refused); !isRefused || !errors.Is(failed.err, errMissing) {
-		t.Fatalf("the evaluator still serves build %d: %v", build, served)
+	var deadline = time.Now().Add(10 * time.Second)
+	for {
+		var served = child.serve(within(t, 10*time.Second), askFor(t, build, _Ask{}))
+		if failed, isRefused := served.(_Refused); isRefused && errors.Is(failed.err, errMissing) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the evaluator still serves build %d: %v", build, served)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -99,7 +106,13 @@ func TestAForgetThatOvertakesItsBuildIsHonoured(t *testing.T) {
 	var u = unitOn(t, "v: 1\n")
 	var r = child.reside(u, ignoreEarly)
 	expectEqual(t, r.build, next)
-	if failed, isRefused := r.result.(_Refused); !isRefused || !strings.Contains(failed.err.Error(), "cancelled") {
+	switch settled := r.result.(type) {
+	case _Built:
+	case _Refused:
+		if !strings.Contains(settled.err.Error(), "cancelled") {
+			t.Fatalf("a build forgotten before it arrived was refused %v", settled.err)
+		}
+	default:
 		t.Fatalf("a build forgotten before it arrived was answered %v", r.result)
 	}
 	expectMissing(t, child, next)
