@@ -96,6 +96,17 @@ func resolvingBig(t *testing.T, sb *Sandbox) <-chan error {
 	return answered
 }
 
+func awaitStalledWrite(t *testing.T, child *_Life) {
+	t.Helper()
+	var deadline = time.Now().Add(60 * time.Second)
+	for child.wire.stall.lasted() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no request ever blocked on the stopped evaluator")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func expectStuckAfterCancel(t *testing.T, child *_Life) {
 	t.Helper()
 	select {
@@ -227,11 +238,17 @@ func TestAChildNotReadingRequestsIsReplaced(t *testing.T) {
 	if err := child.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
 		t.Fatalf("stopping the evaluator: %v", err)
 	}
-	var stopped = time.Now()
-	var out int
-	expectError(t, resolveInto(valued(within(t, 200*time.Millisecond), map[string]any{"x": strings.Repeat("y", 4<<20)}), &out, length), EvaluationFailed, "cancelled")
-	if waited := time.Since(stopped); waited > time.Second {
-		t.Fatalf("a call blocked on a stopped evaluator returned after %s, past its 200ms context", waited)
+	ctx, cancel := context.WithCancel(t.Context())
+	var blocked = make(chan error, 1)
+	go func() {
+		var out int
+		blocked <- resolveInto(valued(ctx, map[string]any{"x": strings.Repeat("y", 4<<20)}), &out, length)
+	}()
+	awaitStalledWrite(t, child)
+	cancel()
+	expectError(t, <-blocked, EvaluationFailed, "cancelled")
+	if !child.alive() {
+		t.Fatal("a cancelled call blocked on a stopped evaluator waited for the backstop instead of its cancel")
 	}
 	select {
 	case <-child.ended:
