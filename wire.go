@@ -223,7 +223,7 @@ func overran(watched context.Context, result _Outcome) _Outcome {
 	if !isExhausted || !isLost || !wedged(died.cause) {
 		return result
 	}
-	return _Refused{err: fmt.Errorf("%w: %w", exhausted, died.cause)}
+	return _Refused{err: fmt.Errorf("%w: %s", exhausted, died.cause)}
 }
 
 func wedged(verdict error) bool {

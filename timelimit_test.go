@@ -3,6 +3,7 @@ package jaml
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,41 @@ func TestOnlyAWedgedChildPastAnOverseenLimitTurnsIntoTimeLimit(t *testing.T) {
 	}
 	expectError(t, located("$.v", refusal(t, overran(overdue, silent))), TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator stopped answering")
 	expectError(t, located("$.v", refusal(t, overran(overdue, unread))), TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator was not reading requests")
+}
+
+func TestATimedOutJobBlamesNoOtherJobsDeath(t *testing.T) {
+	overdue, stop := context.WithCancelCause(t.Context())
+	stop(_TimeLimit(time.Millisecond).exhausted())
+	var errand = &_Errand{ctx: t.Context()}
+	var starved = _Lost{cause: _MemoryExhausted("exceeded the memory limit of 64 bytes")}
+	judged, replayed := errand.judge(_Shared{}, overran(overdue, starved))
+	if !replayed || judged != _Outcome(starved) {
+		t.Fatalf("a job past its limit whose shared child died of another's memory settled %#v instead of replaying", judged)
+	}
+	var wedgedBy = _Lost{cause: fmt.Errorf("%w: %w", errSilent, _MemoryExhausted("exceeded the memory limit of 64 bytes"))}
+	var err = located("$.v", refusal(t, overran(overdue, wedgedBy)))
+	expectError(t, err, TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator stopped answering", "exceeded the memory limit of 64 bytes")
+	for _, foreign := range []error{MemoryLimit, errSilent} {
+		if errors.Is(err, foreign) {
+			t.Fatalf("a timed-out job's error %v matches the death's %v", err, foreign)
+		}
+	}
+}
+
+func TestAnOutsideDeathPastALimitStillClassifiesAsUnavailable(t *testing.T) {
+	overdue, stop := context.WithCancelCause(t.Context())
+	stop(_TimeLimit(time.Millisecond).exhausted())
+	var errand = &_Errand{ctx: t.Context()}
+	var outside = _Lost{cause: _OutsideDeath("evaluator died (signal: killed): killed from outside jaml")}
+	judged, replayed := errand.judge(_Owned{}, overran(overdue, outside))
+	if replayed {
+		t.Fatal("a job alone on its child was replayed after an outside death")
+	}
+	var err = located("$.v", refusal(t, judged))
+	expectError(t, err, Unavailable, "killed from outside jaml")
+	if errors.Is(err, TimeLimit) {
+		t.Fatalf("an outside death past a limit was blamed on the limit: %v", err)
+	}
 }
 
 func refusal(t *testing.T, result _Outcome) error {
