@@ -178,6 +178,8 @@ func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 	var silent = &_HeadBuffer{limit: stderrHeadBytes}
 	var refusedMapping = &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = refusedMapping.Write([]byte("fatal error: runtime: out of memory\n\nruntime stack:\n"))
+	var refusedCommit = &_HeadBuffer{limit: stderrHeadBytes}
+	_, _ = refusedCommit.Write([]byte("fatal error: runtime: cannot allocate memory\n\nruntime stack:\n"))
 	var refusedReservation = &_HeadBuffer{limit: stderrHeadBytes}
 	_, _ = refusedReservation.Write([]byte("runtime: out of memory: cannot allocate 34359738368-byte block (3866624 in use)\nfatal error: out of memory\n\ngoroutine 1 [running]:\n"))
 	var refusedMetadata = &_HeadBuffer{limit: stderrHeadBytes}
@@ -202,6 +204,7 @@ func TestADeathIsClassifiedFromTheEvidence(t *testing.T) {
 		"an uncollected exit keeps its panic":        {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: panicked, limit: 64 << 20}, false, "could not be collected (no child processes): panic: boom"},
 		"an uncollected exit under pressure":         {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: marked, limit: 64 << 20}, true, "near the memory limit of 67108864 bytes"},
 		"a refused mapping is the memory limit":      {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedMapping, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes: evaluator died (exit status 2): fatal error: runtime: out of memory"},
+		"a refused commit is the memory limit":       {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedCommit, limit: 64 << 20}, true, "exceeded the memory limit of 67108864 bytes: evaluator died (exit status 2): fatal error: runtime: cannot allocate memory"},
 		"a refused reservation is the memory limit":  {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedReservation, limit: 64 << 20}, true, "evaluator died (exit status 2): fatal error: out of memory"},
 		"refused metadata is the memory limit":       {_Collected{state: exited(t, "exit 2").ProcessState}, _Remains{stderr: refusedMetadata, limit: 64 << 20}, true, "out of memory allocating heap arena metadata"},
 		"an uncollected refusal is the memory limit": {_Uncollected{waited: syscall.ECHILD}, _Remains{stderr: refusedReservation, limit: 64 << 20}, true, "could not be collected (no child processes): fatal error: out of memory"},

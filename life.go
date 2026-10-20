@@ -22,6 +22,7 @@ import (
 const (
 	stderrHeadBytes        = 4096
 	runtimeOutOfMemory     = "fatal error: runtime: out of memory"
+	mappingOutOfMemory     = "fatal error: runtime: cannot allocate memory"
 	heapOutOfMemory        = "fatal error: out of memory"
 	threadOutOfMemory      = "runtime/cgo: pthread_create failed: Resource temporarily unavailable"
 	pressureMarker         = "jaml evaluator: the live heap passed three quarters of its ceiling"
@@ -376,7 +377,7 @@ func (u _Uncollected) verdict(r _Remains) error {
 }
 
 func refusedAnAllocation(reason string) bool {
-	return reason == runtimeOutOfMemory || reason == threadOutOfMemory || strings.HasPrefix(reason, heapOutOfMemory)
+	return reason == runtimeOutOfMemory || reason == mappingOutOfMemory || reason == threadOutOfMemory || strings.HasPrefix(reason, heapOutOfMemory)
 }
 
 type _OutsideDeath string
