@@ -206,3 +206,27 @@ func TestTheAddressCeilingFollowsTheMemoryLimit(t *testing.T) {
 		t.Fatalf("an address ceiling of %d MiB for a child holding %d MiB, want at most %d MiB more", ceiling>>20, held>>20, addressAllowance()>>20)
 	}
 }
+
+func TestInnocentJobsOnEveryCoreNeverTripTheCeiling(t *testing.T) {
+	var cores = goruntime.GOMAXPROCS(0)
+	var sb = mustIsolated(t, WithMemoryLimit(smallestMemoryLimit), WithMaxConcurrency(cores))
+	var document = mustJaml(t, sb, busyMillisecond)
+	var child = currentChild(t, sb)
+	for range 10 {
+		var answers = make(chan error, cores)
+		for range cores {
+			go func() {
+				_, err := Resolve[int](t.Context(), document.At("busy"))
+				answers <- err
+			}()
+		}
+		for range cores {
+			if err := <-answers; err != nil {
+				t.Fatalf("an innocent job beside %d others failed: %v", cores-1, err)
+			}
+		}
+	}
+	if !child.alive() {
+		t.Fatalf("the child died under innocent work: %v", child.lost().cause)
+	}
+}

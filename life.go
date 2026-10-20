@@ -171,7 +171,7 @@ func (w _EvaluatorWorld) env() []string {
 		evaluatorJobs + "=" + strconv.Itoa(w.jobs),
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),
-		mallocArenas + "=2",
+		mallocArenas + "=1",
 	}
 	return append(env, w.zone...)
 }
