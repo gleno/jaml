@@ -32,10 +32,12 @@ const (
 )
 
 const (
-	smallestMemoryLimit = 16 << 20
-	largestMemoryLimit  = 1 << 40
-	defaultMemoryLimit  = _MemoryLimit(256 << 20)
-	defaultBuildTimeout = 5 * time.Second
+	smallestMemoryLimit   = 16 << 20
+	largestMemoryLimit    = 1 << 40
+	defaultMemoryLimit    = _MemoryLimit(256 << 20)
+	defaultBuildTimeout   = 5 * time.Second
+	defaultCallDepthLimit = 4096
+	maxCallDepthLimit     = 1 << 15
 )
 
 const defaultSigil = "$"
@@ -55,7 +57,19 @@ type _SandboxSettings struct {
 	memoryLimit    _MemoryLimit
 	maxConcurrency int
 	buildTimeout   time.Duration
-	builtins       _Builtins
+	runtime        _Runtime
+}
+
+type _Runtime struct {
+	builtins  _Builtins
+	callDepth int
+}
+
+func (r _Runtime) depth() int {
+	if r.callDepth == 0 {
+		return defaultCallDepthLimit
+	}
+	return r.callDepth
 }
 
 type _MemoryLimit int64
@@ -129,9 +143,27 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption {
 	}
 }
 
+func WithCallDepthLimit(calls int) SandboxOption {
+	return func(s *_SandboxSettings) error {
+		limit, err := makeCallDepthLimit(calls)
+		if err != nil {
+			return err
+		}
+		s.runtime.callDepth = limit
+		return nil
+	}
+}
+
+func makeCallDepthLimit(calls int) (int, error) {
+	if calls < 1 || calls > maxCallDepthLimit {
+		return 0, fail(InvalidExpression, "call depth limit must be between 1 and %d, got %d", maxCallDepthLimit, calls)
+	}
+	return calls, nil
+}
+
 func withBuiltins(builtins _Builtins) SandboxOption {
 	return func(s *_SandboxSettings) error {
-		s.builtins = builtins
+		s.runtime.builtins = builtins
 		return nil
 	}
 }

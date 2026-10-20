@@ -8,6 +8,7 @@ import (
 type _TrustedEngine struct {
 	gate         chan struct{}
 	buildTimeout time.Duration
+	runtime      _Runtime
 }
 
 type _LocalUnit struct {
@@ -16,7 +17,7 @@ type _LocalUnit struct {
 }
 
 func newTrusted(configured _SandboxSettings) *_TrustedEngine {
-	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout}
+	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, runtime: configured.runtime}
 }
 
 func (e *_TrustedEngine) enter(ctx context.Context) error {
@@ -68,7 +69,7 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 		return _Refused{err: err}
 	}
 	defer u.engine.leave()
-	run, err := u.built.prepare(written.view(), mutableBuiltins)
+	run, err := u.built.prepare(written.view(), u.engine.runtime)
 	if err != nil {
 		return _Refused{err: err}
 	}

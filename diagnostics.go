@@ -46,13 +46,13 @@ func (r _Realm) explain(err error) error {
 	if errors.As(err, &exception) {
 		return r.describeException(exception)
 	}
-	return uncatchable(err)
+	return r.uncatchable(err)
 }
 
-func uncatchable(err error) error {
+func (r _Realm) uncatchable(err error) error {
 	var overflowed *goja.StackOverflowError
 	if errors.As(err, &overflowed) {
-		return fmt.Errorf("exceeded the maximum call depth of %d", maxCallStackSize)
+		return fmt.Errorf("exceeded the maximum call depth of %d", r.callDepth)
 	}
 	if holdsEngineValue(err) {
 		return fmt.Errorf("the engine stopped with a %T", err)

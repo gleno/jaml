@@ -88,7 +88,7 @@ func makeSecureSandbox(ctx context.Context, options []SandboxOption) (*Sandbox, 
 }
 
 func MakeTrustedSandbox(ctx context.Context, options ...SandboxOption) (*Sandbox, error) {
-	configured, err := configureSandbox(options)
+	configured, err := configureSandbox(slices.Concat(options, []SandboxOption{withBuiltins(mutableBuiltins)}))
 	if err != nil {
 		return nil, err
 	}

@@ -266,7 +266,7 @@ var freezerProgram = sync.OnceValue(func() *goja.Program {
 })
 
 var pristineChart = sync.OnceValues(func() (*goja.Program, error) {
-	var realm = captureRealm(goja.New())
+	var realm = captureRealm(goja.New(), defaultCallDepthLimit)
 	made, err := realm.vm.RunProgram(freezerProgram())
 	if err != nil {
 		return nil, err
@@ -298,7 +298,7 @@ func (r _Realm) builtinsSettler(plan _SessionPlan) (func(_Realm) error, error) {
 		return nil, fmt.Errorf("preparing to settle the built-ins: %w", r.explain(err))
 	}
 	var exports = made.ToObject(r.vm)
-	if plan.builtins == mutableBuiltins {
+	if plan.runtime.builtins == mutableBuiltins {
 		guard, _ := goja.AssertFunction(exports.Get("guard"))
 		return _MethodGuard{guard: guard}.apply, nil
 	}

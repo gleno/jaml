@@ -12,17 +12,16 @@ import (
 )
 
 const (
-	maxCallStackSize = 4096
-	maxUnwraps       = 16
+	maxUnwraps = 16
 )
 
 var errInterrupted = errors.New("interrupted")
 
 type _SessionPlan struct {
-	values   _BoundValues
-	scripts  []string
-	pinned   _Pinned
-	builtins _Builtins
+	values  _BoundValues
+	scripts []string
+	pinned  _Pinned
+	runtime _Runtime
 }
 
 type _LazySession struct {
@@ -66,10 +65,10 @@ type _Session struct {
 
 func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	var vm = goja.New()
-	vm.SetMaxCallStackSize(maxCallStackSize)
+	vm.SetMaxCallStackSize(plan.runtime.depth())
 	vm.SetTimeSource(plan.pinned.now)
 	vm.SetRandSource(plan.pinned.random())
-	var opened = &_Session{ctx: ctx, realm: captureRealm(vm)}
+	var opened = &_Session{ctx: ctx, realm: captureRealm(vm, plan.runtime.depth())}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
 	settle, err := opened.builtinsSettler(plan)
 	if err != nil {
@@ -110,7 +109,7 @@ func (s *_Session) enter(step func(_Realm) error) (err error) {
 		return halted
 	}
 	if entered != nil {
-		return uncatchable(entered)
+		return s.realm.uncatchable(entered)
 	}
 	return stepped
 }
