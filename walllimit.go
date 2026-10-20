@@ -31,11 +31,26 @@ func (l _WallLimit) bound(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeoutCause(ctx, time.Duration(l), l.exhausted())
 }
 
-func (l _WallLimit) overseen(ctx context.Context, allowance time.Duration) (context.Context, context.CancelFunc) {
+type _Oversight struct {
+	ctx   context.Context
+	limit _WallLimit
+	timer *time.Timer
+	stop  context.CancelFunc
+}
+
+func (l _WallLimit) overseen(ctx context.Context, allowance time.Duration) *_Oversight {
 	if l == 0 {
-		return ctx, func() {}
+		return &_Oversight{ctx: ctx, stop: func() {}}
 	}
-	return context.WithTimeoutCause(ctx, time.Duration(l)+allowance, l.exhausted())
+	watched, cancel := context.WithCancelCause(ctx)
+	var timer = time.AfterFunc(time.Duration(l)+allowance, func() { cancel(l.exhausted()) })
+	return &_Oversight{ctx: watched, limit: l, timer: timer, stop: func() { timer.Stop(); cancel(context.Canceled) }}
+}
+
+func (o *_Oversight) rearm(allowance time.Duration) {
+	if o.timer != nil {
+		o.timer.Reset(time.Duration(o.limit) + allowance)
+	}
 }
 
 func (l _WallLimit) exhausted() error {

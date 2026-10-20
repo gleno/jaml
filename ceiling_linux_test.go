@@ -50,7 +50,7 @@ var bombsPastTheCeiling = map[string]string{
 }
 
 func addressAllowance() int64 {
-	return addressGrowthPerLimit*ceilingTestLimit + addressSlack + addressPerThread*int64(goruntime.GOMAXPROCS(0)+goruntime.GOMAXPROCS(0))
+	return addressGrowthPerLimit*ceilingTestLimit + addressSlack
 }
 
 type _ChildPeaks struct {
@@ -228,5 +228,38 @@ func TestInnocentJobsOnEveryCoreNeverTripTheCeiling(t *testing.T) {
 	}
 	if !child.alive() {
 		t.Fatalf("the child died under innocent work: %v", child.lost().cause)
+	}
+}
+
+const doublingToHalfAGibibyte = "(() => { let s = 'x'.repeat(1 << 20); for (let i = 0; i < 9; i++) { s += s } return s.length })()"
+
+func TestADoublingBodyNeverHoldsFourTimesTheLimit(t *testing.T) {
+	var burners = goruntime.GOMAXPROCS(0)
+	var sb = mustIsolated(t, WithMemoryLimit(128<<20), WithMaxConcurrency(burners+1))
+	var body = mustExpression(t, sb, doublingToHalfAGibibyte)
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	for _, loaded := range []bool{false, true} {
+		var burned = make(chan error, burners)
+		if loaded {
+			for range burners {
+				go func() {
+					var out any
+					burned <- resolveInto(WithWallLimit(t.Context(), 300*time.Millisecond), &out, spin)
+				}()
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		var started = time.Now()
+		var out int
+		var err = resolveInto(WithWallLimit(t.Context(), 10*time.Second), &out, body)
+		expectError(t, err, MemoryLimit, "exceeded the memory limit of 134217728 bytes")
+		if waited := time.Since(started); waited > 5*time.Second {
+			t.Fatalf("a body doubling a string to 512 MiB under a 128 MiB limit (loaded: %v) was stopped only after %s", loaded, waited)
+		}
+		if loaded {
+			for range burners {
+				expectError(t, <-burned, WallLimit)
+			}
+		}
 	}
 }

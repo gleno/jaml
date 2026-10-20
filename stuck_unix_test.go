@@ -3,6 +3,7 @@
 package jaml
 
 import (
+	"syscall"
 	"testing"
 	"time"
 )
@@ -36,4 +37,29 @@ func TestAStuckRunNamesThePieceAndQuotesItsCode(t *testing.T) {
 		expectFailure(t, err, "$.y[0]", "exceeded the wall time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
 		expectStuckAfterCancel(t, child)
 	})
+}
+
+func TestAWedgedChildIsKilledAtTheWallLimitOnceItsScriptsCompiled(t *testing.T) {
+	var sb = mustIsolated(t, WithBuildTimeout(20*time.Second))
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	var child = currentChild(t, sb)
+	var answered = make(chan error, 1)
+	var started = time.Now()
+	go func() {
+		var out any
+		answered <- resolveInto(WithWallLimit(WithScript(t.Context(), "const compiled = 1"), 300*time.Millisecond), &out, spin)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if err := child.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		t.Fatalf("stopping the evaluator: %v", err)
+	}
+	var err = <-answered
+	var waited = time.Since(started)
+	expectError(t, err, WallLimit, "exceeded the wall time limit of 300ms", "the evaluator stopped answering")
+	if waited > 300*time.Millisecond+2*cancelGrace+backstopSilence+3*time.Second {
+		t.Fatalf("a wedged child whose scripts had compiled was killed only after %s, as if the build timeout still counted", waited)
+	}
+	if waited < 300*time.Millisecond+backstopSilence {
+		t.Fatalf("a wedged child was killed after %s, before its wall limit and the backstop's silence", waited)
+	}
 }

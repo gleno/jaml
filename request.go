@@ -42,7 +42,7 @@ type _RequestBody struct {
 	compiles bool
 }
 
-func (b *_RequestBody) overseen(ctx context.Context, buildTimeout time.Duration) (context.Context, context.CancelFunc) {
+func (b *_RequestBody) overseen(ctx context.Context, buildTimeout time.Duration) *_Oversight {
 	if b.compiles {
 		return b.limit.overseen(ctx, buildTimeout+2*cancelGrace)
 	}

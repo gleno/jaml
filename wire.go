@@ -45,13 +45,15 @@ type _Switchboard struct {
 }
 
 type _Expectation struct {
-	op      _Opcode
-	replies chan _Reply
+	op       _Opcode
+	replies  chan _Reply
+	compiled chan struct{}
 }
 
 type _Call struct {
-	job     uint64
-	replies <-chan _Reply
+	job      uint64
+	replies  <-chan _Reply
+	compiled <-chan struct{}
 }
 
 func closedChannel() <-chan struct{} {
@@ -196,15 +198,19 @@ func (l *_Life) serve(ctx context.Context, asked _Outgoing) _Outcome {
 	if err != nil {
 		return l.unsent(err)
 	}
-	watched, stop := asked.body.overseen(ctx, l.buildTimeout)
-	defer stop()
-	var stopped = watched.Done()
+	var watch = asked.body.overseen(ctx, l.buildTimeout)
+	defer watch.stop()
+	var stopped = watch.ctx.Done()
+	var compiled = sent.compiled
 	for {
 		select {
 		case incoming := <-sent.replies:
 			return servedFrom(incoming)
+		case <-compiled:
+			compiled = nil
+			watch.rearm(2 * cancelGrace)
 		case <-l.ended:
-			return overran(watched, l.final(sent, servedFrom))
+			return overran(watch.ctx, l.final(sent, servedFrom))
 		case <-stopped:
 			stopped = nil
 			defer l.backstop(l.halt(ctx, sent.job), l.quiet)()
@@ -263,13 +269,13 @@ func (l *_Life) send(ctx context.Context, outgoing _Outgoing) (_Call, error) {
 	defer func() { <-l.wire.writer }()
 	var job = l.wire.sent + 1
 	l.wire.sent = job
-	var replies = l.board.expect(job, outgoing.body.op, outgoing.console)
+	replies, compiled := l.board.expect(job, outgoing.body.op, outgoing.console)
 	defer l.backstop(alreadyDone, l.wire.stall)()
 	if err := l.wire.write(outgoing.body.stamp(job, outgoing.unit)); err != nil {
 		l.end()
 		return _Call{}, errLost
 	}
-	return _Call{job: job, replies: replies}, nil
+	return _Call{job: job, replies: replies, compiled: compiled}, nil
 }
 
 func (w *_Wire) write(request []byte) error {
@@ -369,25 +375,49 @@ func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 	}
 }
 
-func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) <-chan _Reply {
+func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) (<-chan _Reply, <-chan struct{}) {
 	var replies = make(chan _Reply, 1)
+	var compiled = make(chan struct{}, 1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.pending[job] = &_Expectation{op: op, replies: replies}
+	b.pending[job] = &_Expectation{op: op, replies: replies, compiled: compiled}
 	if console != nil && !b.hungUp && console.attend() {
 		if b.consoles == nil {
 			b.consoles = map[uint64]*_Console{}
 		}
 		b.consoles[job] = console
 	}
-	return replies
+	return replies, compiled
 }
 
 func (b *_Switchboard) route(incoming _Reply) error {
-	if incoming.Line != nil {
+	switch {
+	case incoming.Line != nil:
 		return b.echo(incoming)
+	case incoming.Compiled:
+		return b.noteCompiled(incoming)
 	}
 	return b.deliver(incoming)
+}
+
+func (b *_Switchboard) noteCompiled(incoming _Reply) error {
+	if incoming.outcomes() != 0 || incoming.Code != nil || incoming.Skipped != nil {
+		return fmt.Errorf("job %d: the evaluator said compiled with an answer", incoming.Job)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var waiting = b.pending[incoming.Job]
+	switch {
+	case waiting == nil:
+		return fmt.Errorf("the evaluator said job %d compiled, which is not waiting for an answer", incoming.Job)
+	case waiting.op != opServe:
+		return fmt.Errorf("job %d: the evaluator said a build compiled scripts", incoming.Job)
+	}
+	select {
+	case waiting.compiled <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func (b *_Switchboard) echo(incoming _Reply) error {

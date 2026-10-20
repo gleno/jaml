@@ -24,7 +24,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 23
+	protocolVersion      = 24
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -77,15 +77,16 @@ type _Work struct {
 }
 
 type _Reply struct {
-	Job     uint64        `json:"job"`
-	Built   bool          `json:"built,omitempty"`
-	Code    *_CodeOutline `json:"code,omitempty"`
-	Data    _Borrowed     `json:"data,omitempty"`
-	Skipped [][]string    `json:"skipped,omitempty"`
-	Failure *_Failure     `json:"failure,omitempty"`
-	Missing bool          `json:"missing,omitempty"`
-	Line    *_LineOnWire  `json:"line,omitempty"`
-	Usage   *_UsageOnWire `json:"usage,omitempty"`
+	Job      uint64        `json:"job"`
+	Built    bool          `json:"built,omitempty"`
+	Code     *_CodeOutline `json:"code,omitempty"`
+	Data     _Borrowed     `json:"data,omitempty"`
+	Skipped  [][]string    `json:"skipped,omitempty"`
+	Failure  *_Failure     `json:"failure,omitempty"`
+	Missing  bool          `json:"missing,omitempty"`
+	Compiled bool          `json:"compiled,omitempty"`
+	Line     *_LineOnWire  `json:"line,omitempty"`
+	Usage    *_UsageOnWire `json:"usage,omitempty"`
 }
 
 type _UsageOnWire struct {

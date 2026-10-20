@@ -196,6 +196,9 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 			e.replies.write(e.replies.frames.failure(job, path, err))
 			return
 		}
+		if len(request.Scripts) > 0 {
+			e.replies.write(e.replies.frames.compiled(job))
+		}
 		var sealed []byte
 		e.watch.during(func() {
 			var meter = startMeter()
