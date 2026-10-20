@@ -342,7 +342,7 @@ func (c _Collected) verdict(r _Remains) error {
 	case killedOutright(c.state) && r.stderr.holds(pressureMarker):
 		return _MemoryExhausted(fmt.Sprintf("evaluator died (%s) from outside jaml near the memory limit of %d bytes, most likely by the kernel's out-of-memory killer", c.state, r.limit))
 	case killedOutright(c.state):
-		return fmt.Errorf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", c.state, peakNote(c.state))
+		return _OutsideDeath(fmt.Sprintf("evaluator died (%s): killed from outside jaml, often by the kernel's out-of-memory killer%s", c.state, peakNote(c.state)))
 	case reason != "":
 		return fmt.Errorf("evaluator died (%s): %s", c.state, reason)
 	}
@@ -362,6 +362,12 @@ func (u _Uncollected) verdict(r _Remains) error {
 		return _MemoryExhausted(fmt.Sprintf("evaluator ended near the memory limit of %d bytes but its exit could not be collected: %v", r.limit, u.waited))
 	}
 	return fmt.Errorf("evaluator ended but its exit could not be collected: %w", u.waited)
+}
+
+type _OutsideDeath string
+
+func (d _OutsideDeath) Error() string {
+	return string(d)
 }
 
 func peakNote(state *os.ProcessState) string {

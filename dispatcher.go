@@ -117,9 +117,16 @@ func (e *_Errand) judge(held _Lease, result _Outcome) (_Outcome, bool) {
 		return _Refused{err: cancelled(e.ctx)}, false
 	}
 	if _, alone := held.(_Owned); alone {
-		return _Refused{err: died.cause}, false
+		return _Refused{err: blameless(died.cause)}, false
 	}
 	return result, true
+}
+
+func blameless(cause error) error {
+	if outside, killed := cause.(_OutsideDeath); killed {
+		return failWith(Unavailable, outside)
+	}
+	return cause
 }
 
 func (d *_Dispatcher) admit(e *_Errand) (_Lease, error) {
