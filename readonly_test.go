@@ -6,7 +6,6 @@ import (
 )
 
 func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
-	var values = map[string]any{"items": []int{3, 1, 2}, "user": map[string]any{"name": "a", "count": 1}}
 	var writes = []string{
 		"items.sort()",
 		"items.sort((a, b) => a - b)",
@@ -36,30 +35,44 @@ func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
 		"user.constructor = 1",
 		"user.valueOf = 1",
 		"items.push = 1",
-		"Reflect.set(user, 'toString', 1)",
 		"Object.freeze({}).valueOf = 1",
-		"Array.prototype.push = 1",
-		"Object.prototype.toString = 1",
-		"Error.prototype.name = 'x'",
-		"Math = {}",
 		"user = 1",
 		"globalThis.user = 1",
 		"this.user = 1",
 		"Reflect.set(globalThis, 'user', 1)",
 		"Function('user = 1')()",
+	}
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		expectReadOnly(t, sb, writes)
+	})
+}
+
+func TestEveryWriteToAFrozenBuiltInSaysItIsReadOnly(t *testing.T) {
+	var writes = []string{
+		"Reflect.set(user, 'toString', 1)",
+		"Array.prototype.push = 1",
+		"Object.prototype.toString = 1",
+		"Error.prototype.name = 'x'",
+		"Math = {}",
 		"user.name.toString = 1",
 	}
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		for _, write := range writes {
-			var out any
-			var err = resolveInto(withValues(t, values), &out, mustExpression(t, sb, write))
-			expectError(t, err, EvaluationFailed, "$: ", "TypeError: "+readOnlyRefusal)
-			var thrown *Thrown
-			if !errors.As(err, &thrown) || thrown.Message != "TypeError: "+readOnlyRefusal {
-				t.Fatalf("%s: the thrown message is %v", write, thrown)
-			}
-		}
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		expectReadOnly(t, sb, writes)
 	})
+}
+
+func expectReadOnly(t *testing.T, sb *Sandbox, writes []string) {
+	t.Helper()
+	var values = map[string]any{"items": []int{3, 1, 2}, "user": map[string]any{"name": "a", "count": 1}}
+	for _, write := range writes {
+		var out any
+		var err = resolveInto(withValues(t, values), &out, mustExpression(t, sb, write))
+		expectError(t, err, EvaluationFailed, "$: ", "TypeError: "+readOnlyRefusal)
+		var thrown *Thrown
+		if !errors.As(err, &thrown) || thrown.Message != "TypeError: "+readOnlyRefusal {
+			t.Fatalf("%s: the thrown message is %v", write, thrown)
+		}
+	}
 }
 
 func TestATypeErrorThatIsNotAWriteKeepsItsMessage(t *testing.T) {

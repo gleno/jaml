@@ -11,19 +11,31 @@ import (
 )
 
 type _SandboxKind struct {
-	name string
-	make func(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
+	name     string
+	make     func(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
+	isolated bool
 }
 
+type _SandboxKinds []_SandboxKind
+
 var (
-	trustedKind  = _SandboxKind{name: "trusted", make: MakeTrustedSandbox}
-	isolatedKind = _SandboxKind{name: "isolated", make: MakeSecureSandbox}
-	sandboxKinds = []_SandboxKind{trustedKind, isolatedKind}
+	trustedKind     = _SandboxKind{name: "trusted", make: MakeTrustedSandbox}
+	isolatedKind    = _SandboxKind{name: "isolated", make: MakeSecureSandbox, isolated: true}
+	unprotectedKind = _SandboxKind{name: "unprotected", make: MakeSecureSandboxWithoutBuiltinsProtection, isolated: true}
+	sandboxKinds    = _SandboxKinds{trustedKind, isolatedKind}
+	allSandboxKinds = _SandboxKinds{trustedKind, isolatedKind, unprotectedKind}
+	protectedKinds  = _SandboxKinds{isolatedKind}
+	mutableKinds    = _SandboxKinds{trustedKind, unprotectedKind}
 )
 
 func eachKind(t *testing.T, body func(t *testing.T, sb *Sandbox), options ...SandboxOption) {
 	t.Helper()
-	for _, kind := range sandboxKinds {
+	sandboxKinds.each(t, body, options...)
+}
+
+func (kinds _SandboxKinds) each(t *testing.T, body func(t *testing.T, sb *Sandbox), options ...SandboxOption) {
+	t.Helper()
+	for _, kind := range kinds {
 		t.Run(kind.name, func(t *testing.T) {
 			body(t, mustSandbox(t, kind, options...))
 		})
@@ -32,7 +44,7 @@ func eachKind(t *testing.T, body func(t *testing.T, sb *Sandbox), options ...San
 
 func mustSandbox(t *testing.T, kind _SandboxKind, options ...SandboxOption) *Sandbox {
 	t.Helper()
-	if kind.name == isolatedKind.name && isolationSupported() != nil {
+	if kind.isolated && isolationSupported() != nil {
 		t.Skip(isolationSupported())
 	}
 	sb, err := kind.make(t.Context(), options...)

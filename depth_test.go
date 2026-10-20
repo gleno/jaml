@@ -15,7 +15,7 @@ type _BothKinds struct {
 func makeInBothKinds(t *testing.T, text string) _BothKinds {
 	t.Helper()
 	_, trusted := sharedSandbox(t, trustedKind).MakeExpressionFromJaml(t.Context(), text)
-	_, isolated := sharedSandbox(t, isolatedKind).MakeExpressionFromJaml(t.Context(), text)
+	_, isolated := sharedSandbox(t, unprotectedKind).MakeExpressionFromJaml(t.Context(), text)
 	return _BothKinds{trusted: trusted, isolated: isolated}
 }
 

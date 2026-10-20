@@ -161,7 +161,7 @@ servers:
 }
 
 func TestValuesAreFrozenCopiesAnExpressionCannotMutate(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "copied: ${ [...list, 4].length }\npushed: ${ (list.push(4), list.length) }\nsorted: ${ list.toSorted((a, b) => b - a) }\n")
 		var values = map[string]any{"list": []int{1, 2, 3}}
 		var ctx = valued(t.Context(), values)

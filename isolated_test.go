@@ -213,21 +213,28 @@ func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T)
 
 func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 	t.Setenv("JAML_TEST_SECRET", "hunter2")
-	var sb = mustIsolated(t)
-	var names []string
-	for _, entry := range currentChild(t, sb).cmd.Env {
-		name, value, _ := strings.Cut(entry, "=")
-		names = append(names, name)
-		if name == evaluatorMemoryLimit {
-			expectEqual(t, value, "268435456")
-		}
+	var builtins = map[string]string{isolatedKind.name: "frozen", unprotectedKind.name: "mutable"}
+	for _, kind := range []_SandboxKind{isolatedKind, unprotectedKind} {
+		t.Run(kind.name, func(t *testing.T) {
+			var names []string
+			for _, entry := range currentChild(t, mustSandbox(t, kind)).cmd.Env {
+				name, value, _ := strings.Cut(entry, "=")
+				names = append(names, name)
+				switch name {
+				case evaluatorMemoryLimit:
+					expectEqual(t, value, "268435456")
+				case evaluatorBuiltins:
+					expectEqual(t, value, builtins[kind.name])
+				}
+			}
+			var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorBuiltins, evaluatorNonce, evaluatorParent}
+			for _, entry := range zoneEnv() {
+				name, _, _ := strings.Cut(entry, "=")
+				want = append(want, name)
+			}
+			expectEqual(t, names, want)
+		})
 	}
-	var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorNonce, evaluatorParent}
-	for _, entry := range zoneEnv() {
-		name, _, _ := strings.Cut(entry, "=")
-		want = append(want, name)
-	}
-	expectEqual(t, names, want)
 }
 
 func TestBadOptionsSurfaceEarly(t *testing.T) {

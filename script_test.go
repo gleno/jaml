@@ -88,7 +88,7 @@ func TestScriptGlobalsAreLiveForEveryLeaf(t *testing.T) {
 }
 
 func TestALeafCannotPolluteBuiltInsForALaterLeaf(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, `
 assign: ${ (() => { try { Object.prototype.admin = true; return 'polluted' } catch (e) { return e.name } })() }
 define: "${ (() => { try { Object.defineProperty(Array.prototype, 'admin', { value: true }); return 'polluted' } catch (e) { return e.name } })() }"
@@ -106,36 +106,39 @@ seen: ${ [user.admin === undefined, user.tags.admin === undefined, [...user.tags
 }
 
 func TestAScriptMayExtendBuiltInsBeforeTheyFreeze(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var ctx = WithScript(t.Context(), "Array.prototype.total = function () { return this.reduce((sum, n) => sum + n, 0) }")
 		var document = mustJaml(t, sb, "total: ${ [1, 2, 3].total() }\nreplace: ${ (() => { try { Array.prototype.total = null; return 'replaced' } catch (e) { return e.name } })() }\nagain: ${ [4].total() }\n")
 		expectEqual(t, mustResolve[map[string]any](t, ctx, document), map[string]any{"total": float64(6), "replace": "TypeError", "again": float64(4)})
 	})
 }
 
-func TestAnObjectMayStillOverrideAFrozenBuiltInProperty(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var document = mustJaml(t, sb, `
+func TestAnObjectMayStillOverrideABuiltInProperty(t *testing.T) {
+	var written = `
 named: "${ Object.assign(new Error(), { name: 'Custom' }).name }"
 typed: "${ Object.assign(new TypeError('m'), { name: 'Own', message: 'mine' }).message }"
 string: ${ (() => { const o = {}; o.toString = () => 'mine'; return String(o) })() }
 pushed: ${ (() => { const list = [1]; list.push = () => 'own'; return list.push(2) })() }
 untouched: ${ [String({}), new Error('x').name] }
 home: ${ (() => { try { Object.prototype.toString = null; return 'replaced' } catch (e) { return e.name } })() }
-`)
-		expectEqual(t, mustResolve[map[string]any](t, t.Context(), document), map[string]any{
-			"named":     "Custom",
-			"typed":     "mine",
-			"string":    "mine",
-			"pushed":    "own",
-			"untouched": []any{"[object Object]", "Error"},
-			"home":      "TypeError",
+`
+	var homes = map[string]string{trustedKind.name: "replaced", isolatedKind.name: "TypeError", unprotectedKind.name: "replaced"}
+	for _, kind := range allSandboxKinds {
+		t.Run(kind.name, func(t *testing.T) {
+			expectEqual(t, mustResolve[map[string]any](t, t.Context(), mustJaml(t, mustSandbox(t, kind), written)), map[string]any{
+				"named":     "Custom",
+				"typed":     "mine",
+				"string":    "mine",
+				"pushed":    "own",
+				"untouched": []any{"[object Object]", "Error"},
+				"home":      homes[kind.name],
+			})
 		})
-	})
+	}
 }
 
 func TestNoBuiltInChangeSurvivesIntoTheNextResolve(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var probe = mustExpression(t, sb, "typeof Array.prototype.total")
 		var extended = WithScript(t.Context(), "Array.prototype.total = function () { return 0 }")
 		expectEqual(t, mustResolve[string](t, extended, probe), "function")

@@ -122,7 +122,7 @@ Array.prototype[Symbol.iterator] = function* () {};
 `
 
 func TestEveryBuiltInIsFrozenAfterTheFreeze(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var census = mustExpression(t, sb, intrinsicsCensus)
 		expectEqual(t, mustResolve[[]string](t, t.Context(), census), []string{})
 		expectEqual(t, mustResolve[[]string](t, withValues(t, map[string]any{"user": map[string]any{"tags": []string{"a"}}}), census), []string{})
@@ -131,7 +131,7 @@ func TestEveryBuiltInIsFrozenAfterTheFreeze(t *testing.T) {
 }
 
 func TestAScriptTamperingWithBuiltInsCannotDefeatTheFreeze(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var ctx = WithScript(WithScript(WithScript(t.Context(), censusBeforeTampering), builtInExtensions), builtInTampering)
 		expectEqual(t, mustResolve[[]string](t, ctx, mustExpression(t, sb, "census()")), []string{})
 	})
@@ -139,7 +139,7 @@ func TestAScriptTamperingWithBuiltInsCannotDefeatTheFreeze(t *testing.T) {
 
 func TestAScriptShadowingDescriptorFieldsCannotDefeatTheFreeze(t *testing.T) {
 	var reached = "[Object.getPrototypeOf(Object.getPrototypeOf((function* () {})())), Math.settings, Array.prototype.total.meta.tags, Function.prototype.call, Proxy.revocable, Object.prototype.toString, [].push].every(Object.isFrozen)"
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var assigned = WithScript(WithScript(t.Context(), builtInExtensions), "Object.prototype.value = { planted: [] }; Object.prototype.get = function () {}; Object.prototype.writable = true")
 		expectEqual(t, mustResolve[bool](t, assigned, mustExpression(t, sb, reached)), true)
 		var defined = WithScript(t.Context(), "Object.defineProperty(Object.prototype, 'value', { value: 1 })")
@@ -150,7 +150,7 @@ func TestAScriptShadowingDescriptorFieldsCannotDefeatTheFreeze(t *testing.T) {
 
 func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
 	var realm = captureRealm(goja.New())
-	freezer, err := realm.intrinsicsFreezer(nil)
+	settle, err := realm.builtinsSettler(_SessionPlan{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
 	if err := realm.vm.GlobalObject().DefineAccessorProperty("bound", getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
 		t.Fatal(err)
 	}
-	if err := freezer.apply(realm); err != nil {
+	if err := settle(realm); err != nil {
 		t.Fatal(err)
 	}
 	loose, err := realm.vm.RunString(intrinsicsCensus)
@@ -176,7 +176,7 @@ func TestThePristineIntrinsicsAreCharted(t *testing.T) {
 }
 
 func TestALeafCannotHijackFunctionPrototypeForALaterLeaf(t *testing.T) {
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, `
 a: "${ [() => Object.defineProperty(Function.prototype.call, 'call', { value: () => 'hijacked' }), () => Object.setPrototypeOf(Function.prototype.apply, null), () => { Proxy.revocable.leak = 42 }, () => { Function.prototype.bind.x = 1 }, () => { Object.prototype.toString.x = 1 }, () => { [].push.x = 1 }, () => { Math = {} }].map((write) => { try { write(); return 'written' } catch (e) { return e.name } }) }"
 b: "${ [Math.max.call.call(Math.max, null, 1, 2), typeof Function.prototype.apply.call, Proxy.revocable.leak === undefined, Function.prototype.bind.x === undefined, Object.prototype.toString.x === undefined, [].push.x === undefined, typeof Math.max] }"

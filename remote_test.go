@@ -16,7 +16,7 @@ func (a _Agreement) eval(t *testing.T, newOut func() any) _BothKinds {
 	t.Helper()
 	trustedOut, isolatedOut := newOut(), newOut()
 	var trusted = mustJaml(t, sharedSandbox(t, trustedKind), a.text, a.options...).At(a.path...).resolve(valued(within(t, 30*time.Second), a.vars), trustedOut, nil)
-	var isolated = mustJaml(t, sharedSandbox(t, isolatedKind), a.text, a.options...).At(a.path...).resolve(valued(within(t, 30*time.Second), a.vars), isolatedOut, nil)
+	var isolated = mustJaml(t, sharedSandbox(t, unprotectedKind), a.text, a.options...).At(a.path...).resolve(valued(within(t, 30*time.Second), a.vars), isolatedOut, nil)
 	if trusted == nil && isolated == nil {
 		expectEqual(t, isolatedOut, trustedOut)
 	}
