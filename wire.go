@@ -182,22 +182,52 @@ func (w *_Wire) vacate() {
 }
 
 func (l *_Life) serve(ctx context.Context, asked _Outgoing) _Outcome {
-	sent, err := l.send(ctx, asked)
+	watched, stop := asked.body.limit.overseen(ctx)
+	defer stop()
+	sent, err := l.send(watched, asked)
 	if err != nil {
-		return l.unsent(err)
+		return overran(watched, l.unsent(err))
 	}
-	var stopped = ctx.Done()
+	var stopped = watched.Done()
 	for {
 		select {
 		case incoming := <-sent.replies:
-			return servedFrom(incoming)
+			return overran(watched, servedFrom(incoming))
 		case <-l.ended:
-			return l.final(sent, servedFrom)
+			return overran(watched, l.final(sent, servedFrom))
 		case <-stopped:
 			stopped = nil
 			defer l.backstop(l.tell(_Request{Op: opCancel, Job: sent.job}), l.quiet)()
 		}
 	}
+}
+
+func overran(watched context.Context, result _Outcome) _Outcome {
+	exhausted, isExhausted := context.Cause(watched).(_TimeExhausted)
+	if !isExhausted {
+		return result
+	}
+	switch settled := result.(type) {
+	case _Lost:
+		return _Refused{err: lapsed(exhausted, settled.cause)}
+	case _Refused:
+		return _Refused{err: lapsed(exhausted, settled.err)}
+	}
+	return result
+}
+
+func lapsed(exhausted _TimeExhausted, err error) error {
+	failed, isOwn := err.(_ExpressionError)
+	switch {
+	case errors.Is(err, errMissing), errors.Is(err, TimeLimit):
+		return err
+	case errors.Is(err, context.Canceled):
+		return exhausted
+	case !isOwn:
+		return fmt.Errorf("%w: %w", exhausted, err)
+	}
+	failed.cause = fmt.Errorf("%w: %w", exhausted, failed.cause)
+	return failed
 }
 
 func servedFrom(incoming _Reply) _Outcome {

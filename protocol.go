@@ -110,6 +110,7 @@ type _Failure struct {
 	At      string         `json:"at,omitempty"`
 	Code    string         `json:"code,omitempty"`
 	Overran bool           `json:"overran,omitempty"`
+	Stopped bool           `json:"stopped,omitempty"`
 	Message string         `json:"message"`
 	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
 }
@@ -177,7 +178,7 @@ func describeFailure(err error) _Failure {
 	if !isOwn {
 		failed = _ExpressionError{kind: EvaluationFailed, cause: err}
 	}
-	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Code: failed.code, Overran: errors.Is(failed.cause, TimeLimit), Message: failed.cause.Error()}
+	var described = _Failure{Kind: "EvaluationFailed", At: failed.path, Code: failed.code, Overran: errors.Is(failed.cause, TimeLimit), Stopped: errors.Is(failed.cause, context.Canceled), Message: failed.cause.Error()}
 	for _, kind := range failureKinds {
 		if kind.sentinel == failed.kind {
 			described.Kind = kind.name
@@ -232,7 +233,7 @@ func (f _Failure) rebuild() error {
 	if kind == nil {
 		kind = EvaluationFailed
 	}
-	return _ExpressionError{kind: kind, path: f.At, code: f.Code, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), overran: f.Overran}}
+	return _ExpressionError{kind: kind, path: f.At, code: f.Code, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), overran: f.Overran, stopped: f.Stopped}}
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {
@@ -246,10 +247,11 @@ type _CarriedCause struct {
 	message string
 	thrown  *Thrown
 	overran bool
+	stopped bool
 }
 
 func (c _CarriedCause) Is(target error) bool {
-	return c.overran && target == TimeLimit
+	return c.overran && target == TimeLimit || c.stopped && target == context.Canceled
 }
 
 func (c _CarriedCause) Error() string {

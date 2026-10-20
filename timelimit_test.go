@@ -75,3 +75,42 @@ func TestWaitingForASlotDoesNotCountTowardTheTimeLimit(t *testing.T) {
 		expectError(t, <-blocker, EvaluationFailed, "deadline exceeded")
 	}, WithMaxConcurrency(1))
 }
+
+func TestOnlyAnOverseenLimitTurnsAFailedJobIntoTimeLimit(t *testing.T) {
+	overdue, stop := context.WithCancelCause(t.Context())
+	stop(_TimeLimit(time.Millisecond).exhausted())
+	var answered = _Answered{data: []byte("5")}
+	var lost = _Lost{cause: errSilent}
+	var missing = _Refused{err: errMissing}
+	var stuck = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Overran: true, Message: "exceeded the time limit of 1ms"}.rebuild()}
+	var echo = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Stopped: true, Message: "cancelled: context canceled"}.rebuild()}
+	var thrown = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Message: "Error: boom", Thrown: &_ThrownOnWire{Message: "boom", Value: _Borrowed(`"boom"`)}}.rebuild()}
+	for _, result := range []_Outcome{answered, lost, missing, stuck, echo, thrown} {
+		expectEqual(t, overran(t.Context(), result), result)
+	}
+	for _, result := range []_Outcome{answered, missing, stuck} {
+		expectEqual(t, overran(overdue, result), result)
+	}
+	expectError(t, located("$.v", refusal(t, overran(overdue, lost))), TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator stopped answering")
+	var dropped = refusal(t, overran(overdue, echo))
+	expectEqual(t, dropped, error(_TimeExhausted{limit: time.Millisecond}))
+	var kept = refusal(t, overran(overdue, thrown))
+	expectError(t, kept, TimeLimit, "$.v: exceeded the time limit of 1ms: Error: boom")
+	var failure *Failure
+	if !errors.As(kept, &failure) || *failure != (Failure{Path: "$.v", Reason: "exceeded the time limit of 1ms: Error: boom"}) {
+		t.Fatalf("a late failure past its limit reads %+v", failure)
+	}
+	var cause *Thrown
+	if !errors.As(kept, &cause) || cause.Message != "boom" || cause.Value != "boom" {
+		t.Fatalf("a late failure past its limit lost what was thrown: %+v", cause)
+	}
+}
+
+func refusal(t *testing.T, result _Outcome) error {
+	t.Helper()
+	refused, isRefused := result.(_Refused)
+	if !isRefused {
+		t.Fatalf("expected a refusal, got %#v", result)
+	}
+	return refused.err
+}

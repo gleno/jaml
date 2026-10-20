@@ -31,6 +31,13 @@ func (l _TimeLimit) bound(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeoutCause(ctx, time.Duration(l), l.exhausted())
 }
 
+func (l _TimeLimit) overseen(ctx context.Context) (context.Context, context.CancelFunc) {
+	if l == 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeoutCause(ctx, time.Duration(l)+cancelGrace, l.exhausted())
+}
+
 func (l _TimeLimit) exhausted() error {
 	return _TimeExhausted{limit: time.Duration(l)}
 }

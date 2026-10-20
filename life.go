@@ -32,7 +32,7 @@ var (
 	errHungUp     = errors.New("the evaluator hung up")
 	errRetired    = errors.New("retired after replaying one job alone")
 	errSilent     = fmt.Errorf("the evaluator stopped answering for %s after it was told to stop a job", backstopSilence)
-	errNotReading = fmt.Errorf("the evaluator was not reading requests for %s after a caller's context ended", backstopSilence)
+	errNotReading = fmt.Errorf("the evaluator was not reading requests for %s after a job's context ended or its time limit ran out", backstopSilence)
 )
 
 type _EvaluatorWorld struct {

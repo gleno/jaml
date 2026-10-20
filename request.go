@@ -33,6 +33,7 @@ type _RequestBody struct {
 	opens   string
 	op      _Opcode
 	written []byte
+	limit   _TimeLimit
 }
 
 type _Outgoing struct {
@@ -72,7 +73,7 @@ func writeWork(ask _Ask, limit int) (_WrittenWork, error) {
 		return _WrittenWork{}, err
 	}
 	w.mark('}')
-	written.body = &_RequestBody{opens: `"op":"serve","work":`, op: opServe, written: w.written}
+	written.body = &_RequestBody{opens: `"op":"serve","work":`, op: opServe, written: w.written, limit: ask.timeLimit}
 	return written, nil
 }
 
