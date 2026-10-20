@@ -223,7 +223,7 @@ func allocatedIn(work func()) uint64 {
 	var before, after goruntime.MemStats
 	goruntime.GC()
 	goruntime.ReadMemStats(&before)
-	work()
+	underHeapCeiling(work)
 	goruntime.ReadMemStats(&after)
 	return after.TotalAlloc - before.TotalAlloc
 }

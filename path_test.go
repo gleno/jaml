@@ -1,9 +1,11 @@
 package jaml
 
 import (
+	"fmt"
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const nestedTemplate = `
@@ -83,7 +85,7 @@ func TestKeysWithSpecialCharactersAreQuotedInPaths(t *testing.T) {
 func allocatedBy(run func()) uint64 {
 	var before, after goruntime.MemStats
 	goruntime.ReadMemStats(&before)
-	run()
+	underHeapCeiling(run)
 	goruntime.ReadMemStats(&after)
 	return after.TotalAlloc - before.TotalAlloc
 }
@@ -157,4 +159,26 @@ func TestErrorsUnderASelectedPathKeepTheirFullPrefix(t *testing.T) {
 		var out any
 		expectError(t, resolveInto(t.Context(), &out, document.At("a", "0")), EvaluationFailed, `$.a[0].b["c d"]: ${missing}: ReferenceError`)
 	})
+}
+
+const testHeapCeiling = 1 << 30
+
+func underHeapCeiling(run func()) {
+	var done = make(chan struct{})
+	defer close(done)
+	go func() {
+		var tick = time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				if held := heapHeld(); held > testHeapCeiling {
+					panic(fmt.Sprintf("the test's heap reached %d bytes, past its ceiling of %d: something allocates without bound", held, testHeapCeiling))
+				}
+			}
+		}
+	}()
+	run()
 }

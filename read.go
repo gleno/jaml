@@ -155,6 +155,7 @@ type _DataReader struct {
 	policy    _ReadPolicy
 	ancestors map[*goja.Object]bool
 	remaining int
+	walked    int
 }
 
 func readResult(realm _Realm, returned goja.Value) (any, error) {
@@ -168,22 +169,23 @@ func readResult(realm _Realm, returned goja.Value) (any, error) {
 
 func readData(realm _Realm, value goja.Value, policy _ReadPolicy) (any, error) {
 	var reader = &_DataReader{realm: realm, policy: policy, ancestors: map[*goja.Object]bool{}, remaining: maxResultValues}
+	if err := reader.pay(1); err != nil {
+		return nil, err
+	}
 	return reader.read(value, nil)
 }
 
-func (r *_DataReader) pay() error {
-	if err := r.afford(1); err != nil {
-		return err
-	}
-	r.remaining--
-	return r.realm.pace.keep(r.remaining)
-}
-
-func (r *_DataReader) afford(values int64) error {
+func (r *_DataReader) pay(values int64) error {
 	if values > int64(r.remaining) {
 		return fmt.Errorf("result holds more than %d values", maxResultValues)
 	}
+	r.remaining -= int(values)
 	return nil
+}
+
+func (r *_DataReader) step() error {
+	r.walked++
+	return r.realm.pace.keep(r.walked)
 }
 
 func (r *_DataReader) stranger(path *_DataPath, claim string, leftOut bool) (any, error) {
@@ -191,7 +193,7 @@ func (r *_DataReader) stranger(path *_DataPath, claim string, leftOut bool) (any
 }
 
 func (r *_DataReader) read(value goja.Value, path *_DataPath) (any, error) {
-	if err := r.pay(); err != nil {
+	if err := r.step(); err != nil {
 		return nil, err
 	}
 	switch {
@@ -294,7 +296,7 @@ func (r *_DataReader) property(object *goja.Object, key string, path *_DataPath)
 
 func (r *_DataReader) readArray(array *goja.Object, path *_DataPath) (any, error) {
 	var length = array.Get("length").ToInteger()
-	if err := r.afford(length); err != nil {
+	if err := r.pay(length); err != nil {
 		return nil, err
 	}
 	var list = make([]any, length)
@@ -348,7 +350,7 @@ func (r *_DataReader) keysOf(object *goja.Object, path *_DataPath) ([]string, er
 		return nil, fmt.Errorf("%s has keys that Object.keys cannot list", describeResultAt(path))
 	}
 	var count = written.Get("length").ToInteger()
-	if err := r.afford(count); err != nil {
+	if err := r.pay(count); err != nil {
 		return nil, err
 	}
 	var keys = make([]string, 0, count)
