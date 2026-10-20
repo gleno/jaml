@@ -17,6 +17,7 @@ const (
 	rightShape
 	binaryShape
 	postfixShape
+	parameterShape
 	shapeCount
 )
 
@@ -33,6 +34,7 @@ var shapeBounds = [shapeCount]_CodeShapeBound{
 	rightShape:     {512, "more than %d assignments, conditionals and exponentiations chain"},
 	binaryShape:    {4096, "more than %d binary operators chain"},
 	postfixShape:   {2048, "more than %d member accesses, calls and tagged templates chain"},
+	parameterShape: {4, "arrow parameter lists nest more than %d deep"},
 }
 
 type _Counts [shapeCount]int
@@ -85,10 +87,12 @@ const (
 type _Header struct {
 	async       bool
 	declaration bool
+	parameters  int
 }
 
 type _Frame struct {
 	kind      _FrameKind
+	heads     int
 	base      _Counts
 	local     _Counts
 	questions int
@@ -558,7 +562,7 @@ func (s *_CodeScan) named(name string, header _Header) error {
 		frame.endExpression()
 	default:
 		s.fresh()
-		s.header = header
+		s.header = _Header{async: header.async, declaration: header.declaration}
 		return nil
 	}
 	s.last, s.keyword, s.control = keywordToken, name, control
@@ -589,7 +593,7 @@ func (s *_CodeScan) template() error {
 			s.at += 2
 		case s.text[s.at] == '`':
 			s.at++
-			s.frames = s.frames[:len(s.frames)-1]
+			s.pop()
 			s.operand()
 			return nil
 		case strings.HasPrefix(s.text[s.at:], "${"):
@@ -608,6 +612,23 @@ func (s *_CodeScan) template() error {
 func (s *_CodeScan) push(kind _FrameKind) {
 	var parent = s.top()
 	s.frames = append(s.frames, _Frame{kind: kind, base: parent.base.plus(parent.local), async: parent.awaits(), closing: groupCloseToken})
+}
+
+func (s *_CodeScan) pop() _Frame {
+	var frame = *s.top()
+	s.frames = s.frames[:len(s.frames)-1]
+	var parent = s.top()
+	parent.heads = max(parent.heads, frame.heads)
+	return frame
+}
+
+func (s *_CodeScan) head(parameters int) error {
+	var frame = s.top()
+	frame.heads = max(frame.heads, parameters)
+	if frame.heads > shapeBounds[parameterShape].limit {
+		return _CodeLimit{offset: s.mark, shape: parameterShape}
+	}
+	return nil
 }
 
 func (s *_CodeScan) nest() error {
@@ -689,26 +710,28 @@ func (s *_CodeScan) openedKind(c byte) _FrameKind {
 }
 
 func (s *_CodeScan) close(c byte) error {
-	var frame = s.top()
-	if len(s.frames) == 1 || frame.kind.closer() != c {
+	if len(s.frames) == 1 || s.top().kind.closer() != c {
 		return _ScanStop{offset: s.at, message: "Unexpected token " + string(c)}
 	}
 	s.at++
-	s.frames = s.frames[:len(s.frames)-1]
+	var frame = s.pop()
 	s.top().local[prefixShape] = 0
 	s.last, s.property, s.control = groupCloseToken, false, false
 	s.header = frame.header
-	if frame.kind == controlFrame {
+	s.header.parameters = 0
+	switch frame.kind {
+	case controlFrame:
 		s.last = controlCloseToken
+	case groupFrame:
+		s.header.parameters = frame.heads + 1
 	}
 	return nil
 }
 
 func (s *_CodeScan) closeBrace() (int, bool, error) {
-	var frame = s.top()
 	var rest = s.text[s.at:]
 	switch {
-	case len(s.frames) > 1 && frame.kind.closer() == '}':
+	case len(s.frames) > 1 && s.top().kind.closer() == '}':
 	case s.closes != "" && strings.HasPrefix(rest, s.closes):
 		return s.at, true, nil
 	case len(s.frames) == 1 && s.closes != "" && strings.HasPrefix(s.closes, rest):
@@ -717,7 +740,7 @@ func (s *_CodeScan) closeBrace() (int, bool, error) {
 		return 0, false, _ScanStop{offset: s.at, message: "Unexpected token }"}
 	}
 	s.at++
-	s.frames = s.frames[:len(s.frames)-1]
+	var frame = s.pop()
 	var parent = s.top()
 	s.property, s.control = false, false
 	if frame.kind == substitutionFrame {
@@ -762,6 +785,9 @@ func (s *_CodeScan) punctuator(header _Header) error {
 		frame.beginOperand()
 		frame.concise = frame.concise || header.async
 		s.last, s.header = arrowToken, _Header{async: header.async}
+		if err := s.head(header.parameters); err != nil {
+			return err
+		}
 		return s.count(arrowShape)
 	case written == "*" && after && s.keyword == "yield":
 		return nil
