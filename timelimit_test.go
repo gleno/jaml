@@ -224,6 +224,14 @@ func TestASiblingBurningCPUNeverChargesAnInnocentJob(t *testing.T) {
 	var document = mustJaml(t, sb, busyMillisecond)
 	var spin = mustJaml(t, sb, spinning).At("spin")
 	var child = currentChild(t, sb)
+	var alone Usage
+	for range 5 {
+		ctx, meter := metered(t, t.Context())
+		mustResolve[int](t, ctx, document.At("busy"))
+		if used := meter.only(t); used.CPU > alone.CPU {
+			alone = used
+		}
+	}
 	var burned = make(chan error, burners)
 	for range burners {
 		go func() {
@@ -232,19 +240,23 @@ func TestASiblingBurningCPUNeverChargesAnInnocentJob(t *testing.T) {
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
-	var slowest Usage
+	var slowest, costliest Usage
 	for range 20 {
-		ctx, meter := metered(t, WithTimeLimit(t.Context(), 20*time.Millisecond))
+		ctx, meter := metered(t, WithTimeLimit(t.Context(), 100*time.Millisecond))
 		if _, err := Resolve[int](ctx, document.At("busy")); err != nil {
 			t.Fatalf("an innocent job beside %d CPU burners failed: %v", burners, err)
 		}
-		if used := meter.only(t); used.Wall > slowest.Wall {
+		var used = meter.only(t)
+		if used.Wall > slowest.Wall {
 			slowest = used
 		}
+		if used.CPU > costliest.CPU {
+			costliest = used
+		}
 	}
-	t.Logf("the slowest innocent job used %+v beside %d burners", slowest, burners)
-	if slowest.CPU >= 20*time.Millisecond {
-		t.Fatalf("an innocent job was charged %s of CPU", slowest.CPU)
+	t.Logf("alone the innocent job used %+v; beside %d burners the slowest used %+v and the costliest %+v", alone, burners, slowest, costliest)
+	if costliest.CPU > 10*alone.CPU+5*time.Millisecond {
+		t.Fatalf("an innocent job was charged %s of CPU beside burners, %s alone", costliest.CPU, alone.CPU)
 	}
 	var burnersEnded = time.Now()
 	for range burners {
