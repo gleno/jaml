@@ -240,11 +240,12 @@ func TestASiblingBurningCPUNeverChargesAnInnocentJob(t *testing.T) {
 		}()
 	}
 	time.Sleep(50 * time.Millisecond)
+	var budget = 10*alone.CPU + 50*time.Millisecond
 	var slowest, costliest Usage
 	for range 20 {
-		ctx, meter := metered(t, WithTimeLimit(t.Context(), 100*time.Millisecond))
+		ctx, meter := metered(t, WithTimeLimit(t.Context(), budget))
 		if _, err := Resolve[int](ctx, document.At("busy")); err != nil {
-			t.Fatalf("an innocent job beside %d CPU burners failed: %v", burners, err)
+			t.Fatalf("an innocent job that costs %s alone failed its %s budget beside %d CPU burners: %v", alone.CPU, budget, burners, err)
 		}
 		var used = meter.only(t)
 		if used.Wall > slowest.Wall {
@@ -254,7 +255,7 @@ func TestASiblingBurningCPUNeverChargesAnInnocentJob(t *testing.T) {
 			costliest = used
 		}
 	}
-	t.Logf("alone the innocent job used %+v; beside %d burners the slowest used %+v and the costliest %+v", alone, burners, slowest, costliest)
+	t.Logf("alone the innocent job used %+v; beside %d burners the slowest used %+v and the costliest %+v, within a budget of %s", alone, burners, slowest, costliest, budget)
 	if costliest.CPU > 10*alone.CPU+5*time.Millisecond {
 		t.Fatalf("an innocent job was charged %s of CPU beside burners, %s alone", costliest.CPU, alone.CPU)
 	}
