@@ -22,7 +22,7 @@ const (
 	expressionFile = "jaml:expression"
 )
 
-var engineWriteRefusal = regexp.MustCompile(`^(|Cannot assign to read only property '.*'|Cannot add property .*, object is not extensible|Cannot set property .*, object is not extensible|Cannot delete property '.*' of .*|length is not writable|.* is not extensible)$`)
+var engineWriteRefusal = regexp.MustCompile(`^(|Cannot assign to read only property '.*'|Cannot add property .*, object is not extensible|Cannot set property .*, object is not extensible|Cannot delete property '.*' of .*|Cannot redefine property: .*|length is not writable|.* is not extensible)$`)
 
 func (r _Realm) explainWrite(compiled _Expression, err error) error {
 	var exception *goja.Exception

@@ -95,6 +95,26 @@ func TestATypeErrorThatIsNotAWriteKeepsItsMessage(t *testing.T) {
 	})
 }
 
+func TestATypeErrorBesideAFrozenTargetKeepsItsMessage(t *testing.T) {
+	var cases = map[string]string{
+		"Object.defineProperty(Object.freeze({}), 'x', { get: 1 })":                                "TypeError: Value is not an object: 1",
+		"Object.assign(Object.freeze({}), { get x() { throw new TypeError('from the source') } })": "TypeError: from the source",
+		"Object.assign(user, { get name() { throw new TypeError('from the getter') } })":           "TypeError: from the getter",
+		"Object.defineProperties(Object.freeze({}), { x: { get: 1 } })":                            "TypeError: Value is not an object: 1",
+	}
+	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		for source, message := range cases {
+			var out any
+			var err = resolveInto(withValues(t, map[string]any{"user": map[string]any{"name": "a"}}), &out, mustExpression(t, sb, source))
+			var thrown *Thrown
+			if !errors.As(err, &thrown) || thrown.Message != message {
+				t.Fatalf("%s: want %q, got %v", source, message, err)
+			}
+		}
+		expectReadOnly(t, sb, []string{"Object.defineProperty(Object.freeze({}), 'x', { value: 1 })", "Object.assign(Object.freeze({}), { x: 1 })"})
+	})
+}
+
 func TestAFrozenWriteThatDoesNothingStillSucceeds(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var got = mustResolve[[]int](t, withValues(t, map[string]any{"none": []int{}, "one": []int{1}}), mustExpression(t, sb, "[...none.sort(), ...one.reverse()]"))

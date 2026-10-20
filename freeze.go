@@ -224,7 +224,7 @@ func (f _Frozen) guardAt(r _Realm, mutator _Mutator) error {
 			arguments = compared.watch(r.vm, arguments)
 		}
 		returned, err := original(call.This, arguments...)
-		if err != nil && !compared.failed && f.isTypeError(r, err) && f.isFrozen(mutator.changes(call)) {
+		if err != nil && !compared.failed && f.isWriteRefusal(r, err) && f.isFrozen(mutator.changes(call)) {
 			panic(r.vm.NewTypeError(readOnlyRefusal))
 		}
 		if err != nil {
@@ -256,9 +256,9 @@ func (c *_Compared) watch(vm *goja.Runtime, arguments []goja.Value) []goja.Value
 	return watched
 }
 
-func (f _Frozen) isTypeError(r _Realm, err error) bool {
+func (f _Frozen) isWriteRefusal(r _Realm, err error) bool {
 	var exception *goja.Exception
-	return errors.As(err, &exception) && r.vm.InstanceOf(exception.Value(), f.intrinsics.typeError)
+	return errors.As(err, &exception) && r.vm.InstanceOf(exception.Value(), f.intrinsics.typeError) && r.refusesWrite(exception.Value())
 }
 
 func (f _Frozen) isFrozen(target goja.Value) bool {
