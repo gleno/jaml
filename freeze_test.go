@@ -149,7 +149,7 @@ func TestAScriptShadowingDescriptorFieldsCannotDefeatTheFreeze(t *testing.T) {
 }
 
 func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
-	realm, err := captureRealm(goja.New(), _Runtime{builtins: frozenBuiltins})
+	realm, err := captureRealm(_Pace{ctx: t.Context(), vm: goja.New()}, _Runtime{builtins: frozenBuiltins})
 	if err != nil {
 		t.Fatal(err)
 	}

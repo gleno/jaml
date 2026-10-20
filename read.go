@@ -34,10 +34,11 @@ type _Realm struct {
 	arrayPrototype  *goja.Object
 	ownKeys         goja.Callable
 	freeze          goja.Callable
-	parse           goja.Callable
+	pace            _Pace
 }
 
-func captureRealm(vm *goja.Runtime, runtime _Runtime) (_Realm, error) {
+func captureRealm(pace _Pace, runtime _Runtime) (_Realm, error) {
+	var vm = pace.vm
 	protection, err := runtime.protect(vm)
 	if err != nil {
 		return _Realm{}, err
@@ -46,7 +47,8 @@ func captureRealm(vm *goja.Runtime, runtime _Runtime) (_Realm, error) {
 	ownKeys, _ := goja.AssertFunction(object.Get("keys"))
 	freeze, _ := goja.AssertFunction(object.Get("freeze"))
 	var arrayPrototype = vm.Get("Array").ToObject(vm).Get("prototype").ToObject(vm)
-	return _Realm{vm: vm, runtime: runtime, protection: protection, objectPrototype: object.Get("prototype").ToObject(vm), arrayPrototype: arrayPrototype, ownKeys: ownKeys, freeze: freeze, parse: guardJSONParse(vm)}, nil
+	guardJSONParse(vm)
+	return _Realm{vm: vm, runtime: runtime, protection: protection, objectPrototype: object.Get("prototype").ToObject(vm), arrayPrototype: arrayPrototype, ownKeys: ownKeys, freeze: freeze, pace: pace}, nil
 }
 
 type _Native struct {
@@ -166,17 +168,21 @@ func readResult(realm _Realm, returned goja.Value) (any, error) {
 
 func readData(realm _Realm, value goja.Value, policy _ReadPolicy) (any, error) {
 	var reader = &_DataReader{realm: realm, policy: policy, ancestors: map[*goja.Object]bool{}, remaining: maxResultValues}
-	if err := reader.pay(1); err != nil {
-		return nil, err
-	}
 	return reader.read(value, nil)
 }
 
-func (r *_DataReader) pay(values int64) error {
+func (r *_DataReader) pay() error {
+	if err := r.afford(1); err != nil {
+		return err
+	}
+	r.remaining--
+	return r.realm.pace.keep(r.remaining)
+}
+
+func (r *_DataReader) afford(values int64) error {
 	if values > int64(r.remaining) {
 		return fmt.Errorf("result holds more than %d values", maxResultValues)
 	}
-	r.remaining -= int(values)
 	return nil
 }
 
@@ -185,6 +191,9 @@ func (r *_DataReader) stranger(path *_DataPath, claim string, leftOut bool) (any
 }
 
 func (r *_DataReader) read(value goja.Value, path *_DataPath) (any, error) {
+	if err := r.pay(); err != nil {
+		return nil, err
+	}
 	switch {
 	case value == nil || goja.IsUndefined(value):
 		return _Undefined{}, nil
@@ -285,7 +294,7 @@ func (r *_DataReader) property(object *goja.Object, key string, path *_DataPath)
 
 func (r *_DataReader) readArray(array *goja.Object, path *_DataPath) (any, error) {
 	var length = array.Get("length").ToInteger()
-	if err := r.pay(length); err != nil {
+	if err := r.afford(length); err != nil {
 		return nil, err
 	}
 	var list = make([]any, length)
@@ -339,7 +348,7 @@ func (r *_DataReader) keysOf(object *goja.Object, path *_DataPath) ([]string, er
 		return nil, fmt.Errorf("%s has keys that Object.keys cannot list", describeResultAt(path))
 	}
 	var count = written.Get("length").ToInteger()
-	if err := r.pay(count); err != nil {
+	if err := r.afford(count); err != nil {
 		return nil, err
 	}
 	var keys = make([]string, 0, count)

@@ -120,6 +120,7 @@ const (
 	defaultMemoryLimit    = _MemoryLimit(256 << 20)
 	defaultBuildTimeout   = 5 * time.Second
 	defaultCallDepthLimit = 4096
+	scriptCacheReserve    = smallestMemoryLimit
 	maxCallDepthLimit     = 1 << 15
 )
 
@@ -137,10 +138,11 @@ type _ExpressionSettings struct {
 type SandboxOption func(*_SandboxSettings) error
 
 type _SandboxSettings struct {
-	memoryLimit    _MemoryLimit
-	maxConcurrency int
-	buildTimeout   time.Duration
-	runtime        _Runtime
+	memoryLimit      _MemoryLimit
+	maxConcurrency   int
+	buildTimeout     time.Duration
+	scriptCacheLimit int64
+	runtime          _Runtime
 }
 
 type _Runtime struct {
@@ -224,6 +226,34 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption {
 		s.buildTimeout = timeout
 		return nil
 	}
+}
+
+func WithScriptCacheLimit(bytes int64) SandboxOption {
+	return func(s *_SandboxSettings) error {
+		if bytes < 1 {
+			return fail(invalidExpression, "script cache limit must be positive, got %d", bytes)
+		}
+		s.scriptCacheLimit = bytes
+		return nil
+	}
+}
+
+func (s _SandboxSettings) childScriptBudget() (int64, error) {
+	var limit = s.memoryLimitOrDefault()
+	switch {
+	case s.scriptCacheLimit == 0:
+		return int64(limit) / 8, nil
+	case s.scriptCacheLimit > int64(limit)-scriptCacheReserve:
+		return 0, fail(invalidExpression, "script cache limit of %d bytes leaves less than %d bytes of the memory limit of %d bytes", s.scriptCacheLimit, scriptCacheReserve, limit)
+	}
+	return s.scriptCacheLimit, nil
+}
+
+func (s _SandboxSettings) trustedScriptBudget() int64 {
+	if s.scriptCacheLimit == 0 {
+		return trustedScriptBudget
+	}
+	return s.scriptCacheLimit
 }
 
 func WithCallDepthLimit(calls int) SandboxOption {

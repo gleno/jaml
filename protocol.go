@@ -15,10 +15,12 @@ const (
 	evaluatorMemoryLimit = "JAML_MEMORY_LIMIT"
 	evaluatorBuiltins    = "JAML_BUILTINS"
 	evaluatorCallDepth   = "JAML_CALL_DEPTH"
+	evaluatorScripts     = "JAML_SCRIPT_CACHE"
+	evaluatorBuildTime   = "JAML_BUILD_TIMEOUT"
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 19
+	protocolVersion      = 20
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3

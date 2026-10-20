@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"unsafe"
 
 	"github.com/dop251/goja"
 )
@@ -19,7 +18,7 @@ var errInterrupted = errors.New("interrupted")
 
 type _SessionPlan struct {
 	values  _BoundValues
-	scripts []string
+	scripts []_Script
 	pinned  _Pinned
 	runtime _Runtime
 }
@@ -68,7 +67,7 @@ func openSession(ctx context.Context, plan _SessionPlan) (*_Session, error) {
 	vm.SetMaxCallStackSize(plan.runtime.depth())
 	vm.SetTimeSource(plan.pinned.now)
 	vm.SetRandSource(plan.pinned.random())
-	realm, err := captureRealm(vm, plan.runtime)
+	realm, err := captureRealm(_Pace{ctx: ctx, vm: vm}, plan.runtime)
 	if err != nil {
 		return nil, failWith(evaluationFailed, err)
 	}
@@ -142,9 +141,17 @@ func (r _Realm) bindValue(name string, value _Datum) error {
 	var shown = clip(name, keyExcerptLength)
 	var bound goja.Value
 	var read = _Native{name: "get " + name, call: func(goja.FunctionCall) goja.Value {
-		if bound == nil {
-			bound = r.thaw(shown, value)
+		if bound != nil {
+			return bound
 		}
+		built, err := r.build(value, r.protection)
+		switch {
+		case errors.Is(err, errInterrupted):
+			return goja.Undefined()
+		case err != nil:
+			panic(fmt.Errorf("value %q cannot be bound: %w", shown, r.explain(err)))
+		}
+		bound = built
 		return bound
 	}}.on(r.vm)
 	var refuse = _Native{name: "set " + name, length: 1, call: func(goja.FunctionCall) goja.Value {
@@ -161,42 +168,7 @@ func (r _Realm) bindValue(name string, value _Datum) error {
 	return nil
 }
 
-func (r _Realm) thaw(shown string, value _Datum) goja.Value {
-	parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(value.text()))
-	if err == nil {
-		err = r.protection.settle(r, parsed)
-	}
-	var exception *goja.Exception
-	switch {
-	case errors.As(err, &exception):
-		panic(fmt.Errorf("value %q cannot be bound: %w", shown, r.explain(err)))
-	case err != nil:
-		panic(err)
-	}
-	return parsed
-}
-
-func (d _Datum) text() string {
-	return unsafe.String(unsafe.SliceData(d.encoded), len(d.encoded))
-}
-
-func (r _Realm) deepFreeze(value goja.Value) error {
-	object, isObject := value.(*goja.Object)
-	if !isObject {
-		return nil
-	}
-	if _, err := r.freeze(goja.Undefined(), object); err != nil {
-		return err
-	}
-	for _, key := range object.Keys() {
-		if err := r.deepFreeze(object.Get(key)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func guardJSONParse(vm *goja.Runtime) (intrinsic goja.Callable) {
+func guardJSONParse(vm *goja.Runtime) {
 	var json = vm.Get("JSON").ToObject(vm)
 	parse, _ := goja.AssertFunction(json.Get("parse"))
 	var rangeError = vm.Get("RangeError")
@@ -218,7 +190,6 @@ func guardJSONParse(vm *goja.Runtime) (intrinsic goja.Callable) {
 	if err := json.Set("parse", guarded); err != nil {
 		panic(err)
 	}
-	return parse
 }
 
 func (s *_Session) evaluate(compiled _Expression, args []_Datum) (any, error) {
@@ -266,11 +237,11 @@ func (r _Realm) settle(compiled _Expression, args []_Datum) (goja.Value, error) 
 func (r _Realm) arguments(args []_Datum) ([]goja.Value, error) {
 	var values = make([]goja.Value, len(args))
 	for index, arg := range args {
-		parsed, err := r.parse(goja.Undefined(), r.vm.ToValue(arg.text()))
+		built, err := r.build(arg, _Mutable{})
 		if err != nil {
 			return nil, fmt.Errorf("argument %d: %w", index+1, r.explain(err))
 		}
-		values[index] = parsed
+		values[index] = built
 	}
 	return values, nil
 }

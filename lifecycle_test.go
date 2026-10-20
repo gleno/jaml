@@ -189,7 +189,7 @@ func TestASilentExecutableEndsWithTheContext(t *testing.T) {
 
 func TestASilentExecutableEndsWithItsStartDeadline(t *testing.T) {
 	var started = time.Now()
-	_, err := startLife(_ChildSpec{lifetime: t.Context(), limit: silentLimit, startDeadline: 200 * time.Millisecond, buildTimeout: defaultBuildTimeout})
+	_, err := startLife(_ChildSpec{lifetime: t.Context(), limit: silentLimit, scriptBudget: trustedScriptBudget, startDeadline: 200 * time.Millisecond, buildTimeout: defaultBuildTimeout})
 	expectUnavailable(t, placed(rootPlace, err), "$: starting the evaluator", "took longer than 200ms to start")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected context.DeadlineExceeded in %v", err)
@@ -207,7 +207,7 @@ func TestAShortBuildTimeoutDoesNotBoundStartingTheEvaluator(t *testing.T) {
 func TestAShortBuildTimeoutDoesNotBoundARespawn(t *testing.T) {
 	var sb = mustIsolated(t, WithMaxConcurrency(8))
 	var document = mustJaml(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, _ChildSpec{limit: slowStartLimit, startDeadline: evaluatorStartDeadline, buildTimeout: slowStart / 4})
+	respawnAs(t, sb, _ChildSpec{limit: slowStartLimit, scriptBudget: trustedScriptBudget, startDeadline: evaluatorStartDeadline, buildTimeout: slowStart / 4})
 	killChild(t, sb)
 	var answers = make(chan error, 6)
 	for range 6 {
@@ -260,7 +260,7 @@ func TestTheSandboxContextEndingInterruptsARespawn(t *testing.T) {
 		t.Fatal(err)
 	}
 	var document = mustJaml(t, sb, "v: ${ 1 }\n")
-	respawnAs(t, sb, _ChildSpec{limit: silentLimit, startDeadline: evaluatorStartDeadline, buildTimeout: defaultBuildTimeout})
+	respawnAs(t, sb, _ChildSpec{limit: silentLimit, scriptBudget: trustedScriptBudget, startDeadline: evaluatorStartDeadline, buildTimeout: defaultBuildTimeout})
 	killChild(t, sb)
 	var evaluating = make(chan error, 1)
 	go func() {
@@ -319,7 +319,7 @@ func TestARespawnFailsAsConstructionWouldHave(t *testing.T) {
 			var sb = mustIsolated(t)
 			var document = mustJaml(t, sb, "a: 1\n")
 			expectEqual(t, isolatedEvalAs[int](t, document, nil, "a"), 1)
-			respawnAs(t, sb, _ChildSpec{limit: _MemoryLimit(limit), startDeadline: evaluatorStartDeadline, buildTimeout: defaultBuildTimeout})
+			respawnAs(t, sb, _ChildSpec{limit: _MemoryLimit(limit), scriptBudget: trustedScriptBudget, startDeadline: evaluatorStartDeadline, buildTimeout: defaultBuildTimeout})
 			killChild(t, sb)
 			var out any
 			var respawned = resolveInto(within(t, 10*time.Second), &out, document.At("a"))

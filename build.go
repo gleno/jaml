@@ -16,10 +16,14 @@ type _BuildRace struct {
 }
 
 func raceBuild(parent context.Context, timeout time.Duration) *_BuildRace {
-	bound, stop := context.WithTimeoutCause(parent, timeout, fmt.Errorf("the build took longer than its timeout of %s: %w", timeout, context.DeadlineExceeded))
+	bound, stop := context.WithTimeoutCause(parent, timeout, overdueBuild(timeout))
 	var race = &_BuildRace{bound: bound, stop: stop, settled: make(chan struct{})}
 	context.AfterFunc(bound, func() { race.record(_Refused{err: cancelled(bound)}) })
 	return race
+}
+
+func overdueBuild(timeout time.Duration) error {
+	return fmt.Errorf("the build took longer than its timeout of %s: %w", timeout, context.DeadlineExceeded)
 }
 
 func (r *_BuildRace) finish(result _Outcome) bool {

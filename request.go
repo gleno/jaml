@@ -2,6 +2,7 @@ package jaml
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"time"
 )
 
 const (
@@ -31,10 +33,18 @@ type _Ask struct {
 }
 
 type _RequestBody struct {
-	opens   string
-	op      _Opcode
-	written []byte
-	limit   _TimeLimit
+	opens    string
+	op       _Opcode
+	written  []byte
+	limit    _TimeLimit
+	compiles bool
+}
+
+func (b *_RequestBody) overseen(ctx context.Context, buildTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if b.compiles {
+		return b.limit.overseen(ctx, buildTimeout+2*cancelGrace)
+	}
+	return b.limit.overseen(ctx, cancelGrace)
 }
 
 type _Outgoing struct {
@@ -74,7 +84,7 @@ func writeWork(ask _Ask, limit int) (_WrittenWork, error) {
 		return _WrittenWork{}, located(rootPlace, err)
 	}
 	w.mark('}')
-	written.body = &_RequestBody{opens: `"op":"serve","work":`, op: opServe, written: w.written, limit: ask.timeLimit}
+	written.body = &_RequestBody{opens: `"op":"serve","work":`, op: opServe, written: w.written, limit: ask.timeLimit, compiles: len(ask.scripts) > 0}
 	return written, nil
 }
 

@@ -38,17 +38,20 @@ var (
 )
 
 type _EvaluatorWorld struct {
-	limit   _MemoryLimit
-	runtime _Runtime
-	nonce   string
-	parent  int
-	zone    []string
+	limit        _MemoryLimit
+	runtime      _Runtime
+	scriptBudget int64
+	buildTimeout time.Duration
+	nonce        string
+	parent       int
+	zone         []string
 }
 
 type _ChildSpec struct {
 	lifetime      context.Context
 	limit         _MemoryLimit
 	runtime       _Runtime
+	scriptBudget  int64
 	startDeadline time.Duration
 	buildTimeout  time.Duration
 }
@@ -117,7 +120,7 @@ func startFailure(err error) error {
 }
 
 func currentWorld(spec _ChildSpec) _EvaluatorWorld {
-	return _EvaluatorWorld{limit: spec.limit, runtime: spec.runtime, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
+	return _EvaluatorWorld{limit: spec.limit, runtime: spec.runtime, scriptBudget: spec.scriptBudget, buildTimeout: spec.buildTimeout, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
 }
 
 func zoneEnv() []string {
@@ -154,6 +157,8 @@ func (w _EvaluatorWorld) env() []string {
 		evaluatorMemoryLimit + "=" + strconv.FormatInt(int64(w.limit), 10),
 		evaluatorBuiltins + "=" + w.runtime.builtins.String(),
 		evaluatorCallDepth + "=" + strconv.Itoa(w.runtime.depth()),
+		evaluatorScripts + "=" + strconv.FormatInt(w.scriptBudget, 10),
+		evaluatorBuildTime + "=" + strconv.FormatInt(int64(w.buildTimeout), 10),
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),
 	}

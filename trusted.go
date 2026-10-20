@@ -8,7 +8,7 @@ import (
 type _TrustedEngine struct {
 	gate         chan struct{}
 	buildTimeout time.Duration
-	runtime      _Runtime
+	host         _Host
 }
 
 type _LocalUnit struct {
@@ -17,7 +17,7 @@ type _LocalUnit struct {
 }
 
 func newTrusted(configured _SandboxSettings) *_TrustedEngine {
-	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, runtime: configured.runtime}
+	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, host: _Host{runtime: configured.runtime, scripts: newScriptCache(configured.trustedScriptBudget())}}
 }
 
 func (e *_TrustedEngine) enter(ctx context.Context) error {
@@ -39,25 +39,34 @@ func (e *_TrustedEngine) leave() {
 }
 
 func (e *_TrustedEngine) build(ctx context.Context, plan _Blueprint) (_Unit, error) {
-	if err := e.enter(ctx); err != nil {
+	var built _Servable
+	var err = e.raced(ctx, func(bound context.Context) (err error) {
+		built, err = plan.build(bound)
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
+	return &_LocalUnit{engine: e, built: built}, nil
+}
+
+func (e *_TrustedEngine) raced(ctx context.Context, work func(bound context.Context) error) error {
+	if err := e.enter(ctx); err != nil {
+		return err
+	}
 	var race = raceBuild(ctx, e.buildTimeout)
-	var built _Servable
 	go func() {
 		defer e.leave()
-		made, err := plan.build(race.bound)
-		if err != nil {
+		if err := work(race.bound); err != nil {
 			race.finish(_Refused{err: err})
 			return
 		}
-		built = made
 		race.finish(_Built{})
 	}()
 	if failed, isRefused := race.await().(_Refused); isRefused {
-		return nil, failed.err
+		return failed.err
 	}
-	return &_LocalUnit{engine: e, built: built}, nil
+	return nil
 }
 
 func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
@@ -65,14 +74,18 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 	if err != nil {
 		return _Refused{err: err}
 	}
+	var prepared _Prepared
+	err = u.engine.raced(ctx, func(context.Context) (err error) {
+		prepared, err = u.built.prepare(written.view(), u.engine.host)
+		return err
+	})
+	if err != nil {
+		return _Refused{err: err}
+	}
 	if err := u.engine.enter(ctx); err != nil {
 		return _Refused{err: err}
 	}
 	defer u.engine.leave()
-	prepared, err := u.built.prepare(written.view(), u.engine.runtime)
-	if err != nil {
-		return _Refused{err: err}
-	}
 	bounded, stop := written.ask.timeLimit.bound(ctx)
 	defer stop()
 	result, err := prepared.render(bounded)

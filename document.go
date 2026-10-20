@@ -7,8 +7,13 @@ import (
 )
 
 type _Servable interface {
-	prepare(request _Work, runtime _Runtime) (_Prepared, error)
+	prepare(request _Work, host _Host) (_Prepared, error)
 	outline() *_CodeOutline
+}
+
+type _Host struct {
+	runtime _Runtime
+	scripts *_ScriptCache
 }
 
 type _Prepared struct {
@@ -67,12 +72,16 @@ func compileBare(source string, configured _ExpressionSettings) (_Expression, er
 	return parsed.compile(bare)
 }
 
-func (d *_Document) prepare(request _Work, runtime _Runtime) (_Prepared, error) {
+func (d *_Document) prepare(request _Work, host _Host) (_Prepared, error) {
 	chosen, err := d.selectPath(request.Path)
 	if err != nil {
 		return _Prepared{}, err
 	}
-	var plan = _SessionPlan{values: request.Values, scripts: request.Scripts, pinned: request.Pinned, runtime: runtime}
+	scripts, err := host.scripts.compileAll(request.Scripts)
+	if err != nil {
+		return _Prepared{}, err
+	}
+	var plan = _SessionPlan{values: request.Values, scripts: scripts, pinned: request.Pinned, runtime: host.runtime}
 	var spot = &_Spot{selection: chosen.path}
 	return _Prepared{spot: spot, render: func(ctx context.Context) (_Rendered, error) {
 		var engine = &_LazySession{ctx: ctx, plan: plan}

@@ -21,7 +21,11 @@ type _RemoteUnit struct {
 }
 
 func startIsolated(lifetime context.Context, configured _SandboxSettings) (*_IsolatedEngine, error) {
-	var spec = _ChildSpec{lifetime: lifetime, limit: configured.memoryLimitOrDefault(), runtime: configured.runtime, startDeadline: evaluatorStartDeadline, buildTimeout: configured.buildTimeout}
+	scriptBudget, err := configured.childScriptBudget()
+	if err != nil {
+		return nil, err
+	}
+	var spec = _ChildSpec{lifetime: lifetime, limit: configured.memoryLimitOrDefault(), runtime: configured.runtime, scriptBudget: scriptBudget, startDeadline: evaluatorStartDeadline, buildTimeout: configured.buildTimeout}
 	first, err := startLife(spec)
 	if err != nil {
 		return nil, err

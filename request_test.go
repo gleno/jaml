@@ -173,8 +173,24 @@ func TestTheScriptCacheEvictsTheLeastRecentlyUsedByWeight(t *testing.T) {
 	expectEqual(t, cache.held, 3*weight)
 }
 
-func TestTheChildScriptBudgetIsAnEighthOfItsLimit(t *testing.T) {
-	expectEqual(t, scriptBudget(16<<20), int64(2<<20))
+func TestTheChildScriptBudgetIsAnEighthOfItsLimitUnlessSet(t *testing.T) {
+	var budget = func(options ...SandboxOption) (int64, error) {
+		configured, err := configureSandbox(options)
+		if err != nil {
+			return 0, err
+		}
+		return configured.childScriptBudget()
+	}
+	var eighth, err = budget(WithMemoryLimit(16 << 20))
+	expectEqual(t, eighth, int64(2<<20))
+	expectEqual(t, err, nil)
+	set, err := budget(WithMemoryLimit(64<<20), WithScriptCacheLimit(48<<20))
+	expectEqual(t, set, int64(48<<20))
+	expectEqual(t, err, nil)
+	_, err = budget(WithMemoryLimit(64<<20), WithScriptCacheLimit(48<<20+1))
+	expectError(t, placed(rootPlace, err), InvalidExpression, "script cache limit of 50331649 bytes leaves less than 16777216 bytes of the memory limit of 67108864 bytes")
+	_, err = budget(WithScriptCacheLimit(0))
+	expectError(t, placed(rootPlace, err), InvalidExpression, "script cache limit must be positive, got 0")
 }
 
 func TestAReplyIsReadIntoOneBufferAndDecodedInPlace(t *testing.T) {

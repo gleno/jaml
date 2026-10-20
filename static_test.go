@@ -125,7 +125,7 @@ func walkedTwin(d *_Document) *_Document {
 
 func renderedBytes(t *testing.T, d *_Document, request _Work) (string, [][]string, error) {
 	t.Helper()
-	prepared, err := d.prepare(request, _Runtime{builtins: mutableBuiltins})
+	prepared, err := d.prepare(request, _Host{runtime: _Runtime{builtins: mutableBuiltins}, scripts: newScriptCache(trustedScriptBudget)})
 	if err != nil {
 		return "", nil, err
 	}

@@ -182,7 +182,7 @@ func (w *_Wire) vacate() {
 }
 
 func (l *_Life) serve(ctx context.Context, asked _Outgoing) _Outcome {
-	watched, stop := asked.body.limit.overseen(ctx)
+	watched, stop := asked.body.overseen(ctx, l.buildTimeout)
 	defer stop()
 	sent, err := l.send(watched, asked)
 	if err != nil {

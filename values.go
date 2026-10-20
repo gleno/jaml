@@ -12,7 +12,10 @@ import (
 	"unicode/utf8"
 )
 
-const loneLow = 0xDC00
+const (
+	loneLow        = 0xDC00
+	maxPlainDigits = 308
+)
 
 type _Datum struct {
 	encoded json.RawMessage
@@ -60,6 +63,30 @@ func checkDatum(encoded []byte) error {
 		return fmt.Errorf("%s", nestsTooDeep)
 	case !wellFormed:
 		return fmt.Errorf("holds text that is not valid UTF-8")
+	}
+	if number := numberOutOfRange(encoded); number != nil {
+		return fmt.Errorf("holds the number %s, which is out of range", clip(string(number), keyExcerptLength))
+	}
+	return nil
+}
+
+func numberOutOfRange(encoded []byte) []byte {
+	for i := 0; i < len(encoded); i++ {
+		switch written := encoded[i]; {
+		case written == '"':
+			i = textEnd(encoded, i+1)
+		case written == '-' || written >= '0' && written <= '9':
+			var start = i
+			for i < len(encoded) && isNumberByte(encoded[i]) {
+				i++
+			}
+			var number = encoded[start:i]
+			if len(number) > maxPlainDigits || bytes.ContainsAny(number, "eE") {
+				if _, err := strconv.ParseFloat(string(number), 64); err != nil {
+					return number
+				}
+			}
+		}
 	}
 	return nil
 }

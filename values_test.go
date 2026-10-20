@@ -177,3 +177,16 @@ func TestTheChildRefusesWorkThatWasNeverAdmitted(t *testing.T) {
 	}
 	expectEqual(t, string(decoded.Values["a"].encoded)+string(decoded.Args[0].encoded), `"\ud83d\ude00"{"k": [1]}`)
 }
+
+func TestANumberOutOfRangeIsRefusedAtTheDoor(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var e = mustExpression(t, sb, "typeof v")
+		for _, number := range []any{json.RawMessage(`{"a":[1e400]}`), json.Number("-1e999"), json.RawMessage("1" + strings.Repeat("0", 400))} {
+			_, err := Resolve[string](WithValues(t.Context(), map[string]any{"v": number}), e)
+			expectError(t, err, InvalidInput, `value "v" holds the number`, "which is out of range")
+		}
+		expectEqual(t, mustResolve[string](t, WithValues(t.Context(), map[string]any{"v": json.RawMessage(`[1e-400, "1e400", 1e308]`)}), e), "object")
+		_, err := Resolve[string](t.Context(), mustExpression(t, sb, "(n) => typeof n"), json.Number("1e400"))
+		expectError(t, err, InvalidInput, "argument 1 holds the number 1e400, which is out of range")
+	})
+}

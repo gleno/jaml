@@ -42,8 +42,6 @@ type _CachedScript struct {
 	err    error
 }
 
-var scripts = newScriptCache(trustedScriptBudget)
-
 func newScriptCache(budget int64) *_ScriptCache {
 	return &_ScriptCache{budget: budget, recent: list.New(), entries: map[string]*list.Element{}}
 }
@@ -81,10 +79,6 @@ func (c *_ScriptCache) keep(cached *_CachedScript) {
 	}
 	c.entries[cached.source] = c.recent.PushFront(cached)
 	c.held += cached.weight()
-}
-
-func scriptBudget(limit _MemoryLimit) int64 {
-	return int64(limit) / 8
 }
 
 func (c *_CachedScript) weight() int64 {
@@ -217,12 +211,20 @@ func accessors(names []string, place file.Idx) []ast.Expression {
 	return written
 }
 
-func (s *_Session) run(sources []string, values _BoundValues) error {
+func (c *_ScriptCache) compileAll(sources []string) ([]_Script, error) {
+	var compiled = make([]_Script, len(sources))
 	for index, source := range sources {
-		compiled, err := scripts.compile(source)
+		script, err := c.compile(source)
 		if err != nil {
-			return _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: err}
+			return nil, _Unplaced{kind: invalidExpression, label: scriptLabel(index), cause: err}
 		}
+		compiled[index] = script
+	}
+	return compiled, nil
+}
+
+func (s *_Session) run(scripts []_Script, values _BoundValues) error {
+	for index, compiled := range scripts {
 		if err := s.enter(func(r _Realm) error { return r.runScript(compiled, values) }); err != nil {
 			return _Unplaced{kind: evaluationFailed, label: scriptLabel(index), cause: err}
 		}

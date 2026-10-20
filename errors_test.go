@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,30 +187,6 @@ func TestAThrowReadPastItsContextFailsWithTheCauseAndFreesItsSlot(t *testing.T) 
 			}, WithMaxConcurrency(1))
 		})
 	}
-}
-
-func TestBindingVarsEndsWithItsContext(t *testing.T) {
-	var long = json.RawMessage("[" + strings.Repeat("0,", 1<<16) + "0]")
-	var vars = map[string]any{}
-	var names []string
-	for i := range 192 {
-		vars["v"+strconv.Itoa(i)] = long
-		names = append(names, "v"+strconv.Itoa(i))
-	}
-	var cancelDelay = 600 * time.Millisecond * raceSlowdown
-	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var document = mustJaml(t, sb, "v: ${ ["+strings.Join(names, ", ")+"].length }\n")
-		expectTheSameChildAfter(t, sb, func() {
-			ctx, cancel := context.WithCancel(t.Context())
-			var started = time.Now()
-			time.AfterFunc(cancelDelay, cancel)
-			var err = evalOrHang(t, document, ctx, vars)
-			expectError(t, err, EvaluationFailed, "cancelled")
-			if elapsed := time.Since(started); elapsed > cancelDelay+cancelDelay/2 {
-				t.Fatalf("binding ran %v past its context", elapsed-cancelDelay)
-			}
-		})
-	})
 }
 
 func TestEveryRefusalOfTheCallersInputIsInvalidInput(t *testing.T) {

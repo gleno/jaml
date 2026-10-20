@@ -47,8 +47,8 @@ func serveEvaluations(answers io.Writer) int {
 	}
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
-	scripts = newScriptCache(scriptBudget(world.limit))
-	var serving = &_Evaluator{runtime: world.runtime, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
+	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
+	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
 }
@@ -59,10 +59,11 @@ func stuckAfterCancel(job uint64) {
 }
 
 type _Evaluator struct {
-	runtime _Runtime
-	watch   *_HeapWatch
-	replies *_ReplyWriter
-	jobs    *_JobTable
+	host         _Host
+	buildTimeout time.Duration
+	watch        *_HeapWatch
+	replies      *_ReplyWriter
+	jobs         *_JobTable
 }
 
 func (e *_Evaluator) follow(requests *_FrameReader) int {
@@ -173,7 +174,7 @@ func (e *_Evaluator) builtFrame(job uint64, built _Servable) []byte {
 
 func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, request _Work) {
 	var path = selectedPath(request.Path).String()
-	prepared, err := held.prepare(request, e.runtime)
+	prepared, err := e.prepare(job, held, request)
 	if err != nil {
 		e.jobs.settle(job)
 		e.replies.write(e.replies.frames.failure(job, path, err))
@@ -197,6 +198,18 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 		}
 	})
 	e.replies.write(sealed)
+}
+
+func (e *_Evaluator) prepare(job uint64, held _Servable, request _Work) (_Prepared, error) {
+	var overdue = fmt.Errorf("cancelled: %w", overdueBuild(e.buildTimeout))
+	var watch = time.AfterFunc(e.buildTimeout, func() {
+		e.jobs.overrun(job, func() { e.replies.write(e.replies.frames.failure(job, rootPlace, overdue)) })
+	})
+	prepared, err := held.prepare(request, e.host)
+	if !watch.Stop() {
+		return _Prepared{}, overdue
+	}
+	return prepared, err
 }
 
 func (e *_Evaluator) overran(job uint64, spot *_Spot, bounded context.Context) {
@@ -282,7 +295,15 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 	if err != nil {
 		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %w", evaluatorCallDepth, err)
 	}
-	return _EvaluatorWorld{limit: limit, runtime: _Runtime{builtins: builtins, callDepth: callDepth}, nonce: nonce, parent: parent}, nil
+	scriptBudget, err := strconv.ParseInt(os.Getenv(evaluatorScripts), 10, 64)
+	if err != nil || scriptBudget < 1 {
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorScripts, os.Getenv(evaluatorScripts))
+	}
+	buildTimeout, err := strconv.ParseInt(os.Getenv(evaluatorBuildTime), 10, 64)
+	if err != nil || buildTimeout < 1 {
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuildTime, os.Getenv(evaluatorBuildTime))
+	}
+	return _EvaluatorWorld{limit: limit, runtime: _Runtime{builtins: builtins, callDepth: callDepth}, scriptBudget: scriptBudget, buildTimeout: time.Duration(buildTimeout), nonce: nonce, parent: parent}, nil
 }
 
 type _HeapWatch struct {

@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,9 +14,9 @@ import (
 const unnamedFunctionsFile = "jaml:intrinsics"
 
 type _Protection interface {
+	_Closing
 	guard(r _Realm) error
 	freeze(r _Realm, survey _Survey) error
-	settle(r _Realm, value goja.Value) error
 	refusal() string
 	refuseWrite(r _Realm, thrown goja.Value) error
 }
@@ -41,7 +42,7 @@ func (_Mutable) freeze(_Realm, _Survey) error {
 	return nil
 }
 
-func (_Mutable) settle(_Realm, goja.Value) error {
+func (_Mutable) settle(_Realm, *goja.Object) error {
 	return nil
 }
 
@@ -271,8 +272,9 @@ func (f _Frozen) isFrozen(target goja.Value) bool {
 	return frozen.ToBoolean()
 }
 
-func (f _Frozen) settle(r _Realm, value goja.Value) error {
-	return r.deepFreeze(value)
+func (_Frozen) settle(r _Realm, object *goja.Object) error {
+	_, err := r.freeze(goja.Undefined(), object)
+	return err
 }
 
 func (_Frozen) refusal() string {
@@ -679,7 +681,7 @@ var pristineGlobals = sync.OnceValues(func() ([]goja.Value, error) {
 
 var pristineChart = sync.OnceValues(func() ([]_Route, error) {
 	var vm = goja.New()
-	realm, err := captureRealm(vm, _Runtime{builtins: frozenBuiltins})
+	realm, err := captureRealm(_Pace{ctx: context.Background(), vm: vm}, _Runtime{builtins: frozenBuiltins})
 	if err != nil {
 		return nil, err
 	}

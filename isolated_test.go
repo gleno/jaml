@@ -227,9 +227,13 @@ func TestTheEvaluatorGetsACleanEnvironment(t *testing.T) {
 					expectEqual(t, value, builtins[kind.name])
 				case evaluatorCallDepth:
 					expectEqual(t, value, "4096")
+				case evaluatorScripts:
+					expectEqual(t, value, "33554432")
+				case evaluatorBuildTime:
+					expectEqual(t, value, "5000000000")
 				}
 			}
-			var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorBuiltins, evaluatorCallDepth, evaluatorNonce, evaluatorParent}
+			var want = []string{evaluatorMarker, evaluatorMemoryLimit, evaluatorBuiltins, evaluatorCallDepth, evaluatorScripts, evaluatorBuildTime, evaluatorNonce, evaluatorParent}
 			for _, entry := range zoneEnv() {
 				name, _, _ := strings.Cut(entry, "=")
 				want = append(want, name)
