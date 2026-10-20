@@ -273,11 +273,11 @@ func TestAWedgedChildCannotOutlastATimeLimit(t *testing.T) {
 	var limited = make(chan error, 1)
 	go func() {
 		var out int
-		limited <- resolveInto(WithTimeLimit(t.Context(), 100*time.Millisecond), &out, document.At("v"))
+		limited <- resolveInto(WithWallLimit(t.Context(), 100*time.Millisecond), &out, document.At("v"))
 	}()
 	select {
 	case err := <-limited:
-		expectError(t, err, TimeLimit, "v: exceeded the time limit of 100ms", "the evaluator stopped answering")
+		expectError(t, err, WallLimit, "v: exceeded the wall time limit of 100ms", "the evaluator stopped answering")
 	case <-time.After(backstopSilence + 10*time.Second):
 		t.Fatal("a call bounded only by a time limit waited on a wedged evaluator past its backstop")
 	}
@@ -305,7 +305,7 @@ func TestAChildNotReadingABigRequestIsReplacedForALimitedCall(t *testing.T) {
 	var limited = make(chan error, 1)
 	var out int
 	go func() {
-		limited <- resolveInto(valued(WithTimeLimit(t.Context(), 10*time.Second), map[string]any{"x": strings.Repeat("y", 4<<20)}), &out, length)
+		limited <- resolveInto(valued(WithWallLimit(t.Context(), 10*time.Second), map[string]any{"x": strings.Repeat("y", 4<<20)}), &out, length)
 	}()
 	select {
 	case err := <-limited:
@@ -338,7 +338,7 @@ func TestAChildThatWakesBeforeTheBackstopStillAnswers(t *testing.T) {
 	var limited = make(chan error, 1)
 	var out int
 	go func() {
-		limited <- resolveInto(WithTimeLimit(t.Context(), 100*time.Millisecond), &out, document.At("v"))
+		limited <- resolveInto(WithWallLimit(t.Context(), 100*time.Millisecond), &out, document.At("v"))
 	}()
 	time.Sleep(100*time.Millisecond + cancelGrace + time.Second)
 	if err := child.cmd.Process.Signal(syscall.SIGCONT); err != nil {
@@ -359,7 +359,7 @@ func TestAChildStoppedMidReplyIsCaughtForALimitedCall(t *testing.T) {
 	var limited = make(chan error, 1)
 	go func() {
 		var out string
-		limited <- resolveInto(WithTimeLimit(t.Context(), 2*time.Second), &out, big)
+		limited <- resolveInto(WithWallLimit(t.Context(), 2*time.Second), &out, big)
 	}()
 	awaitHeldReply(t, child.cmd.Process.Pid)
 	if err := child.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
@@ -368,7 +368,7 @@ func TestAChildStoppedMidReplyIsCaughtForALimitedCall(t *testing.T) {
 	var stopped = time.Now()
 	select {
 	case err := <-limited:
-		expectError(t, err, TimeLimit, "$: exceeded the time limit of 2s", "the evaluator stopped answering")
+		expectError(t, err, WallLimit, "$: exceeded the wall time limit of 2s", "the evaluator stopped answering")
 	case <-time.After(2*time.Second + backstopSilence + 10*time.Second):
 		t.Fatal("a limited call waited on an evaluator stopped mid-reply past its backstop")
 	}

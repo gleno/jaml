@@ -16,7 +16,7 @@ func TestARunawayRegexDoesNotStallItsSibling(t *testing.T) {
 		var ran = make(chan error, 1)
 		go func() {
 			var out any
-			ran <- resolveInto(WithTimeLimit(t.Context(), 100*time.Millisecond), &out, runaway)
+			ran <- resolveInto(WithWallLimit(t.Context(), 100*time.Millisecond), &out, runaway)
 		}()
 		time.Sleep(10 * time.Millisecond)
 		var started = time.Now()
@@ -66,7 +66,7 @@ func TestAnInnocentJobOutlastsAStreamOfRunaways(t *testing.T) {
 				default:
 				}
 				var out any
-				_ = resolveInto(WithTimeLimit(t.Context(), 100*time.Millisecond), &out, runaway)
+				_ = resolveInto(WithWallLimit(t.Context(), 100*time.Millisecond), &out, runaway)
 			}
 		})
 	}

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, Unavailable, InvalidInput, MemoryLimit, TimeLimit, CallDepthLimit, EvaluatorDied}
+var everyKind = []error{ExpressionError, InvalidExpression, InvalidTarget, MissingPath, EvaluationFailed, CoercionFailed, Closed, Unsupported, Unavailable, InvalidInput, MemoryLimit, WallLimit, CallDepthLimit, EvaluatorDied}
 
 func TestACancelledEvalKeepsItsContextCause(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
@@ -202,7 +202,7 @@ func TestEveryRefusalOfTheCallersInputIsInvalidInput(t *testing.T) {
 			"a value name not in UTF-8":    resolveInto(valued(t.Context(), map[string]any{"b\xffad": 1}), &out, document.At("v")),
 			"an argument that is not data": resolveInto(t.Context(), &out, call, func() {}),
 			"an argument not in UTF-8":     resolveInto(t.Context(), &out, call, "x\xffy"),
-			"a time limit not positive":    resolveInto(WithTimeLimit(t.Context(), 0), &out, document.At("v")),
+			"a time limit not positive":    resolveInto(WithWallLimit(t.Context(), 0), &out, document.At("v")),
 		} {
 			expectInvalidInput(t, name, err)
 		}
@@ -228,7 +228,7 @@ func TestRecursionPastTheCallDepthLimitIsCallDepthLimit(t *testing.T) {
 		var err = resolveInto(t.Context(), &out, mustJaml(t, sb, "v: ${ (function f(n) { return f(n + 1) })(0) }\n").At("v"))
 		expectError(t, err, CallDepthLimit, "$.v: ")
 		expectFailure(t, err, "$.v", "exceeded the maximum call depth of 100")
-		if !errors.Is(err, EvaluationFailed) || errors.Is(err, TimeLimit) || errors.Is(err, MemoryLimit) || errors.Is(err, EvaluatorDied) {
+		if !errors.Is(err, EvaluationFailed) || errors.Is(err, WallLimit) || errors.Is(err, MemoryLimit) || errors.Is(err, EvaluatorDied) {
 			t.Fatalf("a call depth refusal matched the wrong kinds: %v", err)
 		}
 	}, WithCallDepthLimit(100))

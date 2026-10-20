@@ -28,8 +28,8 @@ type _Ask struct {
 	args      []any
 	skips     *_Shape
 	pinned    _Pinned
+	wallLimit _WallLimit
 	timeLimit _TimeLimit
-	cpuLimit  _CPULimit
 	codeFree  bool
 	console   *_Console
 }
@@ -38,7 +38,7 @@ type _RequestBody struct {
 	opens    string
 	op       _Opcode
 	written  []byte
-	limit    _TimeLimit
+	limit    _WallLimit
 	compiles bool
 }
 
@@ -87,7 +87,7 @@ func writeWork(ask _Ask, limit int) (_WrittenWork, error) {
 		return _WrittenWork{}, located(rootPlace, err)
 	}
 	w.mark('}')
-	written.body = &_RequestBody{opens: `"op":"serve","work":`, op: opServe, written: w.written, limit: ask.timeLimit, compiles: len(ask.scripts) > 0}
+	written.body = &_RequestBody{opens: `"op":"serve","work":`, op: opServe, written: w.written, limit: ask.wallLimit, compiles: len(ask.scripts) > 0}
 	return written, nil
 }
 
@@ -95,13 +95,13 @@ func (ww *_WrittenWork) fill(w *_WireWriter) error {
 	if err := w.pinned(ww.ask.pinned); err != nil {
 		return err
 	}
-	if ww.ask.timeLimit != 0 {
-		if err := w.raw(`,"limit":` + strconv.FormatInt(int64(ww.ask.timeLimit), 10)); err != nil {
+	if ww.ask.wallLimit != 0 {
+		if err := w.raw(`,"wall":` + strconv.FormatInt(int64(ww.ask.wallLimit), 10)); err != nil {
 			return err
 		}
 	}
-	if ww.ask.cpuLimit != 0 {
-		if err := w.raw(`,"cpu":` + strconv.FormatInt(int64(ww.ask.cpuLimit), 10)); err != nil {
+	if ww.ask.timeLimit != 0 {
+		if err := w.raw(`,"limit":` + strconv.FormatInt(int64(ww.ask.timeLimit), 10)); err != nil {
 			return err
 		}
 	}
@@ -220,7 +220,7 @@ func (ww _WrittenWork) view() _Work {
 	for index, span := range ww.args {
 		args[index] = ww.datum(span)
 	}
-	return _Work{Path: ww.ask.path, Values: values, Scripts: ww.ask.scripts, Args: args, Skips: ww.ask.skips, Pinned: ww.ask.pinned, TimeLimit: ww.ask.timeLimit, Console: ww.ask.console != nil}
+	return _Work{Path: ww.ask.path, Values: values, Scripts: ww.ask.scripts, Args: args, Skips: ww.ask.skips, Pinned: ww.ask.pinned, WallLimit: ww.ask.wallLimit, Console: ww.ask.console != nil}
 }
 
 func (ww _WrittenWork) datum(span _Span) _Datum {

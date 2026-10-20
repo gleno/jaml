@@ -48,18 +48,18 @@ type _Cause int
 
 const (
 	memoryExhausted _Cause = iota
-	timeExhausted
+	wallExhausted
 	callDepthExhausted
 	evaluatorDeath
-	cpuExhausted
+	timeExhausted
 )
 
 var causes = [...]_KindEntry{
 	memoryExhausted:    {"MemoryLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the memory limit")},
-	timeExhausted:      {"TimeLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the time limit")},
+	wallExhausted:      {"WallLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the wall time limit")},
 	callDepthExhausted: {"CallDepthLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the call depth limit")},
 	evaluatorDeath:     {"EvaluatorDied", kinds[evaluationFailed].sentinel.WithMessage("evaluator died")},
-	cpuExhausted:       {"CPULimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the CPU time limit")},
+	timeExhausted:      {"TimeLimit", kinds[evaluationFailed].sentinel.WithMessage("exceeded the time limit")},
 }
 
 var (
@@ -73,10 +73,10 @@ var (
 	Unavailable       = kinds[unavailable].sentinel
 	InvalidInput      = kinds[invalidInput].sentinel
 	MemoryLimit       = causes[memoryExhausted].sentinel
-	TimeLimit         = causes[timeExhausted].sentinel
+	WallLimit         = causes[wallExhausted].sentinel
 	CallDepthLimit    = causes[callDepthExhausted].sentinel
 	EvaluatorDied     = causes[evaluatorDeath].sentinel
-	CPULimit          = causes[cpuExhausted].sentinel
+	TimeLimit         = causes[timeExhausted].sentinel
 )
 
 func (k _Kind) sentinel() fault.Fault {
@@ -144,7 +144,7 @@ type _SandboxSettings struct {
 	memoryLimit      _MemoryLimit
 	maxConcurrency   int
 	buildTimeout     time.Duration
-	buildCPULimit    _CPULimit
+	buildTimeLimit   _TimeLimit
 	scriptCacheLimit int64
 	runtime          _Runtime
 }
@@ -232,12 +232,12 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption {
 	}
 }
 
-func WithBuildCPULimit(limit time.Duration) SandboxOption {
+func WithBuildTimeLimit(limit time.Duration) SandboxOption {
 	return func(s *_SandboxSettings) error {
 		if limit <= 0 {
-			return fail(invalidExpression, "build CPU time limit must be positive, got %s", limit)
+			return fail(invalidExpression, "build time limit must be positive, got %s", limit)
 		}
-		s.buildCPULimit = _CPULimit(limit)
+		s.buildTimeLimit = _TimeLimit(limit)
 		return nil
 	}
 }

@@ -18,8 +18,8 @@ func TestARunStuckInABuiltInPastItsTimeLimitEndsTheChildAndFailsWithTimeLimit(t 
 		survived <- resolveInto(t.Context(), &out, neighbour)
 	}()
 	var out any
-	var err = resolveInto(WithTimeLimit(t.Context(), 50*time.Millisecond), &out, runaway)
-	expectError(t, err, TimeLimit, "$: /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b'): exceeded the time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
+	var err = resolveInto(WithWallLimit(t.Context(), 50*time.Millisecond), &out, runaway)
+	expectError(t, err, WallLimit, "$: /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b'): exceeded the wall time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
 	expectStuckAfterCancel(t, child)
 	if err := <-survived; err != nil {
 		t.Fatalf("a job beside the stuck one failed: %v", err)
@@ -31,9 +31,9 @@ func TestAStuckRunNamesThePieceAndQuotesItsCode(t *testing.T) {
 		var document = mustJaml(t, sb, "y:\n  - ${ /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b') }\n")
 		var child = currentChild(t, sb)
 		var out any
-		var err = resolveInto(WithTimeLimit(t.Context(), 50*time.Millisecond), &out, document.At("y"))
-		expectError(t, err, TimeLimit, "$.y[0]: ${/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')}: exceeded the time limit of 50ms and was still inside a built-in")
-		expectFailure(t, err, "$.y[0]", "exceeded the time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
+		var err = resolveInto(WithWallLimit(t.Context(), 50*time.Millisecond), &out, document.At("y"))
+		expectError(t, err, WallLimit, "$.y[0]: ${/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')}: exceeded the wall time limit of 50ms and was still inside a built-in")
+		expectFailure(t, err, "$.y[0]", "exceeded the wall time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
 		expectStuckAfterCancel(t, child)
 	})
 }

@@ -55,8 +55,8 @@ func TestALargeValueStopsAtItsTimeLimitWithoutEndingTheChild(t *testing.T) {
 		if _, isolated := sb.engine.(*_IsolatedEngine); isolated {
 			child = currentChild(t, sb)
 		}
-		spent, err := spentBinding(t, WithTimeLimit(t.Context(), 5*time.Millisecond), sb, values)
-		expectError(t, err, TimeLimit, "exceeded the time limit of 5ms")
+		spent, err := spentBinding(t, WithWallLimit(t.Context(), 5*time.Millisecond), sb, values)
+		expectError(t, err, WallLimit, "exceeded the wall time limit of 5ms")
 		if strings.Contains(err.Error(), "built-in") {
 			t.Fatalf("jaml's own work was blamed on a built-in: %v", err)
 		}
@@ -117,7 +117,7 @@ func slowScript() string {
 func TestAScriptCompilesOutsideTheTimeLimit(t *testing.T) {
 	var script = slowScript()
 	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
-		var ctx = WithTimeLimit(WithScript(WithRandomSeed(WithFixedClock(t.Context(), time.Unix(0, 0)), 1), script), 100*time.Millisecond)
+		var ctx = WithWallLimit(WithScript(WithRandomSeed(WithFixedClock(t.Context(), time.Unix(0, 0)), 1), script), 100*time.Millisecond)
 		var kind = mustExpression(t, sb, "typeof f")
 		for _, attempt := range []string{"cold", "warm"} {
 			got, err := Resolve[string](ctx, kind)

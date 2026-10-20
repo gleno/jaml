@@ -220,7 +220,7 @@ func (l *_Life) halt(ctx context.Context, job uint64) <-chan struct{} {
 }
 
 func overran(watched context.Context, result _Outcome) _Outcome {
-	exhausted, isExhausted := context.Cause(watched).(_TimeExhausted)
+	exhausted, isExhausted := context.Cause(watched).(_WallExhausted)
 	died, isLost := result.(_Lost)
 	if !isExhausted || !isLost || !wedged(died.cause) {
 		return result

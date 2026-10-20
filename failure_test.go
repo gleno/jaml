@@ -100,9 +100,9 @@ func TestALabelPrintsBeforeTheReasonButStaysOutOfIt(t *testing.T) {
 			t.Fatalf("expected the script label left out of the reason, got %+v", failureOf(t, err))
 		}
 
-		err = resolveInto(WithTimeLimit(WithScript(t.Context(), "for (;;) {}"), 50*time.Millisecond), &out, one)
-		expectError(t, err, TimeLimit, "$: script 1: exceeded the time limit of 50ms")
-		expectFailure(t, err, "$", "exceeded the time limit of 50ms")
+		err = resolveInto(WithWallLimit(WithScript(t.Context(), "for (;;) {}"), 50*time.Millisecond), &out, one)
+		expectError(t, err, WallLimit, "$: script 1: exceeded the wall time limit of 50ms")
+		expectFailure(t, err, "$", "exceeded the wall time limit of 50ms")
 
 		err = resolveInto(WithValues(t.Context(), map[string]any{"x": make(chan int)}), &out, mustExpression(t, sb, "x"))
 		expectError(t, err, InvalidInput, "$: binding values: value \"x\"")
@@ -122,7 +122,7 @@ func TestAFailurePrintsWhatItsErrorPrints(t *testing.T) {
 			resolveInto(t.Context(), &out, document.At("a")),
 			resolveInto(t.Context(), &out, document.At("zz")),
 			resolveInto(WithScript(t.Context(), "throw 1"), &out, document.At("b")),
-			resolveInto(WithTimeLimit(t.Context(), -1), &out, document.At("b")),
+			resolveInto(WithWallLimit(t.Context(), -1), &out, document.At("b")),
 			made,
 			copied,
 		} {
@@ -139,12 +139,12 @@ func TestATimeLimitWhileTheSessionOpensNamesTheSelection(t *testing.T) {
 	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "quick: ${ x }\n")
 		var out any
-		var err = resolveInto(WithTimeLimit(WithValues(t.Context(), map[string]any{"x": 1}), time.Nanosecond), &out, document.At("quick"))
-		expectError(t, err, TimeLimit)
+		var err = resolveInto(WithWallLimit(WithValues(t.Context(), map[string]any{"x": 1}), time.Nanosecond), &out, document.At("quick"))
+		expectError(t, err, WallLimit)
 		if failure := failureOf(t, err); failure.Path != "$.quick" {
 			t.Fatalf("expected the selection, got %+v from %q", failure, err)
 		}
-		err = resolveInto(WithTimeLimit(WithScript(t.Context(), "for (;;) {}"), 50*time.Millisecond), &out, document.At("quick"))
-		expectError(t, err, TimeLimit, "$.quick: script 1: exceeded the time limit of 50ms")
+		err = resolveInto(WithWallLimit(WithScript(t.Context(), "for (;;) {}"), 50*time.Millisecond), &out, document.At("quick"))
+		expectError(t, err, WallLimit, "$.quick: script 1: exceeded the wall time limit of 50ms")
 	})
 }

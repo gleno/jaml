@@ -54,9 +54,9 @@ var threeLines = []Line{{Level: Log, Text: "one"}, {Level: Info, Text: "two 2"},
 func TestLinesWrittenBeforeATimeLimitSurviveIt(t *testing.T) {
 	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "spin: \"${ "+threeThenSpin+" }\"\n")
-		ctx, heard := listening(WithTimeLimit(t.Context(), 200*time.Millisecond))
+		ctx, heard := listening(WithWallLimit(t.Context(), 200*time.Millisecond))
 		var out any
-		expectError(t, resolveInto(ctx, &out, document.At("spin")), TimeLimit)
+		expectError(t, resolveInto(ctx, &out, document.At("spin")), WallLimit)
 		expectEqual(t, heard.all(), placedAt([]string{"spin"}, threeLines))
 	})
 }

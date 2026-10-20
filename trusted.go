@@ -8,7 +8,7 @@ import (
 type _TrustedEngine struct {
 	gate         chan struct{}
 	buildTimeout time.Duration
-	buildCPU     _CPULimit
+	buildLimit   _TimeLimit
 	host         _Host
 }
 
@@ -18,7 +18,7 @@ type _LocalUnit struct {
 }
 
 func newTrusted(configured _SandboxSettings) *_TrustedEngine {
-	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, buildCPU: configured.buildCPULimit, host: _Host{runtime: configured.runtime, scripts: newScriptCache(configured.trustedScriptBudget())}}
+	return &_TrustedEngine{gate: make(chan struct{}, configured.maxConcurrency), buildTimeout: configured.buildTimeout, buildLimit: configured.buildTimeLimit, host: _Host{runtime: configured.runtime, scripts: newScriptCache(configured.trustedScriptBudget())}}
 }
 
 func (e *_TrustedEngine) enter(ctx context.Context) error {
@@ -58,7 +58,7 @@ func (e *_TrustedEngine) raced(ctx context.Context, work func(bound context.Cont
 	var race = raceBuild(ctx, e.buildTimeout)
 	go onALockedThread(func() {
 		defer e.leave()
-		budgeted, release := e.buildCPU.enforce(race.bound, startMeter(), true)
+		budgeted, release := e.buildLimit.enforce(race.bound, startMeter(), true)
 		defer release()
 		var unwatch = context.AfterFunc(budgeted, func() { race.record(_Refused{err: cancelled(budgeted)}) })
 		defer unwatch()
@@ -94,9 +94,9 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 	var served _Outcome
 	onALockedThread(func() {
 		var meter = startMeter()
-		bounded, stop := written.ask.timeLimit.bound(ctx)
+		bounded, stop := written.ask.wallLimit.bound(ctx)
 		defer stop()
-		budgeted, release := written.ask.cpuLimit.enforce(bounded, meter, false)
+		budgeted, release := written.ask.timeLimit.enforce(bounded, meter, false)
 		defer release()
 		result, err := prepared.render(budgeted, ask.console.speaker())
 		var used = meter.used()

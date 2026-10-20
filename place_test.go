@@ -244,7 +244,7 @@ func TestEveryKindCrossesTheWire(t *testing.T) {
 }
 
 func TestEveryCauseCrossesTheWire(t *testing.T) {
-	for _, cause := range []error{_MemoryExhausted("m"), _TimeExhausted{limit: time.Second}, _CallDepthExhausted{depth: 9}, _EvaluatorDeath("d")} {
+	for _, cause := range []error{_MemoryExhausted("m"), _WallExhausted{limit: time.Second}, _CallDepthExhausted{depth: 9}, _EvaluatorDeath("d")} {
 		var sent = failWith(evaluationFailed, cause).at("$.a")
 		var reply _Reply
 		if err := json.Unmarshal(_Frames{limit: 1 << 20}.failure(1, "$.a", sent), &reply); err != nil {

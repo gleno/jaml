@@ -18,7 +18,7 @@ const (
 	evaluatorCallDepth   = "JAML_CALL_DEPTH"
 	evaluatorScripts     = "JAML_SCRIPT_CACHE"
 	evaluatorBuildTime   = "JAML_BUILD_TIMEOUT"
-	evaluatorBuildCPU    = "JAML_BUILD_CPU_LIMIT"
+	evaluatorBuildLimit  = "JAML_BUILD_TIME_LIMIT"
 	evaluatorJobs        = "JAML_MAX_CONCURRENCY"
 	mallocArenas         = "MALLOC_ARENA_MAX"
 	evaluatorNonce       = "JAML_NONCE"
@@ -71,8 +71,8 @@ type _Work struct {
 	Args      []_Datum     `json:"args,omitempty"`
 	Skips     *_Shape      `json:"skips,omitempty"`
 	Pinned    _Pinned      `json:"pinned"`
+	WallLimit _WallLimit   `json:"wall,omitempty"`
 	TimeLimit _TimeLimit   `json:"limit,omitempty"`
-	CPULimit  _CPULimit    `json:"cpu,omitempty"`
 	Console   bool         `json:"console,omitempty"`
 }
 

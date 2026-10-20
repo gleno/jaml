@@ -46,7 +46,7 @@ type _EvaluatorWorld struct {
 	runtime      _Runtime
 	scriptBudget int64
 	buildTimeout time.Duration
-	buildCPU     _CPULimit
+	buildLimit   _TimeLimit
 	jobs         int
 	nonce        string
 	parent       int
@@ -60,7 +60,7 @@ type _ChildSpec struct {
 	scriptBudget  int64
 	startDeadline time.Duration
 	buildTimeout  time.Duration
-	buildCPU      _CPULimit
+	buildLimit    _TimeLimit
 	jobs          int
 }
 
@@ -128,7 +128,7 @@ func startFailure(err error) error {
 }
 
 func currentWorld(spec _ChildSpec) _EvaluatorWorld {
-	return _EvaluatorWorld{limit: spec.limit, runtime: spec.runtime, scriptBudget: spec.scriptBudget, buildTimeout: spec.buildTimeout, buildCPU: spec.buildCPU, jobs: spec.jobs, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
+	return _EvaluatorWorld{limit: spec.limit, runtime: spec.runtime, scriptBudget: spec.scriptBudget, buildTimeout: spec.buildTimeout, buildLimit: spec.buildLimit, jobs: spec.jobs, nonce: rand.Text(), parent: os.Getpid(), zone: zoneEnv()}
 }
 
 func zoneEnv() []string {
@@ -167,7 +167,7 @@ func (w _EvaluatorWorld) env() []string {
 		evaluatorCallDepth + "=" + strconv.Itoa(w.runtime.depth()),
 		evaluatorScripts + "=" + strconv.FormatInt(w.scriptBudget, 10),
 		evaluatorBuildTime + "=" + strconv.FormatInt(int64(w.buildTimeout), 10),
-		evaluatorBuildCPU + "=" + strconv.FormatInt(int64(w.buildCPU), 10),
+		evaluatorBuildLimit + "=" + strconv.FormatInt(int64(w.buildLimit), 10),
 		evaluatorJobs + "=" + strconv.Itoa(w.jobs),
 		evaluatorNonce + "=" + w.nonce,
 		evaluatorParent + "=" + strconv.Itoa(w.parent),

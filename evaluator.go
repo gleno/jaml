@@ -52,7 +52,7 @@ func serveEvaluations(answers io.Writer) int {
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
-	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, buildCPU: world.buildCPU, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
+	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, buildLimit: world.buildLimit, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	go watch.pulse(replies.beat)
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
@@ -66,7 +66,7 @@ func stuckAfterCancel(job uint64) {
 type _Evaluator struct {
 	host         _Host
 	buildTimeout time.Duration
-	buildCPU     _CPULimit
+	buildLimit   _TimeLimit
 	watch        *_HeapWatch
 	replies      *_ReplyWriter
 	jobs         *_JobTable
@@ -153,7 +153,7 @@ func (e *_Evaluator) accept(incoming _Request) error {
 
 func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
 	onALockedThread(func() {
-		budgeted, release := e.buildCPU.enforce(ctx, startMeter(), true)
+		budgeted, release := e.buildLimit.enforce(ctx, startMeter(), true)
 		defer release()
 		var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
 		defer unwatch()
@@ -199,9 +199,9 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 		var sealed []byte
 		e.watch.during(func() {
 			var meter = startMeter()
-			bounded, stop := request.TimeLimit.bound(ctx)
+			bounded, stop := request.WallLimit.bound(ctx)
 			defer stop()
-			budgeted, release := request.CPULimit.enforce(bounded, meter, false)
+			budgeted, release := request.TimeLimit.enforce(bounded, meter, false)
 			defer release()
 			var unwatch = context.AfterFunc(budgeted, func() { e.overran(job, prepared.spot, budgeted) })
 			defer unwatch()
@@ -226,7 +226,7 @@ func (e *_Evaluator) prepare(ctx context.Context, job uint64, held _Servable, re
 	var watch = time.AfterFunc(e.buildTimeout, func() {
 		e.jobs.overrun(job, func() { e.replies.write(e.replies.frames.failure(job, rootPlace, overdue)) })
 	})
-	budgeted, release := e.buildCPU.enforce(ctx, startMeter(), true)
+	budgeted, release := e.buildLimit.enforce(ctx, startMeter(), true)
 	defer release()
 	var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
 	defer unwatch()
@@ -345,15 +345,15 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 	if err != nil || buildTimeout < 1 {
 		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuildTime, os.Getenv(evaluatorBuildTime))
 	}
-	buildCPU, err := strconv.ParseInt(os.Getenv(evaluatorBuildCPU), 10, 64)
-	if err != nil || buildCPU < 0 {
-		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuildCPU, os.Getenv(evaluatorBuildCPU))
+	buildLimit, err := strconv.ParseInt(os.Getenv(evaluatorBuildLimit), 10, 64)
+	if err != nil || buildLimit < 0 {
+		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorBuildLimit, os.Getenv(evaluatorBuildLimit))
 	}
 	jobs, err := strconv.Atoi(os.Getenv(evaluatorJobs))
 	if err != nil || jobs < 0 {
 		return _EvaluatorWorld{}, fmt.Errorf("bad %s: %q", evaluatorJobs, os.Getenv(evaluatorJobs))
 	}
-	return _EvaluatorWorld{limit: limit, runtime: _Runtime{builtins: builtins, callDepth: callDepth}, scriptBudget: scriptBudget, buildTimeout: time.Duration(buildTimeout), buildCPU: _CPULimit(buildCPU), jobs: jobs, nonce: nonce, parent: parent}, nil
+	return _EvaluatorWorld{limit: limit, runtime: _Runtime{builtins: builtins, callDepth: callDepth}, scriptBudget: scriptBudget, buildTimeout: time.Duration(buildTimeout), buildLimit: _TimeLimit(buildLimit), jobs: jobs, nonce: nonce, parent: parent}, nil
 }
 
 type _HeapWatch struct {

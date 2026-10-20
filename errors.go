@@ -117,16 +117,16 @@ func (m _MemoryExhausted) Is(target error) bool {
 	return target == MemoryLimit
 }
 
-type _TimeExhausted struct {
+type _WallExhausted struct {
 	limit time.Duration
 }
 
-func (t _TimeExhausted) Error() string {
-	return fmt.Sprintf("exceeded the time limit of %s", t.limit)
+func (t _WallExhausted) Error() string {
+	return fmt.Sprintf("exceeded the wall time limit of %s", t.limit)
 }
 
-func (t _TimeExhausted) Is(target error) bool {
-	return target == TimeLimit
+func (t _WallExhausted) Is(target error) bool {
+	return target == WallLimit
 }
 
 type _CallDepthExhausted struct {
