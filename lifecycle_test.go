@@ -357,7 +357,7 @@ func TestAHandshakeCutShortEndsItsEvaluator(t *testing.T) {
 	var before = liveChildren(t)
 	for range 10 {
 		_, err := MakeSecureSandbox(within(t, 50*time.Millisecond), WithMemoryLimit(silentLimit))
-		expectError(t, err, EvaluationFailed, "cancelled")
+		expectUnavailable(t, err, "cancelled")
 	}
 	expectChildrenBackTo(t, before)
 }
