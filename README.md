@@ -433,7 +433,7 @@ type Failure struct {
 var (
 	ExpressionError   // base sentinel for every jaml error
 	InvalidExpression // bad YAML, bad JavaScript syntax, a bad script, bad options
-	InvalidTarget     // T is something encoding/json cannot decode into, or holds a jaml.Expression by value
+	InvalidTarget     // T holds, anywhere inside, a type encoding/json cannot decode into (a func, a chan, a complex number, a non-empty interface, a map whose keys are not text or integers) or a jaml.Expression by value; decided before any code runs
 	MissingPath       // the path names nothing in the document
 	EvaluationFailed  // code or a script threw or produced something that is not data; a call was cancelled; a secure sandbox's child ran out of memory or died
 	CoercionFailed    // json.Unmarshal refused the data, or strict null/undefined refused a result

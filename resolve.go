@@ -27,9 +27,6 @@ func (e *Expression) resolve(ctx context.Context, destination any, args []any) e
 		return err
 	}
 	var target = reflect.TypeOf(destination).Elem()
-	if err := checkTarget(target); err != nil {
-		return err
-	}
 	skips, err := skipsFor(target)
 	if err != nil {
 		return err
@@ -49,18 +46,6 @@ func (e *Expression) resolve(ctx context.Context, destination any, args []any) e
 		}
 		return nil
 	})
-}
-
-func checkTarget(target reflect.Type) error {
-	switch target.Kind() {
-	case reflect.Func, reflect.Chan, reflect.UnsafePointer, reflect.Complex64, reflect.Complex128:
-		return fail(InvalidTarget, "Resolve cannot decode into a %s", target)
-	case reflect.Interface:
-		if target.NumMethod() > 0 {
-			return fail(InvalidTarget, "Resolve cannot decode into the interface %s", target)
-		}
-	}
-	return nil
 }
 
 func admitScripts(scripts []string) ([]string, error) {

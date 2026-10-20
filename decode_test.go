@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,6 +80,73 @@ func TestATargetJSONCannotDecodeIntoIsRefused(t *testing.T) {
 		_, err = Resolve[map[string]**Expression](t.Context(), document)
 		expectError(t, err, InvalidTarget, "never a jaml.Expression held by value")
 	})
+}
+
+type _UndecodableField struct {
+	Inner struct {
+		Done chan int `json:"done"`
+	} `json:"inner"`
+}
+
+type _UndecodableNested struct {
+	A struct {
+		B []*struct {
+			Call func() `json:"call"`
+		} `json:"b"`
+	} `json:"a"`
+}
+
+type _SkippedUndecodable struct {
+	A      int    `json:"a"`
+	Call   func() `json:"-"`
+	done   chan int
+	Phases map[_Hue]int `json:"phases"`
+}
+
+type _Hue string
+
+func (h *_Hue) UnmarshalText(written []byte) error {
+	*h = _Hue(strings.ToUpper(string(written)))
+	return nil
+}
+
+func TestATargetJSONCannotDecodeIntoAnywhereIsRefusedBeforeCodeRuns(t *testing.T) {
+	var refusals = []struct {
+		target    string
+		resolve   func(context.Context, *Expression) error
+		fragments []string
+	}{
+		{"map[struct{}]int", resolving[map[struct{}]int], []string{"map[struct {}]int, whose keys are struct {}"}},
+		{"[]func()", resolving[[]func()], []string{"a func(), as []func() holds"}},
+		{"chan in a struct", resolving[_UndecodableField], []string{"a chan int, as jaml._UndecodableField holds"}},
+		{"func in a nested field", resolving[_UndecodableNested], []string{"a func(), as jaml._UndecodableNested holds"}},
+		{"interface in a map", resolving[map[string]error], []string{"the interface error, as map[string]error holds"}},
+		{"complex in an array", resolving[*[2]complex128], []string{"a complex128, as *[2]complex128 holds"}},
+		{"bad key under a pointer", resolving[**map[float64]string], []string{"map[float64]string, whose keys are float64"}},
+	}
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var document = mustJaml(t, sb, "a: ${ (() => { throw new Error('ran') })() }\n")
+		for _, refusal := range refusals {
+			var err = refusal.resolve(t.Context(), document)
+			expectError(t, err, InvalidTarget, refusal.fragments...)
+			if errors.Is(err, EvaluationFailed) || errors.Is(err, CoercionFailed) {
+				t.Fatalf("%s: code ran before the refusal: %v", refusal.target, err)
+			}
+		}
+	})
+}
+
+func TestATargetJSONSkipsOrDecodesIsAccepted(t *testing.T) {
+	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
+		var got = mustResolve[_SkippedUndecodable](t, t.Context(), mustJaml(t, sb, "a: ${1 + 1}\nphases:\n  red: 1\n"))
+		expectEqual(t, got.A, 2)
+		expectEqual(t, got.Phases[_Hue("RED")], 1)
+	})
+}
+
+func resolving[T any](ctx context.Context, document *Expression) error {
+	var _, err = Resolve[T](ctx, document)
+	return err
 }
 
 type _WrappingPort struct{ N int }

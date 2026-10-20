@@ -49,23 +49,24 @@ func shapeOf(target reflect.Type) ([]_ShapeNode, error) {
 	if known, found := shapes.Load(target); found {
 		return known.(_DrawnShape).nodes, known.(_DrawnShape).err
 	}
-	var drawing = &_ShapeDrawing{nodes: map[reflect.Type]int{}}
-	var drawn = _DrawnShape{nodes: drawing.draw(target)}
-	if drawing.plain {
-		drawn = _DrawnShape{err: fail(InvalidTarget, "Resolve fills *jaml.Expression, never a jaml.Expression held by value, as %s holds", target)}
+	var drawing = &_ShapeDrawing{root: target, nodes: map[reflect.Type]int{}}
+	var drawn = _DrawnShape{nodes: drawing.draw()}
+	if drawing.refusal != nil {
+		drawn = _DrawnShape{err: drawing.refusal}
 	}
 	shapes.Store(target, drawn)
 	return drawn.nodes, drawn.err
 }
 
 type _ShapeDrawing struct {
-	nodes map[reflect.Type]int
-	drawn []_ShapeNode
-	plain bool
+	root    reflect.Type
+	nodes   map[reflect.Type]int
+	drawn   []_ShapeNode
+	refusal error
 }
 
-func (d *_ShapeDrawing) draw(target reflect.Type) []_ShapeNode {
-	var root = d.node(target)
+func (d *_ShapeDrawing) draw() []_ShapeNode {
+	var root = d.node(d.root)
 	if root < 0 {
 		return nil
 	}
@@ -90,10 +91,14 @@ func (d *_ShapeDrawing) node(target reflect.Type) int {
 		return index
 	}
 	if target == expressionType {
-		d.plain = true
+		d.refuse(fail(InvalidTarget, "Resolve fills *jaml.Expression, never a jaml.Expression held by value, as %s holds", d.root))
 		return -1
 	}
 	if decodesItself(target) {
+		return -1
+	}
+	if reason := undecodable(target); reason != "" {
+		d.refuse(d.cannotDecode(target, reason))
 		return -1
 	}
 	switch target.Kind() {
@@ -111,6 +116,44 @@ func (d *_ShapeDrawing) node(target reflect.Type) int {
 		return index
 	}
 	return -1
+}
+
+func (d *_ShapeDrawing) refuse(refusal error) {
+	if d.refusal == nil {
+		d.refusal = refusal
+	}
+}
+
+func (d *_ShapeDrawing) cannotDecode(target reflect.Type, reason string) error {
+	if target == d.root {
+		return fail(InvalidTarget, "Resolve cannot decode into %s", reason)
+	}
+	return fail(InvalidTarget, "Resolve cannot decode into %s, as %s holds", reason, d.root)
+}
+
+func undecodable(target reflect.Type) string {
+	switch target.Kind() {
+	case reflect.Func, reflect.Chan, reflect.UnsafePointer, reflect.Complex64, reflect.Complex128:
+		return "a " + target.String()
+	case reflect.Interface:
+		if target.NumMethod() > 0 {
+			return "the interface " + target.String()
+		}
+	case reflect.Map:
+		if !decodableKey(target.Key()) {
+			return target.String() + ", whose keys are " + target.Key().String()
+		}
+	}
+	return ""
+}
+
+func decodableKey(key reflect.Type) bool {
+	switch key.Kind() {
+	case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return true
+	}
+	return reflect.PointerTo(key).Implements(textType)
 }
 
 func decodesItself(target reflect.Type) bool {
