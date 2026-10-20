@@ -114,11 +114,6 @@ func (w *_WireWriter) failure(failed _ExpressionError) error {
 			return err
 		}
 	}
-	if described.Stopped {
-		if err := w.raw(`,"stopped":true`); err != nil {
-			return err
-		}
-	}
 	if err := w.labelled(`,"message":`, described.Message); err != nil {
 		return err
 	}

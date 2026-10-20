@@ -112,7 +112,6 @@ type _Failure struct {
 	At      string         `json:"at,omitempty"`
 	Label   string         `json:"label,omitempty"`
 	Cause   string         `json:"cause,omitempty"`
-	Stopped bool           `json:"stopped,omitempty"`
 	Message string         `json:"message"`
 	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
 }
@@ -162,7 +161,7 @@ func buildPanic(recovered any) error {
 
 func describeFailure(failed _ExpressionError) _Failure {
 	var unplaced = failed.unplaced
-	return _Failure{Kind: kinds[unplaced.kind].name, At: failed.path, Label: unplaced.label, Cause: causeOf(unplaced.cause), Stopped: errors.Is(unplaced.cause, context.Canceled), Message: unplaced.cause.Error()}
+	return _Failure{Kind: kinds[unplaced.kind].name, At: failed.path, Label: unplaced.label, Cause: causeOf(unplaced.cause), Message: unplaced.cause.Error()}
 }
 
 func (r _Reply) outcomes() int {
@@ -214,7 +213,7 @@ func (f _Failure) knownCause() bool {
 func (f _Failure) rebuild() _ExpressionError {
 	var kind, _ = kindNamed(f.Kind)
 	var matched, _ = causeNamed(f.Cause)
-	return _Unplaced{kind: kind, label: f.Label, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), matched: matched, stopped: f.Stopped}}.at(f.At)
+	return _Unplaced{kind: kind, label: f.Label, cause: _CarriedCause{message: f.Message, thrown: f.Thrown.rebuild(), matched: matched}}.at(f.At)
 }
 
 func (t *_ThrownOnWire) rebuild() *Thrown {
@@ -228,11 +227,10 @@ type _CarriedCause struct {
 	message string
 	thrown  *Thrown
 	matched error
-	stopped bool
 }
 
 func (c _CarriedCause) Is(target error) bool {
-	return c.matched != nil && target == c.matched || c.stopped && target == context.Canceled
+	return c.matched != nil && target == c.matched
 }
 
 func (c _CarriedCause) Error() string {

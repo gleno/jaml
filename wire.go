@@ -11,6 +11,8 @@ import (
 
 const requestChunk = 64 << 10
 
+var alreadyDone = closedChannel()
+
 var (
 	errLost    = errors.New("the evaluator died before the request was written")
 	errMissing = errors.New("the evaluator holds no such unit")
@@ -48,6 +50,12 @@ type _Expectation struct {
 type _Call struct {
 	job     uint64
 	replies <-chan _Reply
+}
+
+func closedChannel() <-chan struct{} {
+	var done = make(chan struct{})
+	close(done)
+	return done
 }
 
 func newWire(requests, controls *os.File) *_Wire {
@@ -182,56 +190,44 @@ func (w *_Wire) vacate() {
 }
 
 func (l *_Life) serve(ctx context.Context, asked _Outgoing) _Outcome {
+	sent, err := l.send(ctx, asked)
+	if err != nil {
+		return l.unsent(err)
+	}
 	watched, stop := asked.body.overseen(ctx, l.buildTimeout)
 	defer stop()
-	sent, err := l.send(watched, asked)
-	if err != nil {
-		return overran(watched, l.unsent(err))
-	}
 	var stopped = watched.Done()
 	for {
 		select {
 		case incoming := <-sent.replies:
-			return overran(watched, servedFrom(incoming))
+			return servedFrom(incoming)
 		case <-l.ended:
 			return overran(watched, l.final(sent, servedFrom))
 		case <-stopped:
 			stopped = nil
-			defer l.backstop(l.tell(_Request{Op: opCancel, Job: sent.job}), l.quiet)()
+			defer l.backstop(l.halt(ctx, sent.job), l.quiet)()
 		}
 	}
 }
 
-func overran(watched context.Context, result _Outcome) _Outcome {
-	exhausted, isExhausted := context.Cause(watched).(_TimeExhausted)
-	if !isExhausted {
-		return result
+func (l *_Life) halt(ctx context.Context, job uint64) <-chan struct{} {
+	if ctx.Err() == nil {
+		return alreadyDone
 	}
-	switch settled := result.(type) {
-	case _Lost:
-		return _Refused{err: lapsed(exhausted, settled.cause)}
-	case _Refused:
-		return _Refused{err: lapsed(exhausted, settled.err)}
-	}
-	return result
+	return l.tell(_Request{Op: opCancel, Job: job})
 }
 
-func lapsed(exhausted _TimeExhausted, err error) error {
-	switch {
-	case errors.Is(err, errMissing), errors.Is(err, TimeLimit):
-		return err
-	case errors.Is(err, context.Canceled):
-		return exhausted
+func overran(watched context.Context, result _Outcome) _Outcome {
+	exhausted, isExhausted := context.Cause(watched).(_TimeExhausted)
+	died, isLost := result.(_Lost)
+	if !isExhausted || !isLost || !wedged(died.cause) {
+		return result
 	}
-	switch failed := err.(type) {
-	case _ExpressionError:
-		failed.unplaced.cause = fmt.Errorf("%w: %w", exhausted, failed.unplaced.cause)
-		return failed
-	case _Unplaced:
-		failed.cause = fmt.Errorf("%w: %w", exhausted, failed.cause)
-		return failed
-	}
-	return fmt.Errorf("%w: %w", exhausted, err)
+	return _Refused{err: fmt.Errorf("%w: %w", exhausted, died.cause)}
+}
+
+func wedged(verdict error) bool {
+	return errors.Is(verdict, errSilent) || errors.Is(verdict, errNotReading)
 }
 
 func servedFrom(incoming _Reply) _Outcome {
@@ -266,7 +262,7 @@ func (l *_Life) send(ctx context.Context, outgoing _Outgoing) (_Call, error) {
 	var job = l.wire.sent + 1
 	l.wire.sent = job
 	var replies = l.board.expect(job, outgoing.body.op)
-	defer l.backstop(ctx.Done(), l.wire.stall)()
+	defer l.backstop(alreadyDone, l.wire.stall)()
 	if err := l.wire.write(outgoing.body.stamp(job, outgoing.unit)); err != nil {
 		l.end()
 		return _Call{}, errLost

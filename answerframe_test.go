@@ -1,10 +1,8 @@
 package jaml
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -147,14 +145,6 @@ func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
 		}
 		expectEqual(t, string(f.failure(7, "$.v", failed)), string(want))
 	}
-	var stopped = located("$.v", fmt.Errorf("cancelled: %w", context.Canceled))
-	var described = describeFailure(stopped)
-	want, err := wireJSON(_Reply{Job: 8, Failure: &described})
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectEqual(t, described.Stopped, true)
-	expectEqual(t, string(f.failure(8, "$.v", stopped)), string(want))
 }
 
 func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {

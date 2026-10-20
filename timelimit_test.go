@@ -3,6 +3,7 @@ package jaml
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,34 +77,23 @@ func TestWaitingForASlotDoesNotCountTowardTheTimeLimit(t *testing.T) {
 	}, WithMaxConcurrency(1))
 }
 
-func TestOnlyAnOverseenLimitTurnsAFailedJobIntoTimeLimit(t *testing.T) {
+func TestOnlyAWedgedChildPastAnOverseenLimitTurnsIntoTimeLimit(t *testing.T) {
 	overdue, stop := context.WithCancelCause(t.Context())
 	stop(_TimeLimit(time.Millisecond).exhausted())
 	var answered = _Answered{data: []byte("5")}
-	var lost = _Lost{cause: errSilent}
+	var silent = _Lost{cause: errSilent}
+	var unread = _Lost{cause: errNotReading}
+	var outside = _Lost{cause: _OutsideDeath("killed from outside")}
 	var missing = _Refused{err: errMissing}
-	var stuck = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Cause: "TimeLimit", Message: "exceeded the time limit of 1ms"}.rebuild()}
-	var echo = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Stopped: true, Message: "cancelled: context canceled"}.rebuild()}
-	var thrown = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Message: "Error: boom", Thrown: &_ThrownOnWire{Message: "boom", Value: _Borrowed(`"boom"`)}}.rebuild()}
-	for _, result := range []_Outcome{answered, lost, missing, stuck, echo, thrown} {
+	var thrown = _Refused{err: _Failure{Kind: "EvaluationFailed", At: "$.v", Message: "Error: boom"}.rebuild()}
+	for _, result := range []_Outcome{answered, silent, unread, outside, missing, thrown} {
 		expectEqual(t, overran(t.Context(), result), result)
 	}
-	for _, result := range []_Outcome{answered, missing, stuck} {
+	for _, result := range []_Outcome{answered, outside, missing, thrown} {
 		expectEqual(t, overran(overdue, result), result)
 	}
-	expectError(t, located("$.v", refusal(t, overran(overdue, lost))), TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator stopped answering")
-	var dropped = refusal(t, overran(overdue, echo))
-	expectEqual(t, dropped, error(_TimeExhausted{limit: time.Millisecond}))
-	var kept = refusal(t, overran(overdue, thrown))
-	expectError(t, kept, TimeLimit, "$.v: exceeded the time limit of 1ms: Error: boom")
-	var failure *Failure
-	if !errors.As(kept, &failure) || failure.Path != "$.v" || failure.Reason != "exceeded the time limit of 1ms: Error: boom" || failure.Error() != kept.Error() {
-		t.Fatalf("a late failure past its limit reads %+v", failure)
-	}
-	var cause *Thrown
-	if !errors.As(kept, &cause) || cause.Message != "boom" || cause.Value != "boom" {
-		t.Fatalf("a late failure past its limit lost what was thrown: %+v", cause)
-	}
+	expectError(t, located("$.v", refusal(t, overran(overdue, silent))), TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator stopped answering")
+	expectError(t, located("$.v", refusal(t, overran(overdue, unread))), TimeLimit, "$.v: exceeded the time limit of 1ms: the evaluator was not reading requests")
 }
 
 func refusal(t *testing.T, result _Outcome) error {
@@ -113,4 +103,37 @@ func refusal(t *testing.T, result _Outcome) error {
 		t.Fatalf("expected a refusal, got %#v", result)
 	}
 	return refused.err
+}
+
+func TestWaitingBehindABigRequestNeverCountsTowardALimit(t *testing.T) {
+	var sb = mustIsolated(t, WithMemoryLimit(1<<30), WithMaxConcurrency(4))
+	var big = mustJaml(t, sb, "a: ${ big.length }\n")
+	var small = mustJaml(t, sb, "b: ${ 1 }\nspin: ${ (() => { while (true) {} })() }\n")
+	var child = currentChild(t, sb)
+	var payload = strings.Repeat("x", 128<<20)
+	var carried = make(chan error, 1)
+	go func() {
+		var out int
+		carried <- resolveInto(WithValues(t.Context(), map[string]any{"big": payload}), &out, big.At("a"))
+	}()
+	for len(child.wire.writer) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	var queued = time.Now()
+	var spun = make(chan error, 1)
+	go func() {
+		var out any
+		spun <- resolveInto(WithTimeLimit(t.Context(), 100*time.Millisecond), &out, small.At("spin"))
+	}()
+	expectEqual(t, mustResolve[int](t, WithTimeLimit(t.Context(), 100*time.Millisecond), small.At("b")), 1)
+	if waited := time.Since(queued); waited < 100*time.Millisecond+cancelGrace {
+		t.Logf("the big request was written within %s, so the limited call barely waited", waited)
+	}
+	expectError(t, <-spun, TimeLimit, "$.spin: ${(() => { while (true) {} })()}: exceeded the time limit of 100ms")
+	if err := <-carried; err != nil {
+		t.Fatalf("the big request failed: %v", err)
+	}
+	if !child.alive() {
+		t.Fatalf("the evaluator died under queued work: %v", child.lost().cause)
+	}
 }

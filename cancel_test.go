@@ -276,7 +276,7 @@ func TestAWedgedChildCannotOutlastATimeLimit(t *testing.T) {
 	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 5)
 }
 
-func TestAChildNotReadingABigRequestCannotOutlastATimeLimit(t *testing.T) {
+func TestAChildNotReadingABigRequestIsReplacedForALimitedCall(t *testing.T) {
 	var sb = mustIsolated(t)
 	var length = mustExpression(t, sb, "x.length")
 	var child = currentChild(t, sb)
@@ -286,26 +286,31 @@ func TestAChildNotReadingABigRequestCannotOutlastATimeLimit(t *testing.T) {
 	t.Cleanup(func() { _ = child.cmd.Process.Signal(syscall.SIGKILL) })
 	var stopped = time.Now()
 	var limited = make(chan error, 1)
+	var out int
 	go func() {
-		var out int
-		limited <- resolveInto(valued(WithTimeLimit(t.Context(), 100*time.Millisecond), map[string]any{"x": strings.Repeat("y", 4<<20)}), &out, length)
+		limited <- resolveInto(valued(WithTimeLimit(t.Context(), 10*time.Second), map[string]any{"x": strings.Repeat("y", 4<<20)}), &out, length)
 	}()
 	select {
 	case err := <-limited:
-		expectError(t, err, TimeLimit, "$: exceeded the time limit of 100ms", "not reading requests")
+		if err != nil {
+			t.Fatalf("a limited call whose request was never read failed instead of replaying: %v", err)
+		}
 	case <-time.After(backstopSilence + 10*time.Second):
 		t.Fatal("a call bounded only by a time limit waited on an evaluator not reading its request past the backstop")
 	}
-	if waited := time.Since(stopped); waited < 100*time.Millisecond+cancelGrace+backstopSilence {
-		t.Fatalf("the stopped evaluator was given up on %s after it stopped, before its limit, grace and backstop", waited)
+	expectEqual(t, out, 4<<20)
+	if waited := time.Since(stopped); waited < backstopSilence {
+		t.Fatalf("the stopped evaluator was given up on %s after it stopped, before the backstop's %s", waited, backstopSilence)
 	}
 	if child.alive() {
 		t.Fatal("the stopped evaluator outlived the call it held")
 	}
-	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 5 }\n"), nil, "v"), 5)
+	if cause := child.lost().cause; !strings.Contains(cause.Error(), "not reading requests") {
+		t.Fatalf("the stopped evaluator's death was judged %v", cause)
+	}
 }
 
-func TestAChildThatWakesLateAnswersItsTimeLimit(t *testing.T) {
+func TestAChildThatWakesBeforeTheBackstopStillAnswers(t *testing.T) {
 	var sb = mustIsolated(t)
 	var document = mustJaml(t, sb, "v: ${ 5 }\n")
 	var child = currentChild(t, sb)
@@ -322,11 +327,9 @@ func TestAChildThatWakesLateAnswersItsTimeLimit(t *testing.T) {
 	if err := child.cmd.Process.Signal(syscall.SIGCONT); err != nil {
 		t.Fatalf("resuming the evaluator: %v", err)
 	}
-	var err = <-limited
-	expectError(t, err, TimeLimit, "v: exceeded the time limit of 100ms")
-	if strings.Contains(err.Error(), "cancelled") {
-		t.Fatalf("the caller never cancelled, yet was told %v", err)
+	if err := <-limited; err != nil {
+		t.Fatalf("a late answer from a child that woke before the backstop lost to %v", err)
 	}
+	expectEqual(t, out, 5)
 	expectSurvived(t, child)
-	expectEqual(t, isolatedEvalAs[int](t, document, nil, "v"), 5)
 }
