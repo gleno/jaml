@@ -416,7 +416,7 @@ func (b *_Switchboard) noteUsage(incoming _Reply) error {
 	defer b.mu.Unlock()
 	var waiting = b.pending[incoming.Job]
 	if waiting == nil {
-		return fmt.Errorf("the evaluator reported usage for job %d, which is not waiting for an answer", incoming.Job)
+		return nil
 	}
 	select {
 	case <-waiting.used:

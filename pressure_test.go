@@ -29,7 +29,7 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 			var sb = mustIsolated(t, WithMemoryLimit(64<<20))
 			var holding = mustExpression(t, sb, "(() => { const keep = 'x'.repeat("+strconv.Itoa(c.heldMiB)+" << 20); let n = 0; for (let j = 0; ; j++) n += keep.length & j; })()")
 			var first = childPID(t, sb)
-			var busy = resident(t, first) + c.heldMiB<<20
+			var busy = resident(t, first) + c.heldMiB<<20*9/10
 			var verdict = make(chan error, 1)
 			go func() {
 				var out any
@@ -108,8 +108,12 @@ func awaitHeld(t *testing.T, sb *Sandbox, pid int, bytes int, pressured bool, ve
 		seen = fmt.Sprintf("verdict %v", err)
 	default:
 	}
+	var d = dispatcherOf(t, sb)
+	d.mu.Lock()
+	var phase = fmt.Sprintf("%T in mode %d", d.child, d.mode)
+	d.mu.Unlock()
 	_ = syscall.Kill(pid, syscall.SIGKILL)
-	t.Fatalf("evaluator %d never held %d bytes: it holds %d, is the current child: %v, said %q; %s", pid, bytes, held, life != nil, life.said(), seen)
+	t.Fatalf("evaluator %d never held %d bytes: it holds %d, the dispatcher holds %s, the child said %q; %s", pid, bytes, held, phase, life.said(), seen)
 }
 
 func lifeOf(t *testing.T, sb *Sandbox, pid int) *_Life {

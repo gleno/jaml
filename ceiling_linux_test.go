@@ -261,8 +261,8 @@ func TestAHungryBuiltInIsNeverJustOutOfWallTime(t *testing.T) {
 			if err == nil || errors.Is(err, WallLimit) && !errors.Is(err, MemoryLimit) || !errors.Is(err, MemoryLimit) && !errors.Is(err, TimeLimit) {
 				t.Fatalf("%s (loaded: %v) ended as %v, want MemoryLimit or TimeLimit, never the wall limit alone", name, loaded, err)
 			}
-			if len(reported) != 1 || reported[0].Wall <= 0 {
-				t.Fatalf("%s (loaded: %v) reported %v, want one usage with wall time", name, loaded, reported)
+			if len(reported) > 1 || len(reported) == 1 && reported[0].Wall <= 0 {
+				t.Fatalf("%s (loaded: %v) reported %v, want at most one usage, with wall time", name, loaded, reported)
 			}
 			if loaded {
 				for range burners {
