@@ -315,8 +315,11 @@ func measured(write func(w *_WireWriter) error) int {
 func (w *_WireWriter) admitted(named string, value any) (_Span, error) {
 	var start = len(w.written)
 	if err := w.datum(value, 0); err != nil {
-		if errors.As(err, new(_PastLimit)) {
+		switch {
+		case errors.As(err, new(_PastLimit)):
 			return _Span{}, err
+		case errors.Is(err, errInvalidText):
+			return _Span{}, fmt.Errorf("%s %w", named, err)
 		}
 		return _Span{}, fmt.Errorf("%s is not JSON data: %w", named, err)
 	}
@@ -414,6 +417,9 @@ func (w *_WireWriter) members(members map[string]any, depth int) error {
 }
 
 func (w *_WireWriter) marshalled(value any) error {
+	if !holdsValidText(value) {
+		return errInvalidText
+	}
 	var encoder = json.NewEncoder(_EncoderSink{w: w})
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)

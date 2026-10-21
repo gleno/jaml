@@ -104,6 +104,14 @@ type _ShapeWithAList struct {
 	} `json:"a"`
 }
 
+type _ListInside struct {
+	Y []int `json:"y"`
+}
+
+type _EmbeddingAList struct {
+	_ListInside
+}
+
 func TestACoercionFailureNamesTheFailingField(t *testing.T) {
 	var text = "a:\n  b: [1, x]\nc:\n  d: {e: [1, 2, {f: 1}]}\n"
 	var both = _Agreement{text: text}.eval(t, func() any { return new(_ShapeWithAList) })
@@ -113,6 +121,9 @@ func TestACoercionFailureNamesTheFailingField(t *testing.T) {
 		t.Fatalf("expected *json.UnmarshalTypeError in %v", both.trusted)
 	}
 	_Agreement{text: text, path: []string{"c"}}.eval(t, func() any { return new(map[string]map[string][]int) }).expectRefused(t, CoercionFailed, "$.c.d.e[2]: json: cannot unmarshal object")
+	_Agreement{text: "[1, x]\n"}.eval(t, func() any { return new([]int) }).expectRefused(t, CoercionFailed, "$[1]: json: cannot unmarshal string")
+	_Agreement{text: "- [1]\n- [2, x]\n"}.eval(t, func() any { return new([][]int) }).expectRefused(t, CoercionFailed, "$[1][1]: json: cannot unmarshal string")
+	_Agreement{text: "y: [1, x]\n"}.eval(t, func() any { return new(_EmbeddingAList) }).expectRefused(t, CoercionFailed, "$.y[1]: json: cannot unmarshal string")
 }
 
 var errPicky = errors.New("picky refuses")

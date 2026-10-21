@@ -81,73 +81,72 @@ func wireData() []any {
 	)
 }
 
-func asWire(node any) any {
-	switch typed := node.(type) {
-	case *_Mapping:
-		var ordered = make([]json.RawMessage, len(typed.keys))
-		for index, key := range typed.keys {
-			var field = map[string]any{key: asWire(typed.values[key])}
-			encoded, _ := wireJSON(field)
-			ordered[index] = encoded[1 : len(encoded)-1]
-		}
-		var joined = "{" + string(json.RawMessage(strings.Join(rawStrings(ordered), ","))) + "}"
-		return json.RawMessage(joined)
-	case []any:
-		if typed == nil {
-			return typed
-		}
-		var converted = make([]any, len(typed))
-		for index, item := range typed {
-			converted[index] = asWire(item)
-		}
-		return converted
-	}
-	return node
+var wireWritten = []string{
+	`null`,
+	`true`,
+	`false`,
+	`0`,
+	`-7`,
+	`9223372036854775807`,
+	`-9223372036854775808`,
+	`0`,
+	`-0`,
+	`0.3`,
+	`1e+21`,
+	`100000000000000000000`,
+	`0.000001`,
+	`1e-7`,
+	`5e-324`,
+	`1.7976931348623157e+308`,
+	`-2.5`,
+	`123456789012`,
+	`""`,
+	`{"":""}`,
+	"\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\"",
+	"{\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\":\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\"}",
+	`"\u2028\u2029"`,
+	`{"\u2028\u2029":"\u2028\u2029"}`,
+	`"é😀�"`,
+	`{"é😀�":"é😀�"}`,
+	`"<b>&amp;</b>"`,
+	`{"<b>&amp;</b>":"<b>&amp;</b>"}`,
+	`"bad \ufffd\ufffd utf-8"`,
+	`{"bad \ufffd\ufffd utf-8":"bad \ufffd\ufffd utf-8"}`,
+	`"\"quoted\" \\ back"`,
+	`{"\"quoted\" \\ back":"\"quoted\" \\ back"}`,
+	`"\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001"`,
+	`{"\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001":"\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001"}`,
+	`[]`,
+	`null`,
+	`{}`,
+	`null`,
+	`{"a":{"y":1.5,"z":false},"b":[1,"x",null]}`,
+	`{"z":1,"a":["q"]}`,
 }
 
-func rawStrings(raws []json.RawMessage) []string {
-	var texts []string
-	for _, raw := range raws {
-		texts = append(texts, string(raw))
-	}
-	return texts
-}
-
-func TestAnAnswerFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
+func TestAnAnswerFrameIsByteForByteTheWireEncoding(t *testing.T) {
 	var f = _Frames{limit: 1 << 20}
-	for _, value := range wireData() {
-		data, err := wireJSON(asWire(value))
-		if err != nil {
-			t.Fatalf("wireJSON(%#v): %v", value, err)
-		}
-		want, err := wireJSON(_Reply{Job: 42, Data: data, Skipped: [][]string{{"a", "\u2028"}, {}}, Usage: &_UsageOnWire{CPU: 3, Wall: 7}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		expectEqual(t, string(f.answer(42, _Rendered{tree: value, skipped: [][]string{{"a", "\u2028"}, {}}}, Usage{CPU: 3, Wall: 7})), string(want))
+	var data = wireData()
+	expectEqual(t, len(data), len(wireWritten))
+	for index, value := range data {
+		var want = `{"job":42,"data":` + wireWritten[index] + `,"skipped":[["a","\u2028"],[]],"usage":{"cpu":3,"wall":7}}`
+		expectEqual(t, string(f.answer(42, _Rendered{tree: value, skipped: [][]string{{"a", "\u2028"}, {}}}, Usage{CPU: 3, Wall: 7})), want)
 	}
 }
 
-func TestAFailureFrameIsByteForByteWhatEncodingJSONWrote(t *testing.T) {
+func TestAFailureFrameIsByteForByteTheWireEncoding(t *testing.T) {
 	var f = _Frames{limit: 1 << 20}
-	for _, value := range wireData() {
-		data, err := wireJSON(asWire(value))
-		if err != nil {
-			t.Fatal(err)
-		}
+	var data = wireData()
+	expectEqual(t, len(data), len(wireWritten))
+	var message = `threw \u2028 something`
+	for index, value := range data {
 		var thrown = &Thrown{Message: "threw \u2028 something", Value: value}
-		var failed = failWith(evaluationFailed, thrown).at("$.v")
-		var described = describeFailure(failed)
-		described.Thrown = &_ThrownOnWire{Message: thrown.Message, Value: data}
-		want, marshalErr := wireJSON(_Reply{Job: 7, Failure: &described})
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		expectEqual(t, string(f.failure(7, "$.v", failed)), string(want))
+		var want = `{"job":7,"failure":{"kind":"EvaluationFailed","at":"$.v","message":"` + message + `","thrown":{"message":"` + message + `","value":` + wireWritten[index] + `}}}`
+		expectEqual(t, string(f.failure(7, "$.v", failWith(evaluationFailed, thrown).at("$.v"))), want)
 	}
 }
 
-func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
+func TestTheSmallFramesAreTheirWireEncoding(t *testing.T) {
 	var f = _Frames{limit: 1 << 20}
 	var outline = &_CodeOutline{steps: map[string]*_CodeOutline{"a": {}, "b": {steps: map[string]*_CodeOutline{"0": {}}}}}
 	var built, err = f.built(3, nil)
@@ -159,20 +158,9 @@ func TestTheSmallFramesAreWhatEncodingJSONWrote(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectEqual(t, string(outlined), `{"job":6,"built":true,"code":{"a":true,"b":{"0":true}}}`)
-	for _, sent := range []struct {
-		sealed []byte
-		reply  _Reply
-	}{
-		{built, _Reply{Job: 3, Built: true}},
-		{f.missing(4), _Reply{Job: 4, Missing: true}},
-		{f.failure(5, "$.a", errors.New("plain")), _Reply{Job: 5, Failure: &_Failure{Kind: "EvaluationFailed", At: "$.a", Message: "plain"}}},
-	} {
-		want, err := wireJSON(sent.reply)
-		if err != nil {
-			t.Fatal(err)
-		}
-		expectEqual(t, string(sent.sealed), string(want))
-	}
+	expectEqual(t, string(built), `{"job":3,"built":true}`)
+	expectEqual(t, string(f.missing(4)), `{"job":4,"missing":true}`)
+	expectEqual(t, string(f.failure(5, "$.a", errors.New("plain"))), `{"job":5,"failure":{"kind":"EvaluationFailed","at":"$.a","message":"plain"}}`)
 }
 
 func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {

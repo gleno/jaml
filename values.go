@@ -62,7 +62,7 @@ func checkDatum(encoded []byte) error {
 	case deepest > maxDataDepth:
 		return fmt.Errorf("%s", nestsTooDeep)
 	case !wellFormed:
-		return fmt.Errorf("holds text that is not valid UTF-8")
+		return errInvalidText
 	}
 	if number := numberOutOfRange(encoded); number != nil {
 		return fmt.Errorf("holds the number %s, which is out of range", clip(string(number), keyExcerptLength))

@@ -3,6 +3,7 @@ package jaml
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +34,10 @@ func holdsKind(token json.Token, kind string) bool {
 }
 
 func namesField(found *_DataPath, field string) bool {
+	return namesKey(found, field) || namesKey(found, withoutTrailingIndices(found, field))
+}
+
+func namesKey(found *_DataPath, field string) bool {
 	if field == "" {
 		return true
 	}
@@ -43,6 +48,17 @@ func namesField(found *_DataPath, field string) bool {
 		}
 	}
 	return false
+}
+
+func withoutTrailingIndices(found *_DataPath, field string) string {
+	for step := found; step != nil && !step.keyed; step = step.parent {
+		var index = strconv.Itoa(step.index)
+		if field == index {
+			return ""
+		}
+		field = strings.TrimSuffix(field, "."+index)
+	}
+	return field
 }
 
 type _JsonFrame struct {
