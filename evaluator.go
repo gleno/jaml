@@ -54,7 +54,8 @@ func serveEvaluations(answers io.Writer) int {
 	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
 	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, buildLimit: world.buildLimit, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	watch.report = serving.reportTheRunningJobs
-	go watch.pulse(replies.beat)
+	watch.beat = replies.beat
+	go watch.pulse(serving.reportTheRunningJobs)
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
 }
@@ -267,10 +268,12 @@ func (e *_Evaluator) blamed(exhausted error) error {
 	return fmt.Errorf("%w, out of wall time too: %w", _MemoryExhausted{limit: e.watch.limit}, exhausted)
 }
 
-func (e *_Evaluator) reportTheRunningJobs() {
-	for job, meter := range e.jobs.measured() {
+func (e *_Evaluator) reportTheRunningJobs() bool {
+	var measured = e.jobs.measured()
+	for job, meter := range measured {
 		e.replies.write(e.replies.frames.usage(job, meter.observed()))
 	}
+	return len(measured) > 0
 }
 
 func (e *_Evaluator) overranCompiling(job uint64, budgeted context.Context) {
@@ -381,7 +384,8 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 type _HeapWatch struct {
 	ceiling    uint64
 	limit      _MemoryLimit
-	report     func()
+	report     func() bool
+	beat       func()
 	parent     int
 	wake       chan struct{}
 	quietUntil uint64
@@ -430,10 +434,15 @@ func (w *_HeapWatch) during(work func()) {
 	work()
 }
 
-func (w *_HeapWatch) pulse(beat func()) {
-	for range time.Tick(heartbeatEvery) {
-		if w.working() {
-			beat()
+func (w *_HeapWatch) pulse(report func() bool) {
+	var beats = 0
+	for range time.Tick(usageEvery) {
+		beats++
+		if !w.working() {
+			continue
+		}
+		if !report() && beats%int(heartbeatEvery/usageEvery) == 0 {
+			w.beat()
 		}
 	}
 }

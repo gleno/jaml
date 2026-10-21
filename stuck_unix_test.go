@@ -63,3 +63,30 @@ func TestAWedgedChildIsKilledAtTheWallLimitOnceItsScriptsCompiled(t *testing.T) 
 		t.Fatalf("a wedged child was killed after %s, before its wall limit and the backstop's silence", waited)
 	}
 }
+
+func TestAJobWhoseChildIsKilledStillReportsItsLastUsage(t *testing.T) {
+	var sb = mustIsolated(t)
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	var reported []Usage
+	var answered = make(chan error, 1)
+	go func() {
+		var out any
+		answered <- resolveInto(WithMeter(WithWallLimit(t.Context(), 20*time.Second), func(used Usage) { reported = append(reported, used) }), &out, spin)
+	}()
+	var first = currentChild(t, sb)
+	time.Sleep(2*usageEvery + 100*time.Millisecond)
+	var known = ourChildren(t)
+	if err := first.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("killing the evaluator: %v", err)
+	}
+	<-first.ended
+	if replay := awaitNewChild(t, known, answered); replay != 0 {
+		time.Sleep(2*usageEvery + 100*time.Millisecond)
+		_ = syscall.Kill(replay, syscall.SIGKILL)
+	}
+	var err = <-answered
+	expectError(t, err, Unavailable, "killed from outside jaml")
+	if len(reported) != 1 || reported[0].Wall < usageEvery {
+		t.Fatalf("a job whose child was killed twice reported %+v, want one usage at least %s old", reported, usageEvery)
+	}
+}

@@ -29,6 +29,7 @@ const (
 	cancelGrace            = 250 * time.Millisecond
 	backstopSilence        = 20 * cancelGrace
 	heartbeatEvery         = backstopSilence / 5
+	usageEvery             = cancelGrace
 	evaluatorStartDeadline = 30 * time.Second
 	notAnEvaluator         = "this executable is not a jaml evaluator (C shared library or plugin host?)"
 )
