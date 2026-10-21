@@ -3,6 +3,7 @@ package jaml
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -161,7 +162,11 @@ func TestAScriptCompileIsBoundedByTheBuildTimeout(t *testing.T) {
 		if _, isolated := sb.engine.(*_IsolatedEngine); isolated {
 			child = currentChild(t, sb)
 		}
-		_, err := Resolve[string](WithScript(t.Context(), slowScript()), mustExpression(t, sb, "typeof f"))
+		var ctx = t.Context()
+		for index := range 4 {
+			ctx = WithScript(ctx, slowScript()+"// "+strconv.Itoa(index))
+		}
+		_, err := Resolve[string](ctx, mustExpression(t, sb, "typeof f"))
 		expectError(t, err, EvaluationFailed, "$: cancelled: the build took longer than its timeout of 50ms")
 		if child != nil {
 			<-child.ended
