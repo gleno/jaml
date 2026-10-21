@@ -39,6 +39,10 @@ func (e *_TrustedEngine) leave() {
 	<-e.gate
 }
 
+func (e *_TrustedEngine) health() Health {
+	return Health{Resident: residentBytes()}
+}
+
 func (e *_TrustedEngine) build(ctx context.Context, plan _Blueprint) (_Unit, error) {
 	var built _Servable
 	var err = e.raced(ctx, func(bound context.Context) (err error) {

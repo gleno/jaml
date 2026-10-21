@@ -34,6 +34,10 @@ func startIsolated(lifetime context.Context, configured _SandboxSettings) (*_Iso
 	return &_IsolatedEngine{dispatcher: newDispatcher(configured.maxConcurrency, start, first), frames: framesFor(spec.limit)}, nil
 }
 
+func (e *_IsolatedEngine) health() Health {
+	return e.dispatcher.health()
+}
+
 func (e *_IsolatedEngine) build(lifetime context.Context, plan _Blueprint) (_Unit, error) {
 	var made = &_RemoteUnit{dispatcher: e.dispatcher, frames: e.frames, plan: plan, lifetime: lifetime}
 	switch settled := e.dispatcher.carry(lifetime, made.reside).(type) {

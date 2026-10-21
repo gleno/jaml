@@ -16,7 +16,7 @@ func (f _Frames) built(job uint64, outline *_CodeOutline) ([]byte, error) {
 }
 
 func (f _Frames) usage(job uint64, used Usage) []byte {
-	return fmt.Appendf(nil, `{"job":%d,"usage":{"cpu":%d,"wall":%d}}`, job, int64(used.CPU), int64(used.Wall))
+	return fmt.Appendf(nil, `{"job":%d%s}`, job, usageJSON(used))
 }
 
 func (f _Frames) compiled(job uint64) []byte {
@@ -57,7 +57,14 @@ func (f _Frames) measuredFailure(job uint64, path string, err error, used Usage)
 }
 
 func (w *_WireWriter) usage(used Usage) error {
-	return w.raw(fmt.Sprintf(`,"usage":{"cpu":%d,"wall":%d}`, int64(used.CPU), int64(used.Wall)))
+	return w.raw(usageJSON(used))
+}
+
+func usageJSON(used Usage) string {
+	if used.Resident == 0 {
+		return fmt.Sprintf(`,"usage":{"cpu":%d,"wall":%d}`, int64(used.CPU), int64(used.Wall))
+	}
+	return fmt.Sprintf(`,"usage":{"cpu":%d,"wall":%d,"rss":%d}`, int64(used.CPU), int64(used.Wall), used.Resident)
 }
 
 func (f _Frames) refusal(job uint64, path string) []byte {

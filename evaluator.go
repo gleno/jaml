@@ -38,7 +38,8 @@ func serveEvaluations(answers io.Writer) int {
 		return exitProtocolBroken
 	}
 	adoptTheHostsZone()
-	if err := confineTheAddressSpace(world.limit, world.jobs); err != nil {
+	ceiling, err := confineTheAddressSpace(world.limit, world.jobs)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: %v\n", err)
 		return exitProtocolBroken
 	}
@@ -50,7 +51,7 @@ func serveEvaluations(answers io.Writer) int {
 		chartTheIntrinsics()
 	}
 	var replies = &_ReplyWriter{out: answers, frames: framesFor(world.limit)}
-	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
+	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce, Ceiling: ceiling})
 	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
 	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, buildLimit: world.buildLimit, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
 	watch.report = serving.reportTheRunningJobs

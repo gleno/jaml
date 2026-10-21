@@ -57,6 +57,8 @@ type _EngineFunc func(ctx context.Context, plan _Blueprint) (_Unit, error)
 
 func (f _EngineFunc) build(ctx context.Context, plan _Blueprint) (_Unit, error) { return f(ctx, plan) }
 
+func (_EngineFunc) health() Health { return Health{} }
+
 type _IdleUnit struct{}
 
 func (_IdleUnit) serve(context.Context, _Ask) _Outcome { return _Answered{data: []byte("1")} }

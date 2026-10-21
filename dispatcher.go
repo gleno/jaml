@@ -68,6 +68,7 @@ type _Dispatcher struct {
 	running  int
 	waiting  []*_Errand
 	suspects []*_Errand
+	restarts int
 }
 
 func newDispatcher(limit int, start func() (*_Life, error), first *_Life) *_Dispatcher {
@@ -269,9 +270,21 @@ func (d *_Dispatcher) begin() {
 		d.child = _Absent{}
 		d.refuseEveryone(err)
 	} else {
+		d.restarts++
 		d.adopt(started)
 	}
 	d.dispatch()
+}
+
+func (d *_Dispatcher) health() Health {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var reported = Health{Restarts: d.restarts}
+	if current, isReady := d.child.(_Ready); isReady {
+		reported.Resident = current.life.board.resident.Load()
+		reported.AddressCeiling = int64(current.life.ceiling.Load())
+	}
+	return reported
 }
 
 func (d *_Dispatcher) refuseEveryone(err error) {

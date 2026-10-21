@@ -77,6 +77,7 @@ type _Life struct {
 	wire         *_Wire
 	board        *_Switchboard
 	quiet        *_Quiet
+	ceiling      atomic.Uint64
 }
 
 type _Ending interface {
@@ -433,21 +434,21 @@ func (q *_Quiet) lasted() time.Duration {
 	return monotonicNow() - time.Duration(since-1)
 }
 
-func (s *_ReplyStream) greeting() error {
+func (s *_ReplyStream) greeting() (_Hello, error) {
 	s.frames.quiet.waiting()
 	line, err := s.lines.ReadSlice('\n')
 	s.frames.quiet.heard()
 	switch {
 	case errors.Is(err, bufio.ErrBufferFull):
-		return fmt.Errorf("it greeted with more than %d bytes", greetingCap)
+		return _Hello{}, fmt.Errorf("it greeted with more than %d bytes", greetingCap)
 	case err != nil:
-		return ended(err)
+		return _Hello{}, ended(err)
 	}
 	var hello _Hello
 	if err := json.Unmarshal(line, &hello); err != nil {
-		return fmt.Errorf("reading its greeting: %w", err)
+		return _Hello{}, fmt.Errorf("reading its greeting: %w", err)
 	}
-	return hello.vouch(s.nonce)
+	return hello, hello.vouch(s.nonce)
 }
 
 func (s *_ReplyStream) read(target any) error {

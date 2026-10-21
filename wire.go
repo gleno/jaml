@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +43,7 @@ type _Switchboard struct {
 	pending  map[uint64]*_Expectation
 	consoles map[uint64]*_Console
 	hungUp   bool
+	resident atomic.Int64
 }
 
 type _Expectation struct {
@@ -362,7 +364,8 @@ func (l *_Life) backstop(told <-chan struct{}, quiet *_Quiet) func() {
 func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 	defer close(l.drained)
 	defer l.board.hangUp()
-	var err = replies.greeting()
+	hello, err := replies.greeting()
+	l.ceiling.Store(hello.Ceiling)
 	greeted <- err
 	if err != nil {
 		return
@@ -400,6 +403,9 @@ func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) _Call {
 }
 
 func (b *_Switchboard) route(incoming _Reply) error {
+	if incoming.Usage != nil && incoming.Usage.Resident > 0 {
+		b.resident.Store(incoming.Usage.Resident)
+	}
 	switch {
 	case incoming.Line != nil:
 		return b.echo(incoming)

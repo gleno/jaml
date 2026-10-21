@@ -17,6 +17,20 @@ var (
 
 type _Engine interface {
 	build(ctx context.Context, plan _Blueprint) (_Unit, error)
+	health() Health
+}
+
+type Health struct {
+	Resident       int64
+	AddressCeiling int64
+	Restarts       int
+}
+
+func (s *Sandbox) Health() Health {
+	if s == nil || s.engine == nil {
+		return Health{}
+	}
+	return s.engine.health()
 }
 
 type _Unit interface {

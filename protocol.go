@@ -24,7 +24,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 24
+	protocolVersion      = 25
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -36,6 +36,7 @@ type _Hello struct {
 	Magic   string `json:"magic"`
 	Version int    `json:"version"`
 	Nonce   string `json:"nonce"`
+	Ceiling uint64 `json:"ceiling,omitempty"`
 }
 
 type _Opcode string
@@ -90,8 +91,9 @@ type _Reply struct {
 }
 
 type _UsageOnWire struct {
-	CPU  int64 `json:"cpu"`
-	Wall int64 `json:"wall"`
+	CPU      int64 `json:"cpu"`
+	Wall     int64 `json:"wall"`
+	Resident int64 `json:"rss,omitempty"`
 }
 
 func (u *_UsageOnWire) reported() *Usage {
@@ -106,7 +108,7 @@ func (u *_UsageOnWire) measured() Usage {
 	if u == nil {
 		return Usage{}
 	}
-	return Usage{CPU: time.Duration(u.CPU), Wall: time.Duration(u.Wall)}
+	return Usage{CPU: time.Duration(u.CPU), Wall: time.Duration(u.Wall), Resident: u.Resident}
 }
 
 type _LineOnWire struct {

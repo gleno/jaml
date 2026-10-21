@@ -16,8 +16,9 @@ type _TimeLimit time.Duration
 type _MeterKey struct{}
 
 type Usage struct {
-	CPU  time.Duration
-	Wall time.Duration
+	CPU      time.Duration
+	Wall     time.Duration
+	Resident int64
 }
 
 func WithTimeLimit(ctx context.Context, limit time.Duration) context.Context {
@@ -89,7 +90,7 @@ func startMeter() *_Meter {
 }
 
 func (m *_Meter) used() Usage {
-	return Usage{CPU: ownThreadCPU() - m.cpuStart, Wall: time.Since(m.wallStart)}
+	return Usage{CPU: ownThreadCPU() - m.cpuStart, Wall: time.Since(m.wallStart), Resident: residentBytes()}
 }
 
 func (m *_Meter) observed() Usage {
@@ -97,7 +98,7 @@ func (m *_Meter) observed() Usage {
 	if cpu != 0 {
 		cpu -= m.cpuStart
 	}
-	return Usage{CPU: cpu, Wall: time.Since(m.wallStart)}
+	return Usage{CPU: cpu, Wall: time.Since(m.wallStart), Resident: residentBytes()}
 }
 
 func (m *_Meter) spent() time.Duration {
