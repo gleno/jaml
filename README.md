@@ -257,7 +257,7 @@ jaml's own work on your data, binding a value, reading a result or a thrown valu
 
 `WithBuildTimeLimit` is the same budget for making an expression and for compiling a `Resolve`'s scripts: a build that computes longer fails with `TimeLimit` (`$: the build exceeded its time limit of 100ms`), located at `$` like a build timeout, and a secure sandbox's child that is still compiling 250 ms later is ended as stuck; a trusted build returns at once while its compile step finishes in the background, as it does past `WithBuildTimeout`, which stays the wall bound on building.
 
-The thread's clock is read with `clock_gettime`. On Linux the time limit is enforced against it. On macOS the clock of another thread cannot be read without cgo, so there a time limit is enforced against the job's wall time, like `WithWallLimit` with the `TimeLimit` cause, and a loaded Mac can blame a script that was only starved; the time a `Resolve` reports (below) is still its thread's own CPU time. Elsewhere CPU time reads as zero and a time limit counts wall time too.
+The thread's clock is read with `clock_gettime` on Linux and with `proc_info` on macOS, and on both the time limit is enforced against it. Elsewhere CPU time reads as zero and a time limit counts wall time too.
 
 ### Meter
 

@@ -142,7 +142,7 @@ func TestAFailedResolveStillReportsTheTimeItUsed(t *testing.T) {
 		expectError(t, resolveInto(ctx, &out, spin), TimeLimit)
 		var used = meter.only(t)
 		expectPlausible(t, used)
-		if goruntime.GOOS == "linux" && used.CPU < 40*time.Millisecond {
+		if measuresThreadCPU() && used.CPU < 40*time.Millisecond {
 			t.Fatalf("a job stopped by a 50ms CPU budget reported only %s of CPU", used.CPU)
 		}
 		var thrower = mustExpression(t, sb, "(() => { throw new Error('boom') })()")
@@ -277,8 +277,51 @@ func threadClockIsReadable() bool {
 	return readable
 }
 
+func measuresThreadCPU() bool {
+	return goruntime.GOOS == "linux" || goruntime.GOOS == "darwin"
+}
+
+func TestABlockedJobSpendsNoneOfItsTimeLimit(t *testing.T) {
+	if !measuresThreadCPU() {
+		t.Skip("no cross-thread CPU clock on this platform")
+	}
+	onALockedThread(func() {
+		var meter = startMeter()
+		ctx, release := _TimeLimit(30*time.Millisecond).enforce(t.Context(), meter, false)
+		defer release()
+		time.Sleep(150 * time.Millisecond)
+		if cause := context.Cause(ctx); cause != nil {
+			t.Fatalf("150ms asleep spent a 30ms time limit: %v, %s spent", cause, meter.spent())
+		}
+	})
+}
+
+func TestASpinningJobSpendsItsTimeLimitInCPU(t *testing.T) {
+	if !measuresThreadCPU() {
+		t.Skip("no cross-thread CPU clock on this platform")
+	}
+	onALockedThread(func() {
+		var meter = startMeter()
+		ctx, release := _TimeLimit(30*time.Millisecond).enforce(t.Context(), meter, false)
+		defer release()
+		var deadline = time.Now().Add(10 * time.Second)
+		for ctx.Err() == nil && time.Now().Before(deadline) {
+		}
+		var exhausted _TimeExhausted
+		if !errors.As(context.Cause(ctx), &exhausted) {
+			t.Fatalf("10s of spinning did not spend a 30ms time limit: %v", context.Cause(ctx))
+		}
+		if _, measured := meter.thread.cpu(); !measured {
+			t.Fatalf("a 30ms time limit was spent by the wall clock, not by the thread's CPU, on %s", goruntime.GOOS)
+		}
+		if own := meter.used().CPU; own < 25*time.Millisecond {
+			t.Fatalf("a 30ms time limit ran out after only %s of the thread's CPU", own)
+		}
+	})
+}
+
 func TestTheThreadClockFollowsTheLockedThread(t *testing.T) {
-	if !threadClockIsReadable() {
+	if !measuresThreadCPU() {
 		t.Skip("no cross-thread CPU clock on this platform")
 	}
 	var fromOutside = make(chan time.Duration, 1)
