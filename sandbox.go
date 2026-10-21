@@ -70,6 +70,7 @@ type Expression struct {
 
 type _Handle struct {
 	lifetime context.Context
+	origin   context.Context
 	keep     *_Keep
 }
 
@@ -208,7 +209,7 @@ func (k *_Keep) hold(ctx context.Context) (*_Handle, bool) {
 		unfollow()
 		k.release()
 	})
-	var held = &_Handle{lifetime: lifetime, keep: k}
+	var held = &_Handle{lifetime: lifetime, origin: ctx, keep: k}
 	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
 	return held, true
 }
@@ -218,7 +219,11 @@ func (k *_Keep) ended() bool {
 }
 
 func (h *_Handle) ended() bool {
-	return h.lifetime.Err() != nil || h.keep.ended()
+	return h.ownEnded() || h.keep.ended()
+}
+
+func (h *_Handle) ownEnded() bool {
+	return h.lifetime.Err() != nil || h.origin.Err() != nil
 }
 
 func (k *_Keep) sandboxEnded() bool {
@@ -237,7 +242,7 @@ func (k *_Keep) endedContext() string {
 }
 
 func (h *_Handle) endedContext() string {
-	if h.lifetime.Err() != nil && !h.keep.sandboxEnded() {
+	if h.ownEnded() && !h.keep.sandboxEnded() {
 		return "its own context, the one it was made or copied with,"
 	}
 	return h.keep.endedContext()

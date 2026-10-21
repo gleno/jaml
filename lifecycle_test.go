@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -621,4 +623,80 @@ func TestACrashThatRecursAloneIsEvaluatorDied(t *testing.T) {
 			t.Fatalf("a crash matched the wrong kinds: %v", err)
 		}
 	}, WithMemoryLimit(crashOnServeLimit))
+}
+
+type _HeldBackContext struct {
+	context.Context
+	mu    sync.Mutex
+	done  chan struct{}
+	err   error
+	after []func()
+}
+
+func heldBack() *_HeldBackContext {
+	return &_HeldBackContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *_HeldBackContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *_HeldBackContext) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
+func (c *_HeldBackContext) AfterFunc(then func()) func() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var index = len(c.after)
+	c.after = append(c.after, then)
+	return func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		var pending = c.after[index] != nil
+		c.after[index] = nil
+		return pending
+	}
+}
+
+func (c *_HeldBackContext) end() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.err = context.Canceled
+	close(c.done)
+}
+
+func (c *_HeldBackContext) release() {
+	c.mu.Lock()
+	var pending = slices.Clone(c.after)
+	clear(c.after)
+	c.mu.Unlock()
+	for _, then := range pending {
+		if then != nil {
+			then()
+		}
+	}
+}
+
+func TestATemplateIsClosedOnceItsContextIsDoneBeforeItsChildrenHear(t *testing.T) {
+	eachKind(t, func(t *testing.T, sb *Sandbox) {
+		var ctx = heldBack()
+		defer ctx.release()
+		var document = mustJaml(t, sb, "v: ${ 1 }\n")
+		copied, err := document.Copy(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		made, err := sb.MakeExpressionFromJaml(ctx, "v: ${ 1 }\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx.end()
+		var out int
+		expectError(t, resolveInto(within(t, time.Second), &out, made.At("v")), Closed, "its own context")
+		expectError(t, resolveInto(within(t, time.Second), &out, copied.At("v")), Closed, "its own context")
+		expectEqual(t, mustResolve[int](t, within(t, time.Second), document.At("v")), 1)
+	})
 }
