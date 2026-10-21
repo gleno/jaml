@@ -36,7 +36,7 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 				verdict <- resolveInto(within(t, 60*time.Second), &out, holding)
 			}()
 			for pid := first; pid != 0; {
-				awaitHeld(t, sb, pid, busy, c.memory)
+				awaitHeld(t, sb, pid, busy, c.memory, verdict)
 				time.Sleep(time.Second)
 				var known = ourChildren(t)
 				_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -91,29 +91,51 @@ func ourChildren(t *testing.T) []int {
 	return pids
 }
 
-func awaitHeld(t *testing.T, sb *Sandbox, pid int, bytes int, pressured bool) {
+func awaitHeld(t *testing.T, sb *Sandbox, pid int, bytes int, pressured bool, verdict chan error) {
 	t.Helper()
 	var deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if resident(t, pid) >= bytes || pressured && underPressure(t, sb, pid) {
+		if resident(t, pid) >= bytes || pressured && lifeOf(t, sb, pid).pressured() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	var held = resident(t, pid)
+	var life = lifeOf(t, sb, pid)
+	var seen = "no verdict yet"
+	select {
+	case err := <-verdict:
+		seen = fmt.Sprintf("verdict %v", err)
+	default:
+	}
 	_ = syscall.Kill(pid, syscall.SIGKILL)
-	t.Fatalf("evaluator %d never held %d bytes", pid, bytes)
+	t.Fatalf("evaluator %d never held %d bytes: it holds %d, is the current child: %v, said %q; %s", pid, bytes, held, life != nil, life.said(), seen)
 }
 
-func underPressure(t *testing.T, sb *Sandbox, pid int) bool {
+func lifeOf(t *testing.T, sb *Sandbox, pid int) *_Life {
 	t.Helper()
 	var d = dispatcherOf(t, sb)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	current, isReady := d.child.(_Ready)
 	if !isReady || current.life.cmd.Process.Pid != pid {
-		return false
+		return nil
 	}
-	return current.life.cmd.Stderr.(*_HeadBuffer).holds(pressureMarker)
+	return current.life
+}
+
+func (l *_Life) pressured() bool {
+	return l != nil && l.cmd.Stderr.(*_HeadBuffer).holds(pressureMarker)
+}
+
+func (l *_Life) said() string {
+	if l == nil {
+		return ""
+	}
+	var head = l.cmd.Stderr.(*_HeadBuffer)
+	head.mu.Lock()
+	defer head.mu.Unlock()
+	return string(head.kept)
 }
 
 func resident(t *testing.T, pid int) int {
