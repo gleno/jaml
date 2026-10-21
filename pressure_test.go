@@ -36,7 +36,7 @@ func TestAForeignKillIsBlamedOnMemoryOnlyPastThreeQuartersLive(t *testing.T) {
 				verdict <- resolveInto(within(t, 60*time.Second), &out, holding)
 			}()
 			for pid := first; pid != 0; {
-				awaitResident(t, pid, busy)
+				awaitHeld(t, sb, pid, busy, c.memory)
 				time.Sleep(time.Second)
 				var known = ourChildren(t)
 				_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -91,17 +91,29 @@ func ourChildren(t *testing.T) []int {
 	return pids
 }
 
-func awaitResident(t *testing.T, pid int, bytes int) {
+func awaitHeld(t *testing.T, sb *Sandbox, pid int, bytes int, pressured bool) {
 	t.Helper()
 	var deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if resident(t, pid) >= bytes {
+		if resident(t, pid) >= bytes || pressured && underPressure(t, sb, pid) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	t.Fatalf("evaluator %d never held %d bytes", pid, bytes)
+}
+
+func underPressure(t *testing.T, sb *Sandbox, pid int) bool {
+	t.Helper()
+	var d = dispatcherOf(t, sb)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	current, isReady := d.child.(_Ready)
+	if !isReady || current.life.cmd.Process.Pid != pid {
+		return false
+	}
+	return current.life.cmd.Stderr.(*_HeadBuffer).holds(pressureMarker)
 }
 
 func resident(t *testing.T, pid int) int {
