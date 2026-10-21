@@ -241,10 +241,10 @@ func (e *_Evaluator) prepare(ctx context.Context, job uint64, held _Servable, re
 	var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
 	defer unwatch()
 	prepared, err := held.prepare(request, e.host)
-	switch {
-	case !watch.Stop():
+	if !watch.Stop() {
 		return _Prepared{}, overdue
-	case budgeted.Err() != nil && ctx.Err() == nil:
+	}
+	if _, exhausted := exhaustedCause(budgeted); exhausted {
 		return _Prepared{}, cancelled(budgeted)
 	}
 	return prepared, err
