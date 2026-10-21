@@ -53,6 +53,7 @@ func serveEvaluations(answers io.Writer) int {
 	replies.greet(_Hello{Magic: evaluatorMagic, Version: protocolVersion, Nonce: world.nonce})
 	var host = _Host{runtime: world.runtime, scripts: newScriptCache(world.scriptBudget)}
 	var serving = &_Evaluator{host: host, buildTimeout: world.buildTimeout, buildLimit: world.buildLimit, watch: watch, replies: replies, jobs: newJobTable(stuckAfterCancel)}
+	watch.report = serving.reportTheRunningJobs
 	go watch.pulse(replies.beat)
 	go serving.obey(&_FrameReader{source: os.NewFile(controlFD, "jaml-control"), limit: controlFrameCap, refusal: oversizedControl(), quiet: &_Quiet{}})
 	return serving.follow(replies.frames.requests(os.NewFile(requestsFD, "jaml-requests")))
@@ -153,7 +154,9 @@ func (e *_Evaluator) accept(incoming _Request) error {
 
 func (e *_Evaluator) build(ctx context.Context, job uint64, plan _Blueprint) {
 	onALockedThread(func() {
-		budgeted, release := e.buildLimit.enforce(ctx, startMeter(), true)
+		var meter = startMeter()
+		e.jobs.measure(job, meter)
+		budgeted, release := e.buildLimit.enforce(ctx, meter, true)
 		defer release()
 		var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
 		defer unwatch()
@@ -202,11 +205,12 @@ func (e *_Evaluator) serve(ctx context.Context, job uint64, held _Servable, requ
 		var sealed []byte
 		e.watch.during(func() {
 			var meter = startMeter()
+			e.jobs.measure(job, meter)
 			bounded, stop := request.WallLimit.bound(ctx)
 			defer stop()
 			budgeted, release := request.TimeLimit.enforce(bounded, meter, false)
 			defer release()
-			var unwatch = context.AfterFunc(budgeted, func() { e.overran(job, prepared.spot, budgeted) })
+			var unwatch = context.AfterFunc(budgeted, func() { e.overran(job, prepared.spot, budgeted, meter) })
 			defer unwatch()
 			result, err := prepared.render(budgeted, e.speaker(job, request.Console))
 			var used = meter.used()
@@ -229,7 +233,9 @@ func (e *_Evaluator) prepare(ctx context.Context, job uint64, held _Servable, re
 	var watch = time.AfterFunc(e.buildTimeout, func() {
 		e.jobs.overrun(job, func() { e.replies.write(e.replies.frames.failure(job, rootPlace, overdue)) })
 	})
-	budgeted, release := e.buildLimit.enforce(ctx, startMeter(), true)
+	var meter = startMeter()
+	e.jobs.measure(job, meter)
+	budgeted, release := e.buildLimit.enforce(ctx, meter, true)
 	defer release()
 	var unwatch = context.AfterFunc(budgeted, func() { e.overranCompiling(job, budgeted) })
 	defer unwatch()
@@ -243,15 +249,28 @@ func (e *_Evaluator) prepare(ctx context.Context, job uint64, held _Servable, re
 	return prepared, err
 }
 
-func (e *_Evaluator) overran(job uint64, spot *_Spot, budgeted context.Context) {
+func (e *_Evaluator) overran(job uint64, spot *_Spot, budgeted context.Context, meter *_Meter) {
 	exhausted, overran := exhaustedCause(budgeted)
 	if !overran {
 		return
 	}
 	e.jobs.overrun(job, func() {
-		var stuck = spot.blame(fmt.Errorf("%w and was still inside a built-in %s after it was told to stop", exhausted, cancelGrace))
-		e.replies.write(e.replies.frames.failure(job, stuck.path, stuck))
+		var stuck = spot.blame(fmt.Errorf("%w and was still inside a built-in %s after it was told to stop", e.blamed(exhausted), cancelGrace))
+		e.replies.write(e.replies.frames.measuredFailure(job, stuck.path, stuck, meter.observed()))
 	})
+}
+
+func (e *_Evaluator) blamed(exhausted error) error {
+	if _, wall := exhausted.(_WallExhausted); !wall || !e.watch.pressured() {
+		return exhausted
+	}
+	return fmt.Errorf("%w, out of wall time too: %w", _MemoryExhausted{limit: e.watch.limit}, exhausted)
+}
+
+func (e *_Evaluator) reportTheRunningJobs() {
+	for job, meter := range e.jobs.measured() {
+		e.replies.write(e.replies.frames.usage(job, meter.observed()))
+	}
 }
 
 func (e *_Evaluator) overranCompiling(job uint64, budgeted context.Context) {
@@ -361,6 +380,8 @@ func worldFromEnv() (_EvaluatorWorld, error) {
 
 type _HeapWatch struct {
 	ceiling    uint64
+	limit      _MemoryLimit
+	report     func()
 	parent     int
 	wake       chan struct{}
 	quietUntil uint64
@@ -372,7 +393,7 @@ func watchTheHeap(world _EvaluatorWorld) *_HeapWatch {
 	goruntime.GC()
 	var ceiling = min(heapHeld()+uint64(world.limit), math.MaxInt64)
 	debug.SetMemoryLimit(int64(ceiling))
-	var watch = &_HeapWatch{ceiling: ceiling, parent: world.parent, wake: make(chan struct{}, 1)}
+	var watch = &_HeapWatch{ceiling: ceiling, limit: world.limit, parent: world.parent, wake: make(chan struct{}, 1)}
 	go watch.patrol()
 	return watch
 }
@@ -433,8 +454,15 @@ func liveHeap() uint64 {
 func (w *_HeapWatch) confirmOverflow() {
 	if held := liveHeap(); held > w.ceiling {
 		fmt.Fprintf(os.Stderr, "jaml evaluator: live heap reached %d bytes, over its starting heap plus the limit, %d\n", held, w.ceiling)
+		if w.report != nil {
+			w.report()
+		}
 		os.Exit(exitMemoryLimit)
 	}
+}
+
+func (w *_HeapWatch) pressured() bool {
+	return liveHeap() > w.ceiling/4*3
 }
 
 func (w *_HeapWatch) working() bool {

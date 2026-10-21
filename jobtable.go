@@ -16,6 +16,7 @@ type _Working struct {
 	dropped bool
 	grace   *time.Timer
 	last    func()
+	meter   *_Meter
 }
 
 type _Held struct{ unit _Servable }
@@ -74,6 +75,27 @@ func (t *_JobTable) let(job uint64, told _Told) {
 			t.jobs[job] = told
 		}
 	}
+}
+
+func (t *_JobTable) measure(job uint64, meter *_Meter) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if working, isWorking := t.jobs[job].(_Working); isWorking {
+		working.meter = meter
+		t.jobs[job] = working
+	}
+}
+
+func (t *_JobTable) measured() map[uint64]*_Meter {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var meters = map[uint64]*_Meter{}
+	for job, phase := range t.jobs {
+		if working, isWorking := phase.(_Working); isWorking && working.meter != nil {
+			meters[job] = working.meter
+		}
+	}
+	return meters
 }
 
 func (t *_JobTable) overrun(job uint64, last func()) {

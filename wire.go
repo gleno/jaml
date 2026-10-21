@@ -48,12 +48,14 @@ type _Expectation struct {
 	op       _Opcode
 	replies  chan _Reply
 	compiled chan struct{}
+	used     chan Usage
 }
 
 type _Call struct {
 	job      uint64
 	replies  <-chan _Reply
 	compiled <-chan struct{}
+	used     <-chan Usage
 }
 
 func closedChannel() <-chan struct{} {
@@ -269,13 +271,13 @@ func (l *_Life) send(ctx context.Context, outgoing _Outgoing) (_Call, error) {
 	defer func() { <-l.wire.writer }()
 	var job = l.wire.sent + 1
 	l.wire.sent = job
-	replies, compiled := l.board.expect(job, outgoing.body.op, outgoing.console)
+	var expected = l.board.expect(job, outgoing.body.op, outgoing.console)
 	defer l.backstop(alreadyDone, l.wire.stall)()
 	if err := l.wire.write(outgoing.body.stamp(job, outgoing.unit)); err != nil {
 		l.end()
 		return _Call{}, errLost
 	}
-	return _Call{job: job, replies: replies, compiled: compiled}, nil
+	return expected, nil
 }
 
 func (w *_Wire) write(request []byte) error {
@@ -297,8 +299,14 @@ func (l *_Life) final(c _Call, judged func(_Reply) _Outcome) _Outcome {
 	case incoming := <-c.replies:
 		return judged(incoming)
 	default:
-		return l.lost()
 	}
+	var died = l.lost()
+	select {
+	case used := <-c.used:
+		died.used = &used
+	default:
+	}
+	return died
 }
 
 func (l *_Life) tell(outgoing _Request) <-chan struct{} {
@@ -375,19 +383,20 @@ func (l *_Life) listen(replies *_ReplyStream, greeted chan<- error) {
 	}
 }
 
-func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) (<-chan _Reply, <-chan struct{}) {
+func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) _Call {
 	var replies = make(chan _Reply, 1)
 	var compiled = make(chan struct{}, 1)
+	var used = make(chan Usage, 1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.pending[job] = &_Expectation{op: op, replies: replies, compiled: compiled}
+	b.pending[job] = &_Expectation{op: op, replies: replies, compiled: compiled, used: used}
 	if console != nil && !b.hungUp && console.attend() {
 		if b.consoles == nil {
 			b.consoles = map[uint64]*_Console{}
 		}
 		b.consoles[job] = console
 	}
-	return replies, compiled
+	return _Call{job: job, replies: replies, compiled: compiled, used: used}
 }
 
 func (b *_Switchboard) route(incoming _Reply) error {
@@ -396,8 +405,25 @@ func (b *_Switchboard) route(incoming _Reply) error {
 		return b.echo(incoming)
 	case incoming.Compiled:
 		return b.noteCompiled(incoming)
+	case incoming.Usage != nil && incoming.outcomes() == 0:
+		return b.noteUsage(incoming)
 	}
 	return b.deliver(incoming)
+}
+
+func (b *_Switchboard) noteUsage(incoming _Reply) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var waiting = b.pending[incoming.Job]
+	if waiting == nil {
+		return fmt.Errorf("the evaluator reported usage for job %d, which is not waiting for an answer", incoming.Job)
+	}
+	select {
+	case <-waiting.used:
+	default:
+	}
+	waiting.used <- incoming.Usage.measured()
+	return nil
 }
 
 func (b *_Switchboard) noteCompiled(incoming _Reply) error {

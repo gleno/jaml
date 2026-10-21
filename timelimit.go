@@ -92,6 +92,14 @@ func (m *_Meter) used() Usage {
 	return Usage{CPU: ownThreadCPU() - m.cpuStart, Wall: time.Since(m.wallStart)}
 }
 
+func (m *_Meter) observed() Usage {
+	var cpu, _ = m.thread.cpu()
+	if cpu != 0 {
+		cpu -= m.cpuStart
+	}
+	return Usage{CPU: cpu, Wall: time.Since(m.wallStart)}
+}
+
 func (m *_Meter) spent() time.Duration {
 	if cpu, measured := m.thread.cpu(); measured {
 		return cpu - m.cpuStart

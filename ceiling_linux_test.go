@@ -231,6 +231,48 @@ func TestInnocentJobsOnEveryCoreNeverTripTheCeiling(t *testing.T) {
 	}
 }
 
+var hungryBuiltins = map[string]string{
+	"a join that multiplies one string":   "new Array(1 << 16).fill('x'.repeat(1 << 12)).join('').length",
+	"a replacement that repeats the rest": "'x'.repeat(1 << 16).replace('x', \"$'\".repeat(1 << 12)).length",
+}
+
+func TestAHungryBuiltInIsNeverJustOutOfWallTime(t *testing.T) {
+	var burners = goruntime.GOMAXPROCS(0)
+	var sb = mustIsolated(t, WithMemoryLimit(128<<20), WithMaxConcurrency(burners+1))
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	for _, loaded := range []bool{false, true} {
+		for name, body := range hungryBuiltins {
+			var hungry = mustExpression(t, sb, body)
+			var burned = make(chan error, burners)
+			if loaded {
+				for range burners {
+					go func() {
+						var out any
+						burned <- resolveInto(WithWallLimit(t.Context(), 2*time.Second), &out, spin)
+					}()
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			var reported []Usage
+			var ctx = WithMeter(WithWallLimit(WithTimeLimit(t.Context(), 100*time.Millisecond), time.Second), func(used Usage) { reported = append(reported, used) })
+			var out any
+			var err = resolveInto(ctx, &out, hungry)
+			t.Logf("%s (loaded: %v): %v, used %+v", name, loaded, err, reported)
+			if err == nil || errors.Is(err, WallLimit) && !errors.Is(err, MemoryLimit) || !errors.Is(err, MemoryLimit) && !errors.Is(err, TimeLimit) {
+				t.Fatalf("%s (loaded: %v) ended as %v, want MemoryLimit or TimeLimit, never the wall limit alone", name, loaded, err)
+			}
+			if len(reported) != 1 || reported[0].Wall <= 0 {
+				t.Fatalf("%s (loaded: %v) reported %v, want one usage with wall time", name, loaded, reported)
+			}
+			if loaded {
+				for range burners {
+					<-burned
+				}
+			}
+		}
+	}
+}
+
 const doublingToHalfAGibibyte = "(() => { let s = 'x'.repeat(1 << 20); for (let i = 0; i < 9; i++) { s += s } return s.length })()"
 
 func TestADoublingBodyNeverHoldsFourTimesTheLimit(t *testing.T) {

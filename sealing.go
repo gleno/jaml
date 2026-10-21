@@ -15,6 +15,10 @@ func (f _Frames) built(job uint64, outline *_CodeOutline) ([]byte, error) {
 	return wireJSON(_Reply{Job: job, Built: true, Code: outline})
 }
 
+func (f _Frames) usage(job uint64, used Usage) []byte {
+	return fmt.Appendf(nil, `{"job":%d,"usage":{"cpu":%d,"wall":%d}}`, job, int64(used.CPU), int64(used.Wall))
+}
+
 func (f _Frames) compiled(job uint64) []byte {
 	return fmt.Appendf(nil, `{"job":%d,"compiled":true}`, job)
 }

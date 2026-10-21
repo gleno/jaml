@@ -13,7 +13,10 @@ const (
 	recovering
 )
 
-type _Lost struct{ cause error }
+type _Lost struct {
+	cause error
+	used  *Usage
+}
 
 func (_Lost) isOutcome() {}
 
@@ -125,7 +128,7 @@ func (e *_Errand) judge(held _Lease, result _Outcome) (_Outcome, bool) {
 		return _Refused{err: cancelled(e.ctx)}, false
 	}
 	if _, alone := held.(_Owned); alone {
-		return _Refused{err: blameless(died.cause)}, false
+		return _Refused{err: blameless(died.cause), used: died.used}, false
 	}
 	return result, true
 }
