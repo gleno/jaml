@@ -84,6 +84,7 @@ func expectUnavailableFromOutside(t *testing.T, sb *Sandbox, spin *Expression) {
 	}
 	var err = <-spun
 	expectError(t, err, Unavailable, "$.spin: evaluator died", "killed from outside jaml")
+	expectError(t, err, KilledFromOutside)
 	if failureOf(t, err).Path != "$.spin" {
 		t.Fatalf("expected the selection, got %+v", failureOf(t, err))
 	}

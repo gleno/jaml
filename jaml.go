@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"context"
 	"errors"
 	goruntime "runtime"
 	"strings"
@@ -77,6 +78,9 @@ var (
 	CallDepthLimit    = causes[callDepthExhausted].sentinel
 	EvaluatorDied     = causes[evaluatorDeath].sentinel
 	TimeLimit         = causes[timeExhausted].sentinel
+	KilledFromOutside = kinds[unavailable].sentinel.WithMessage("killed from outside jaml")
+	ExitNotCollected  = kinds[evaluationFailed].sentinel.WithMessage("evaluator ended but its exit could not be collected")
+	StuckAfterCancel  = kinds[evaluationFailed].sentinel.WithMessage("evaluator stuck in a job after it was cancelled")
 )
 
 func (k _Kind) sentinel() fault.Fault {
@@ -147,6 +151,7 @@ type _SandboxSettings struct {
 	buildTimeLimit   _TimeLimit
 	scriptCacheLimit int64
 	runtime          _Runtime
+	attributedDeaths func(ctx context.Context, death AttributedDeath)
 }
 
 type _Runtime struct {
@@ -222,6 +227,20 @@ func WithMaxConcurrency(jobs int) SandboxOption {
 			return fail(invalidExpression, "max concurrency must be at least 1, got %d", jobs)
 		}
 		s.maxConcurrency = jobs
+		return nil
+	}
+}
+
+type AttributedDeath struct {
+	Cause error
+}
+
+func WithAttributedDeaths(heard func(ctx context.Context, death AttributedDeath)) SandboxOption {
+	return func(s *_SandboxSettings) error {
+		if heard == nil {
+			return fail(invalidExpression, "the listener of attributed deaths must not be nil")
+		}
+		s.attributedDeaths = heard
 		return nil
 	}
 }
