@@ -81,6 +81,7 @@ var (
 	KilledFromOutside = kinds[unavailable].sentinel.WithMessage("killed from outside jaml")
 	ExitNotCollected  = kinds[evaluationFailed].sentinel.WithMessage("evaluator ended but its exit could not be collected")
 	StuckAfterCancel  = kinds[evaluationFailed].sentinel.WithMessage("evaluator stuck in a job after it was cancelled")
+	ReplayDropped     = kinds[unavailable].sentinel.WithMessage("the replay that would attribute a death was dropped")
 )
 
 func (k _Kind) sentinel() fault.Fault {

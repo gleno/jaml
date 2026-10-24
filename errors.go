@@ -162,3 +162,15 @@ func (d _StuckDeath) Error() string {
 func (d _StuckDeath) Is(target error) bool {
 	return target == StuckAfterCancel
 }
+
+type _DroppedReplay struct {
+	limit time.Duration
+}
+
+func (d _DroppedReplay) Error() string {
+	return fmt.Sprintf("the replay alone of a job whose caller left ran past %s and was dropped, so the death it was to attribute stays unattributed", d.limit)
+}
+
+func (d _DroppedReplay) Is(target error) bool {
+	return target == ReplayDropped
+}

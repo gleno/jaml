@@ -100,7 +100,7 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption // wall bound on maki
 func WithBuildTimeLimit(limit time.Duration) SandboxOption // CPU bound on the same
 func WithScriptCacheLimit(bytes int64) SandboxOption      // compiled scripts kept, least recently used first out; default an eighth of the memory limit
 func WithCallDepthLimit(calls int) SandboxOption          // how deep JavaScript calls may nest; default 4096, at most 32768
-func WithAttributedDeaths(heard func(ctx context.Context, death AttributedDeath)) SandboxOption // hears each child death pinned on one job by its replay alone, with that job's context values, even after its caller gave up (the replay then runs up to a minute past the caller)
+func WithAttributedDeaths(heard func(ctx context.Context, death AttributedDeath)) SandboxOption // hears each child death pinned on one job by its replay alone, with that job's context values, even after its caller gave up: such a job is replayed after those whose callers wait, for at most a minute from the start of its replay, is dropped once the death is attributed, and a replay that runs past its minute is heard as ReplayDropped
 
 // Reported types.
 type Thrown struct { Message string; Value any }                    // what code threw, reachable with errors.As
@@ -130,6 +130,7 @@ var (
 	StuckAfterCancel  // an EvaluationFailed: the child ended with a job stuck inside a built-in after it was cancelled
 	ExitNotCollected  // an EvaluationFailed: the child ended and its exit could not be collected
 	KilledFromOutside // an Unavailable: something outside jaml killed the child, often the kernel's out-of-memory killer
+	ReplayDropped     // an Unavailable, heard by WithAttributedDeaths: a replay that would attribute a death ran past its bound
 )
 ```
 
