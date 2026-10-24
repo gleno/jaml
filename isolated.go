@@ -31,7 +31,7 @@ func startIsolated(lifetime context.Context, configured _SandboxSettings) (*_Iso
 		return nil, err
 	}
 	var start = func() (*_Life, error) { return startLife(spec) }
-	return &_IsolatedEngine{dispatcher: newDispatcher(configured.maxConcurrency, start, first), frames: framesFor(spec.limit)}, nil
+	return &_IsolatedEngine{dispatcher: newDispatcher(_DispatcherSpec{limit: configured.maxConcurrency, start: start, heard: configured.attributedDeaths}, first), frames: framesFor(spec.limit)}, nil
 }
 
 func (e *_IsolatedEngine) health() Health {

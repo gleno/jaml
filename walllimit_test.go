@@ -102,7 +102,7 @@ func TestATimedOutJobBlamesNoOtherJobsDeath(t *testing.T) {
 	stop(_WallLimit(time.Millisecond).exhausted())
 	var errand = &_Errand{ctx: t.Context()}
 	var starved = _Lost{cause: _MemoryLimit(64).exhausted()}
-	judged, replayed := errand.judge(_Shared{}, overran(overdue, starved))
+	judged, replayed := errand.judge(_Shared{}, overran(overdue, starved), false)
 	if !replayed || judged != _Outcome(starved) {
 		t.Fatalf("a job past its limit whose shared child died of another's memory settled %#v instead of replaying", judged)
 	}
@@ -121,7 +121,7 @@ func TestAnOutsideDeathPastALimitStillClassifiesAsUnavailable(t *testing.T) {
 	stop(_WallLimit(time.Millisecond).exhausted())
 	var errand = &_Errand{ctx: t.Context()}
 	var outside = _Lost{cause: _OutsideDeath("evaluator died (signal: killed): killed from outside jaml")}
-	judged, replayed := errand.judge(_Owned{}, overran(overdue, outside))
+	judged, replayed := errand.judge(_Owned{}, overran(overdue, outside), false)
 	if replayed {
 		t.Fatal("a job alone on its child was replayed after an outside death")
 	}

@@ -158,3 +158,7 @@ type _StuckDeath string
 func (d _StuckDeath) Error() string {
 	return string(d)
 }
+
+func (d _StuckDeath) Is(target error) bool {
+	return target == StuckAfterCancel
+}

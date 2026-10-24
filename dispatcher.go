@@ -4,7 +4,10 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"time"
 )
+
+const aSuspectIsReplayedPastItsCallerFor = time.Minute
 
 type _Mode int
 
@@ -52,9 +55,10 @@ type _Admission struct {
 }
 
 type _Errand struct {
-	ctx     context.Context
-	answers chan _Admission
-	reports chan _Outcome
+	ctx      context.Context
+	answers  chan _Admission
+	reports  chan _Outcome
+	detached context.CancelFunc
 }
 
 type _Attempt func(e *_Errand, l *_Life) _Outcome
@@ -62,6 +66,7 @@ type _Attempt func(e *_Errand, l *_Life) _Outcome
 type _Dispatcher struct {
 	limit    int
 	start    func() (*_Life, error)
+	heard    func(ctx context.Context, death AttributedDeath)
 	mu       sync.Mutex
 	mode     _Mode
 	child    _Availability
@@ -71,8 +76,14 @@ type _Dispatcher struct {
 	restarts int
 }
 
-func newDispatcher(limit int, start func() (*_Life, error), first *_Life) *_Dispatcher {
-	var d = &_Dispatcher{limit: limit, start: start}
+type _DispatcherSpec struct {
+	limit int
+	start func() (*_Life, error)
+	heard func(ctx context.Context, death AttributedDeath)
+}
+
+func newDispatcher(spec _DispatcherSpec, first *_Life) *_Dispatcher {
+	var d = &_Dispatcher{limit: spec.limit, start: spec.start, heard: spec.heard}
 	d.adopt(first)
 	return d
 }
@@ -93,6 +104,7 @@ func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
 }
 
 func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
+	defer e.endTheDetachedReplay()
 	var requeued = false
 	for {
 		held, err := d.admit(e)
@@ -100,17 +112,49 @@ func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 			e.report(_Refused{err: err})
 			return
 		}
-		final, replay := e.judge(held, work(e, held.held()))
+		var result = work(e, held.held())
+		final, replay := e.judge(held, result, d.heard != nil)
 		if replay {
 			var shared = !requeued && final.(_Lost).attributed()
 			requeued = requeued || shared
+			if !shared {
+				d.replayPastTheCaller(e)
+			}
 			d.requeue(e, shared)
 			continue
 		}
 		e.report(final)
 		d.release(held)
+		d.tellTheAttributedDeath(e, final, isADeathAlone(held, result))
 		return
 	}
+}
+
+func isADeathAlone(held _Lease, result _Outcome) bool {
+	_, alone := held.(_Owned)
+	_, died := result.(_Lost)
+	return alone && died
+}
+
+func (d *_Dispatcher) replayPastTheCaller(e *_Errand) {
+	if d.heard == nil || e.detached != nil {
+		return
+	}
+	e.ctx, e.detached = context.WithTimeout(context.WithoutCancel(e.ctx), aSuspectIsReplayedPastItsCallerFor)
+}
+
+func (e *_Errand) endTheDetachedReplay() {
+	if e.detached != nil {
+		e.detached()
+	}
+}
+
+func (d *_Dispatcher) tellTheAttributedDeath(e *_Errand, final _Outcome, alone bool) {
+	refused, isRefused := final.(_Refused)
+	if d.heard == nil || !alone || !isRefused || e.ctx.Err() != nil {
+		return
+	}
+	d.heard(e.ctx, AttributedDeath{Cause: refused.err})
 }
 
 func (e *_Errand) report(result _Outcome) {
@@ -120,12 +164,12 @@ func (e *_Errand) report(result _Outcome) {
 	}
 }
 
-func (e *_Errand) judge(held _Lease, result _Outcome) (_Outcome, bool) {
+func (e *_Errand) judge(held _Lease, result _Outcome, attributesPastTheCaller bool) (_Outcome, bool) {
 	died, isLost := result.(_Lost)
 	switch {
 	case !isLost:
 		return result, false
-	case e.ctx.Err() != nil:
+	case e.ctx.Err() != nil && !attributesPastTheCaller:
 		return _Refused{err: cancelled(e.ctx)}, false
 	}
 	if _, alone := held.(_Owned); alone {

@@ -376,11 +376,31 @@ func (u _Uncollected) verdict(r _Remains) error {
 	case r.killCause != nil:
 		return r.killCause
 	case reason != "":
-		return fmt.Errorf("evaluator ended but its exit could not be collected (%w): %s", u.waited, reason)
+		return _UncollectedExit{waited: u.waited, reason: reason}
 	case r.stderr.holds(pressureMarker):
 		return r.limit.exhausted()
 	}
-	return fmt.Errorf("evaluator ended but its exit could not be collected: %w", u.waited)
+	return _UncollectedExit{waited: u.waited}
+}
+
+type _UncollectedExit struct {
+	waited error
+	reason string
+}
+
+func (u _UncollectedExit) Error() string {
+	if u.reason == "" {
+		return fmt.Sprintf("evaluator ended but its exit could not be collected: %v", u.waited)
+	}
+	return fmt.Sprintf("evaluator ended but its exit could not be collected (%v): %s", u.waited, u.reason)
+}
+
+func (u _UncollectedExit) Unwrap() error {
+	return u.waited
+}
+
+func (u _UncollectedExit) Is(target error) bool {
+	return target == ExitNotCollected
 }
 
 func refusedAnAllocation(reason string) bool {
@@ -391,6 +411,10 @@ type _OutsideDeath string
 
 func (d _OutsideDeath) Error() string {
 	return string(d)
+}
+
+func (d _OutsideDeath) Is(target error) bool {
+	return target == KilledFromOutside
 }
 
 func peakNote(state *os.ProcessState) string {

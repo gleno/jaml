@@ -100,6 +100,7 @@ func WithBuildTimeout(timeout time.Duration) SandboxOption // wall bound on maki
 func WithBuildTimeLimit(limit time.Duration) SandboxOption // CPU bound on the same
 func WithScriptCacheLimit(bytes int64) SandboxOption      // compiled scripts kept, least recently used first out; default an eighth of the memory limit
 func WithCallDepthLimit(calls int) SandboxOption          // how deep JavaScript calls may nest; default 4096, at most 32768
+func WithAttributedDeaths(heard func(ctx context.Context, death AttributedDeath)) SandboxOption // hears each child death pinned on one job by its replay alone, with that job's context values, even after its caller gave up (the replay then runs up to a minute past the caller)
 
 // Reported types.
 type Thrown struct { Message string; Value any }                    // what code threw, reachable with errors.As
@@ -107,6 +108,7 @@ type Failure struct { Path string; Reason string }                  // every jam
 type Line struct { Path []string; Level Level; Text string }        // one console line; Level is Log, Info, Warn, Error or Debug
 type Usage struct { CPU, Wall time.Duration; Resident int64 }       // what a Resolve used; Resident is bytes, zero off Linux
 type Health struct { Resident, AddressCeiling int64; Restarts int } // the sandbox's child; Restarts counts children after the first
+type AttributedDeath struct { Cause error }                         // the death a job's replay alone caused, matched like Resolve's error
 
 // Errors. All derive from ExpressionError; each wraps its cause, so a cancelled call matches context.Canceled.
 var (
@@ -125,6 +127,9 @@ var (
 	WallLimit         // an EvaluationFailed: the job ran longer than WithWallLimit allows
 	CallDepthLimit    // an EvaluationFailed: calls nested deeper than WithCallDepthLimit allows
 	EvaluatorDied     // an EvaluationFailed: the child crashed under this job
+	StuckAfterCancel  // an EvaluationFailed: the child ended with a job stuck inside a built-in after it was cancelled
+	ExitNotCollected  // an EvaluationFailed: the child ended and its exit could not be collected
+	KilledFromOutside // an Unavailable: something outside jaml killed the child, often the kernel's out-of-memory killer
 )
 ```
 
