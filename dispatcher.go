@@ -2,12 +2,15 @@ package jaml
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
 )
 
 const aSuspectIsReplayedPastItsCallerFor = time.Minute
+
+var errReplayOutlived = errors.New("the replay of a suspect whose caller left outlived its bound")
 
 type _Mode int
 
@@ -56,9 +59,11 @@ type _Admission struct {
 
 type _Errand struct {
 	ctx      context.Context
+	caller   context.Context
 	answers  chan _Admission
 	reports  chan _Outcome
-	detached context.CancelFunc
+	detached context.Context
+	bounded  context.CancelFunc
 }
 
 type _Attempt func(e *_Errand, l *_Life) _Outcome
@@ -67,6 +72,7 @@ type _Dispatcher struct {
 	limit    int
 	start    func() (*_Life, error)
 	heard    func(ctx context.Context, death AttributedDeath)
+	replays  time.Duration
 	mu       sync.Mutex
 	mode     _Mode
 	child    _Availability
@@ -83,13 +89,13 @@ type _DispatcherSpec struct {
 }
 
 func newDispatcher(spec _DispatcherSpec, first *_Life) *_Dispatcher {
-	var d = &_Dispatcher{limit: spec.limit, start: spec.start, heard: spec.heard}
+	var d = &_Dispatcher{limit: spec.limit, start: spec.start, heard: spec.heard, replays: aSuspectIsReplayedPastItsCallerFor}
 	d.adopt(first)
 	return d
 }
 
 func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
-	var e = &_Errand{ctx: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
+	var e = &_Errand{ctx: ctx, caller: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
 	d.mu.Lock()
 	d.waiting = append(d.waiting, e)
 	d.dispatch()
@@ -104,7 +110,7 @@ func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
 }
 
 func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
-	defer e.endTheDetachedReplay()
+	defer e.endTheReplayBound()
 	var requeued = false
 	for {
 		held, err := d.admit(e)
@@ -112,6 +118,7 @@ func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 			e.report(_Refused{err: err})
 			return
 		}
+		d.boundTheReplayFromItsAdmission(e, held)
 		var result = work(e, held.held())
 		final, replay := e.judge(held, result, d.heard != nil)
 		if replay {
@@ -123,9 +130,13 @@ func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 			d.requeue(e, shared)
 			continue
 		}
+		var alone = isADeathAlone(held, result)
+		if alone && d.heard != nil {
+			d.dropTheSuspectsWhoseCallersLeft()
+		}
 		e.report(final)
 		d.release(held)
-		d.tellTheAttributedDeath(e, final, isADeathAlone(held, result))
+		d.tellWhatTheReplayFound(e, final, alone)
 		return
 	}
 }
@@ -140,21 +151,59 @@ func (d *_Dispatcher) replayPastTheCaller(e *_Errand) {
 	if d.heard == nil || e.detached != nil {
 		return
 	}
-	e.ctx, e.detached = context.WithTimeout(context.WithoutCancel(e.ctx), aSuspectIsReplayedPastItsCallerFor)
+	e.detached = context.WithoutCancel(e.caller)
+	e.ctx = e.detached
 }
 
-func (e *_Errand) endTheDetachedReplay() {
-	if e.detached != nil {
-		e.detached()
-	}
-}
-
-func (d *_Dispatcher) tellTheAttributedDeath(e *_Errand, final _Outcome, alone bool) {
-	refused, isRefused := final.(_Refused)
-	if d.heard == nil || !alone || !isRefused || e.ctx.Err() != nil {
+func (d *_Dispatcher) boundTheReplayFromItsAdmission(e *_Errand, held _Lease) {
+	if _, alone := held.(_Owned); !alone || e.detached == nil || e.bounded != nil {
 		return
 	}
-	d.heard(e.ctx, AttributedDeath{Cause: located(rootPlace, refused.err)})
+	e.ctx, e.bounded = context.WithTimeoutCause(e.detached, d.replayBound(), errReplayOutlived)
+}
+
+func (d *_Dispatcher) replayBound() time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.replays
+}
+
+func (e *_Errand) endTheReplayBound() {
+	if e.bounded != nil {
+		e.bounded()
+	}
+}
+
+func (e *_Errand) hasItsCallerLeft() bool {
+	return e.caller.Err() != nil
+}
+
+func (d *_Dispatcher) dropTheSuspectsWhoseCallersLeft() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var kept = d.suspects[:0]
+	for _, suspect := range d.suspects {
+		if suspect.hasItsCallerLeft() {
+			suspect.answers <- _Admission{err: cancelled(suspect.caller)}
+			continue
+		}
+		kept = append(kept, suspect)
+	}
+	d.suspects = kept
+	d.dispatch()
+}
+
+func (d *_Dispatcher) tellWhatTheReplayFound(e *_Errand, final _Outcome, alone bool) {
+	if d.heard == nil || e.detached == nil && !alone {
+		return
+	}
+	if refused, isRefused := final.(_Refused); alone && isRefused {
+		d.heard(e.detached, AttributedDeath{Cause: located(rootPlace, refused.err)})
+		return
+	}
+	if errors.Is(context.Cause(e.ctx), errReplayOutlived) {
+		d.heard(e.detached, AttributedDeath{Cause: located(rootPlace, failWith(unavailable, _DroppedReplay{limit: d.replayBound()}))})
+	}
 }
 
 func (e *_Errand) report(result _Outcome) {
@@ -281,11 +330,20 @@ func (d *_Dispatcher) dispatch() {
 			}
 			return
 		}
-		var next = (*queue)[0]
-		*queue = (*queue)[1:]
+		var next = takeTheNext(queue)
 		d.running++
 		next.answers <- _Admission{lease: d.lend(current.life)}
 	}
+}
+
+func takeTheNext(queue *[]*_Errand) *_Errand {
+	var index = slices.IndexFunc(*queue, func(e *_Errand) bool { return !e.hasItsCallerLeft() })
+	if index < 0 {
+		index = 0
+	}
+	var next = (*queue)[index]
+	*queue = slices.Delete(*queue, index, index+1)
+	return next
 }
 
 func (d *_Dispatcher) lend(l *_Life) _Lease {

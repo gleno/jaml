@@ -160,3 +160,101 @@ func TestAListenerOfAttributedDeathsMustBeGiven(t *testing.T) {
 		t.Fatalf("a nil listener is refused, got %v", err)
 	}
 }
+
+func boundTheReplaysOf(t *testing.T, sb *Sandbox, bound time.Duration) {
+	t.Helper()
+	var d = dispatcherOf(t, sb)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.replays = bound
+}
+
+func TestTheBoundOfAReplayWhoseCallerLeftStartsAtItsAdmissionAlone(t *testing.T) {
+	var d = &_Dispatcher{heard: func(context.Context, AttributedDeath) {}, replays: time.Minute}
+	var e = &_Errand{ctx: t.Context(), caller: t.Context()}
+	d.replayPastTheCaller(e)
+	defer e.endTheReplayBound()
+	if _, bounded := e.ctx.Deadline(); bounded {
+		t.Fatal("a suspect waiting in the queue is already bounded")
+	}
+	d.boundTheReplayFromItsAdmission(e, _Shared{})
+	if _, bounded := e.ctx.Deadline(); bounded {
+		t.Fatal("a shared lease bounded the replay")
+	}
+	var admitted = time.Now()
+	d.boundTheReplayFromItsAdmission(e, _Owned{})
+	deadline, bounded := e.ctx.Deadline()
+	if !bounded || deadline.Before(admitted.Add(time.Minute-time.Second)) {
+		t.Fatalf("the replay alone is bounded a minute from its admission, got %v %v", deadline, bounded)
+	}
+}
+
+func TestAReplayWhoseCallerLeftAndThatOutlivesItsBoundIsHeardAsDropped(t *testing.T) {
+	heard, listening := listenForDeaths()
+	var sb = mustIsolated(t, WithMaxConcurrency(2), listening)
+	boundTheReplaysOf(t, sb, 300*time.Millisecond)
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	var first = currentChild(t, sb)
+	asking, giveUp := context.WithCancel(tagged(t.Context(), "spin-left"))
+	defer giveUp()
+	var spun = make(chan error, 1)
+	go func() {
+		var out any
+		spun <- resolveInto(asking, &out, spin)
+	}()
+	go func() {
+		<-first.ended
+		giveUp()
+	}()
+	killMidJob(t, first)
+	if err := <-spun; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the caller that gave up is answered cancelled, got %v", err)
+	}
+	heard.awaitOne(t)
+	var deaths = heard.list()
+	if len(deaths) != 1 || deaths[0].tag != "spin-left" || !errors.Is(deaths[0].cause, ReplayDropped) || !errors.Is(deaths[0].cause, Unavailable) {
+		t.Fatalf("the dropped replay is heard once as ReplayDropped; heard %+v", deaths)
+	}
+}
+
+func TestSuspectsWhoseCallersLeftAreReplayedLastAndDroppedOnceTheDeathIsAttributed(t *testing.T) {
+	heard, listening := listenForDeaths()
+	var sb = mustIsolated(t, WithMemoryLimit(64<<20), WithMaxConcurrency(2), listening)
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	var bomb = mustExpression(t, sb, aBombPastSixtyFourMiB)
+	var log = recordRequests(t, sb)
+	var first = currentChild(t, sb)
+	asking, giveUp := context.WithCancel(tagged(t.Context(), "spin-left"))
+	defer giveUp()
+	var spun = make(chan error, 1)
+	go func() {
+		var out any
+		spun <- resolveInto(asking, &out, spin)
+	}()
+	go func() {
+		<-first.ended
+		giveUp()
+	}()
+	var deadline = time.Now().Add(30 * time.Second)
+	for !serving(first) {
+		if time.Now().After(deadline) {
+			t.Fatal("the spin was never handed to the evaluator")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var out any
+	var err = resolveInto(tagged(within(t, 60*time.Second), "bomb"), &out, bomb)
+	expectError(t, err, MemoryLimit)
+	if err := <-spun; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the spin whose caller left is answered cancelled, got %v", err)
+	}
+	heard.awaitOne(t)
+	time.Sleep(200 * time.Millisecond)
+	var deaths = heard.list()
+	if len(deaths) != 1 || deaths[0].tag != "bomb" || !errors.Is(deaths[0].cause, MemoryLimit) {
+		t.Fatalf("only the bomb is heard; heard %+v", deaths)
+	}
+	if served := len(log.served(unitOf(spin))); served != 1 {
+		t.Fatalf("the spin whose caller left was replayed after the death was attributed: served %d times", served)
+	}
+}
