@@ -154,7 +154,7 @@ func (d *_Dispatcher) tellTheAttributedDeath(e *_Errand, final _Outcome, alone b
 	if d.heard == nil || !alone || !isRefused || e.ctx.Err() != nil {
 		return
 	}
-	d.heard(e.ctx, AttributedDeath{Cause: refused.err})
+	d.heard(e.ctx, AttributedDeath{Cause: located(rootPlace, refused.err)})
 }
 
 func (e *_Errand) report(result _Outcome) {

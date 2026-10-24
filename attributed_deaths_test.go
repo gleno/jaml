@@ -75,7 +75,8 @@ func TestAMemoryBombAmongEightIsHeardAsTheOneAttributedDeath(t *testing.T) {
 	expectError(t, err, MemoryLimit)
 	heard.awaitOne(t)
 	var deaths = heard.list()
-	if len(deaths) != 1 || deaths[0].tag != "bomb" || !errors.Is(deaths[0].cause, MemoryLimit) {
+	var failure *Failure
+	if len(deaths) != 1 || deaths[0].tag != "bomb" || !errors.Is(deaths[0].cause, MemoryLimit) || !errors.As(deaths[0].cause, &failure) || failure.Reason != "exceeded the memory limit of 67108864 bytes" {
 		t.Fatalf("the bomb alone is heard, once, as a memory death; heard %+v", deaths)
 	}
 }
