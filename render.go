@@ -45,7 +45,10 @@ func (p _Place) item(index int) _Place {
 func (r *_Renderer) render(node any, place _Place) (any, error) {
 	if place.skips.skips() {
 		r.skipped = append(r.skipped, r.relative(place.path))
-		return nil, nil
+		// Let encoding/json allocate the view so its container replacement and
+		// merge rules decide which views survive the complete decode.
+		// Keep the former null's width for JSON error offsets.
+		return _Encoded("{}  "), nil
 	}
 	if place.root == nil {
 		place.root = r.compiled.staticRoot(node)
