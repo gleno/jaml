@@ -39,9 +39,12 @@ type _Starting struct{}
 
 type _Ready struct{ life *_Life }
 
-func (_Absent) isAvailability()   {}
-func (_Starting) isAvailability() {}
-func (_Ready) isAvailability()    {}
+type _Exclusive struct{ life *_Life }
+
+func (_Absent) isAvailability()    {}
+func (_Starting) isAvailability()  {}
+func (_Ready) isAvailability()     {}
+func (_Exclusive) isAvailability() {}
 
 type _Lease interface{ held() *_Life }
 
@@ -347,7 +350,7 @@ func (d *_Dispatcher) adopt(l *_Life) {
 }
 
 func (d *_Dispatcher) lose(l *_Life) {
-	if d.child != (_Ready{life: l}) {
+	if d.currentLife() != l {
 		return
 	}
 	d.child = _Absent{}
@@ -358,8 +361,8 @@ func (d *_Dispatcher) lose(l *_Life) {
 
 func (d *_Dispatcher) dispatch() {
 	for {
-		if current, isReady := d.child.(_Ready); isReady && !current.life.alive() {
-			d.lose(current.life)
+		if current := d.currentLife(); current != nil && !current.alive() {
+			d.lose(current)
 		}
 		if d.mode == recovering && d.running == 0 && len(d.suspects) == 0 {
 			d.mode = sharing
@@ -396,7 +399,7 @@ func (d *_Dispatcher) lend(l *_Life) _Lease {
 	if d.mode == sharing {
 		return _Shared{life: l}
 	}
-	d.child = _Absent{}
+	d.child = _Exclusive{life: l}
 	return _Owned{life: l}
 }
 
@@ -424,13 +427,23 @@ func (d *_Dispatcher) begin() {
 	d.dispatch()
 }
 
+func (d *_Dispatcher) currentLife() *_Life {
+	switch current := d.child.(type) {
+	case _Ready:
+		return current.life
+	case _Exclusive:
+		return current.life
+	}
+	return nil
+}
+
 func (d *_Dispatcher) health() Health {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var reported = Health{Restarts: d.restarts}
-	if current, isReady := d.child.(_Ready); isReady {
-		reported.Resident = current.life.board.resident.Load()
-		reported.AddressCeiling = int64(current.life.ceiling.Load())
+	if current := d.currentLife(); current != nil {
+		reported.Resident = current.board.resident.Load()
+		reported.AddressCeiling = int64(current.ceiling.Load())
 	}
 	return reported
 }
