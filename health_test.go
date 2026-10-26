@@ -3,6 +3,7 @@ package jaml
 import (
 	"encoding/json"
 	goruntime "runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -57,4 +58,82 @@ func TestAUsageFrameCarriesTheResidentMemoryOnlyWhenKnown(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectEqual(t, incoming.Usage.measured(), Usage{Resident: 42})
+}
+
+func TestHealthIncludesTheChildOnAnExclusiveReplay(t *testing.T) {
+	var life = &_Life{ended: make(chan struct{}), board: &_Switchboard{}}
+	life.board.resident.Store(123)
+	life.ceiling.Store(456)
+	var d = &_Dispatcher{mode: recovering, child: _Ready{life: life}, running: 1, restarts: 2}
+	if _, owned := d.lend(life).(_Owned); !owned {
+		t.Fatal("recovery did not take an exclusive lease")
+	}
+	expectEqual(t, d.health(), Health{Resident: 123, AddressCeiling: 456, Restarts: 2})
+	close(life.ended)
+	d.lose(life)
+	expectEqual(t, d.health(), Health{Restarts: 2})
+	var replacement = &_Life{ended: make(chan struct{}), board: &_Switchboard{}}
+	replacement.board.resident.Store(789)
+	d.child = _Ready{life: replacement}
+	d.lose(life)
+	expectEqual(t, d.health(), Health{Resident: 789, Restarts: 2})
+}
+
+func TestAnExclusiveChildRetiresBeforeTheNextReplayIsAdmitted(t *testing.T) {
+	for _, unexpected := range []bool{false, true} {
+		name := "released"
+		if unexpected {
+			name = "died"
+		}
+		t.Run(name, func(t *testing.T) {
+			fakeLife := func() (*_Life, func()) {
+				reaped := make(chan struct{})
+				close(reaped)
+				life := &_Life{ended: make(chan struct{}), reaped: reaped, board: &_Switchboard{}}
+				end := sync.OnceFunc(func() { close(life.ended) })
+				t.Cleanup(end)
+				return life, end
+			}
+			old, endOld := fakeLife()
+			replacement, endReplacement := fakeLife()
+			d := &_Dispatcher{mode: recovering, running: 1, limit: 1, child: _Ready{life: old}, start: func() (*_Life, error) { return replacement, nil }}
+			held := d.lend(old)
+			next := &_Errand{caller: t.Context(), answers: make(chan _Admission, 1)}
+			d.suspects = []*_Errand{next}
+			if unexpected {
+				endOld()
+				d.lose(old)
+			}
+			d.release(held)
+			if !unexpected {
+				d.mu.Lock()
+				if _, exclusive := d.child.(_Exclusive); !exclusive || d.running != 0 {
+					t.Errorf("the retiring child was forgotten before it ended: child %T, running %d", d.child, d.running)
+				}
+				d.mu.Unlock()
+			}
+			endOld()
+			d.mu.Lock()
+			d.lose(old)
+			d.dispatch()
+			d.mu.Unlock()
+			var admitted _Admission
+			select {
+			case admitted = <-next.answers:
+			case <-time.After(time.Second):
+				t.Fatal("retiring the owned child never admitted the next replay")
+			}
+			if owned, ok := admitted.lease.(_Owned); !ok || owned.life != replacement {
+				t.Fatalf("the next replay was not admitted alone on its replacement: %+v", admitted)
+			}
+			d.mu.Lock()
+			d.lose(old)
+			if d.currentLife() != replacement || d.mode != recovering || d.running != 1 {
+				t.Errorf("a stale death notification erased the replacement: child %T, mode %v, running %d", d.child, d.mode, d.running)
+			}
+			d.mu.Unlock()
+			d.release(admitted.lease)
+			endReplacement()
+		})
+	}
 }

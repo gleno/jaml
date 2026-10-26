@@ -28,6 +28,7 @@ type _KnownStruct struct {
 type _Followed struct {
 	address uintptr
 	kind    reflect.Type
+	length  int
 }
 
 func holdsValidText(value any) bool {
@@ -43,12 +44,24 @@ func (w _TextWalk) valid(value reflect.Value, depth int) bool {
 		return utf8.Valid(text)
 	}
 	switch value.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice:
+		var followed = _Followed{address: value.Pointer(), kind: value.Type()}
+		if value.Kind() == reflect.Slice {
+			followed.length = value.Len()
+		}
+		if w.followed[followed] {
+			return true
+		}
+		w.followed[followed] = true
+		defer delete(w.followed, followed)
+	}
+	switch value.Kind() {
 	case reflect.String:
 		return utf8.ValidString(value.String())
 	case reflect.Interface:
 		return w.valid(value.Elem(), depth)
 	case reflect.Pointer:
-		return w.validTarget(value, depth)
+		return w.valid(value.Elem(), depth)
 	case reflect.Slice:
 		return writtenAsBytes(value.Type()) || w.validItems(value, depth+1)
 	case reflect.Array:
@@ -102,16 +115,6 @@ func writtenAsBytes(kind reflect.Type) bool {
 	}
 	var pointer = reflect.PointerTo(item)
 	return !pointer.Implements(marshalerType) && !pointer.Implements(textMarshalerType)
-}
-
-func (w _TextWalk) validTarget(pointer reflect.Value, depth int) bool {
-	var followed = _Followed{address: pointer.Pointer(), kind: pointer.Type()}
-	if w.followed[followed] {
-		return true
-	}
-	w.followed[followed] = true
-	defer delete(w.followed, followed)
-	return w.valid(pointer.Elem(), depth)
 }
 
 func (w _TextWalk) validItems(items reflect.Value, depth int) bool {

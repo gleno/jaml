@@ -66,6 +66,7 @@ type _Console struct {
 	replay    _Replay
 	live      int
 	closed    bool
+	detached  bool
 	pumped    chan struct{}
 }
 
@@ -159,12 +160,27 @@ func (c *_Console) leave() {
 	c.changed.Broadcast()
 }
 
+// Attribution continues independently once its caller leaves. Its console still
+// flushes accepted lines, but must not make that caller await background work.
+func (c *_Console) followCaller(ctx context.Context) func() {
+	if c == nil {
+		return func() {}
+	}
+	var stop = context.AfterFunc(ctx, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.detached = true
+		c.changed.Broadcast()
+	})
+	return func() { stop() }
+}
+
 func (c *_Console) finish() {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	for c.live > 0 {
+	for c.live > 0 && !c.detached {
 		c.changed.Wait()
 	}
 	if c.tally.dropped > 0 {

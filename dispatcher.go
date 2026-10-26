@@ -39,9 +39,12 @@ type _Starting struct{}
 
 type _Ready struct{ life *_Life }
 
-func (_Absent) isAvailability()   {}
-func (_Starting) isAvailability() {}
-func (_Ready) isAvailability()    {}
+type _Exclusive struct{ life *_Life }
+
+func (_Absent) isAvailability()    {}
+func (_Starting) isAvailability()  {}
+func (_Ready) isAvailability()     {}
+func (_Exclusive) isAvailability() {}
 
 type _Lease interface{ held() *_Life }
 
@@ -58,12 +61,10 @@ type _Admission struct {
 }
 
 type _Errand struct {
-	ctx      context.Context
-	caller   context.Context
-	answers  chan _Admission
-	reports  chan _Outcome
-	detached context.Context
-	bounded  context.CancelFunc
+	caller  context.Context
+	answers chan _Admission
+	reports chan _Outcome
+	replay  *_ReplayLifetime
 }
 
 type _Attempt func(e *_Errand, l *_Life) _Outcome
@@ -95,7 +96,7 @@ func newDispatcher(spec _DispatcherSpec, first *_Life) *_Dispatcher {
 }
 
 func (d *_Dispatcher) carry(ctx context.Context, work _Attempt) _Outcome {
-	var e = &_Errand{ctx: ctx, caller: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
+	var e = &_Errand{caller: ctx, answers: make(chan _Admission, 1), reports: make(chan _Outcome, 1)}
 	d.mu.Lock()
 	d.waiting = append(d.waiting, e)
 	d.dispatch()
@@ -120,6 +121,7 @@ func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 		}
 		d.boundTheReplayFromItsAdmission(e, held)
 		var result = work(e, held.held())
+		e.endTheReplayBound()
 		final, replay := e.judge(held, result, d.heard != nil)
 		if replay {
 			var shared = !requeued && final.(_Lost).attributed()
@@ -130,7 +132,7 @@ func (d *_Dispatcher) run(e *_Errand, work _Attempt) {
 			d.requeue(e, shared)
 			continue
 		}
-		var alone = isADeathAlone(held, result)
+		var alone = isADeathAlone(held, result) && !e.replay.expired()
 		if alone && d.heard != nil {
 			d.dropTheSuspectsWhoseCallersLeft()
 		}
@@ -147,19 +149,64 @@ func isADeathAlone(held _Lease, result _Outcome) bool {
 	return alone && died
 }
 
+// A replay may outlive its caller, but only its exclusive child may do so.
+// The allowance starts at admission and becomes effective when the caller leaves.
+type _ReplayLifetime struct {
+	ctx      context.Context
+	stop     context.CancelCauseFunc
+	finished chan struct{}
+	limit    time.Duration
+}
+
+func (e *_Errand) context() context.Context {
+	if e.replay != nil {
+		return e.replay.ctx
+	}
+	return e.caller
+}
+
 func (d *_Dispatcher) replayPastTheCaller(e *_Errand) {
-	if d.heard == nil || e.detached != nil {
+	if d.heard == nil || e.replay != nil {
 		return
 	}
-	e.detached = context.WithoutCancel(e.caller)
-	e.ctx = e.detached
+	ctx, stop := context.WithCancelCause(context.WithoutCancel(e.caller))
+	e.replay = &_ReplayLifetime{ctx: ctx, stop: stop}
 }
 
 func (d *_Dispatcher) boundTheReplayFromItsAdmission(e *_Errand, held _Lease) {
-	if _, alone := held.(_Owned); !alone || e.detached == nil || e.bounded != nil {
+	owned, alone := held.(_Owned)
+	if !alone || e.replay == nil {
 		return
 	}
-	e.ctx, e.bounded = context.WithTimeoutCause(e.detached, d.replayBound(), errReplayOutlived)
+	e.replay.start(e.caller, d.replayBound(), func() { owned.life.kill(errReplayOutlived) })
+}
+
+func (r *_ReplayLifetime) start(caller context.Context, limit time.Duration, expired func()) {
+	r.limit = limit
+	r.finished = make(chan struct{})
+	var deadline = time.Now().Add(limit)
+	go func() {
+		defer close(r.finished)
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-caller.Done():
+		}
+		var timer = time.NewTimer(time.Until(deadline))
+		defer timer.Stop()
+		select {
+		case <-r.ctx.Done():
+		case <-timer.C:
+			r.stop(errReplayOutlived)
+			if r.expired() {
+				expired()
+			}
+		}
+	}()
+}
+
+func (r *_ReplayLifetime) expired() bool {
+	return r != nil && errors.Is(context.Cause(r.ctx), errReplayOutlived)
 }
 
 func (d *_Dispatcher) replayBound() time.Duration {
@@ -169,8 +216,12 @@ func (d *_Dispatcher) replayBound() time.Duration {
 }
 
 func (e *_Errand) endTheReplayBound() {
-	if e.bounded != nil {
-		e.bounded()
+	if e.replay == nil {
+		return
+	}
+	e.replay.stop(context.Canceled)
+	if e.replay.finished != nil {
+		<-e.replay.finished
 	}
 }
 
@@ -194,15 +245,11 @@ func (d *_Dispatcher) dropTheSuspectsWhoseCallersLeft() {
 }
 
 func (d *_Dispatcher) tellWhatTheReplayFound(e *_Errand, final _Outcome, alone bool) {
-	if d.heard == nil || e.detached == nil && !alone {
+	if d.heard == nil || !alone && !e.replay.expired() {
 		return
 	}
-	if refused, isRefused := final.(_Refused); alone && isRefused {
-		d.heard(e.detached, AttributedDeath{Cause: located(rootPlace, refused.err)})
-		return
-	}
-	if errors.Is(context.Cause(e.ctx), errReplayOutlived) {
-		d.heard(e.detached, AttributedDeath{Cause: located(rootPlace, failWith(unavailable, _DroppedReplay{limit: d.replayBound()}))})
+	if refused, isRefused := final.(_Refused); isRefused {
+		d.heard(context.WithoutCancel(e.caller), AttributedDeath{Cause: located(rootPlace, refused.err)})
 	}
 }
 
@@ -216,10 +263,12 @@ func (e *_Errand) report(result _Outcome) {
 func (e *_Errand) judge(held _Lease, result _Outcome, attributesPastTheCaller bool) (_Outcome, bool) {
 	died, isLost := result.(_Lost)
 	switch {
+	case e.replay.expired():
+		return _Refused{err: failWith(unavailable, _DroppedReplay{limit: e.replay.limit})}, false
 	case !isLost:
 		return result, false
-	case e.ctx.Err() != nil && !attributesPastTheCaller:
-		return _Refused{err: cancelled(e.ctx)}, false
+	case e.context().Err() != nil && !attributesPastTheCaller:
+		return _Refused{err: cancelled(e.context())}, false
 	}
 	if _, alone := held.(_Owned); alone {
 		return _Refused{err: blameless(died.cause), used: died.used}, false
@@ -237,12 +286,12 @@ func blameless(cause error) error {
 func (d *_Dispatcher) admit(e *_Errand) (_Lease, error) {
 	select {
 	case admitted := <-e.answers:
-		if admitted.err != nil || e.ctx.Err() == nil {
+		if admitted.err != nil || e.context().Err() == nil {
 			return admitted.lease, admitted.err
 		}
 		d.release(admitted.lease)
-		return nil, cancelled(e.ctx)
-	case <-e.ctx.Done():
+		return nil, cancelled(e.context())
+	case <-e.context().Done():
 	}
 	d.mu.Lock()
 	var withdrawn = d.withdraw(e)
@@ -252,7 +301,7 @@ func (d *_Dispatcher) admit(e *_Errand) (_Lease, error) {
 			d.release(admitted.lease)
 		}
 	}
-	return nil, cancelled(e.ctx)
+	return nil, cancelled(e.context())
 }
 
 func (d *_Dispatcher) release(held _Lease) {
@@ -301,7 +350,7 @@ func (d *_Dispatcher) adopt(l *_Life) {
 }
 
 func (d *_Dispatcher) lose(l *_Life) {
-	if d.child != (_Ready{life: l}) {
+	if d.currentLife() != l {
 		return
 	}
 	d.child = _Absent{}
@@ -312,8 +361,8 @@ func (d *_Dispatcher) lose(l *_Life) {
 
 func (d *_Dispatcher) dispatch() {
 	for {
-		if current, isReady := d.child.(_Ready); isReady && !current.life.alive() {
-			d.lose(current.life)
+		if current := d.currentLife(); current != nil && !current.alive() {
+			d.lose(current)
 		}
 		if d.mode == recovering && d.running == 0 && len(d.suspects) == 0 {
 			d.mode = sharing
@@ -350,7 +399,7 @@ func (d *_Dispatcher) lend(l *_Life) _Lease {
 	if d.mode == sharing {
 		return _Shared{life: l}
 	}
-	d.child = _Absent{}
+	d.child = _Exclusive{life: l}
 	return _Owned{life: l}
 }
 
@@ -378,13 +427,23 @@ func (d *_Dispatcher) begin() {
 	d.dispatch()
 }
 
+func (d *_Dispatcher) currentLife() *_Life {
+	switch current := d.child.(type) {
+	case _Ready:
+		return current.life
+	case _Exclusive:
+		return current.life
+	}
+	return nil
+}
+
 func (d *_Dispatcher) health() Health {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var reported = Health{Restarts: d.restarts}
-	if current, isReady := d.child.(_Ready); isReady {
-		reported.Resident = current.life.board.resident.Load()
-		reported.AddressCeiling = int64(current.life.ceiling.Load())
+	if current := d.currentLife(); current != nil {
+		reported.Resident = current.board.resident.Load()
+		reported.AddressCeiling = int64(current.ceiling.Load())
 	}
 	return reported
 }
