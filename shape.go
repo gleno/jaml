@@ -84,7 +84,13 @@ func (d *_ShapeDrawing) node(target reflect.Type) int {
 		}
 		return d.add(target, _ShapeNode{Expression: true})
 	}
+	var pointers = map[reflect.Type]bool{}
 	for target.Kind() == reflect.Pointer {
+		if pointers[target] {
+			d.refuse(d.cannotDecode(target, "a recursive pointer type "+target.String()))
+			return -1
+		}
+		pointers[target] = true
 		target = target.Elem()
 	}
 	if index, seen := d.nodes[target]; seen {
