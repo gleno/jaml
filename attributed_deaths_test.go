@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -170,22 +171,29 @@ func boundTheReplaysOf(t *testing.T, sb *Sandbox, bound time.Duration) {
 }
 
 func TestTheBoundOfAReplayWhoseCallerLeftStartsAtItsAdmissionAlone(t *testing.T) {
-	var d = &_Dispatcher{heard: func(context.Context, AttributedDeath) {}, replays: time.Minute}
-	var e = &_Errand{ctx: t.Context(), caller: t.Context()}
+	var d = &_Dispatcher{heard: func(context.Context, AttributedDeath) {}, replays: 20 * time.Millisecond}
+	caller, cancel := context.WithCancel(t.Context())
+	cancel()
+	var e = &_Errand{caller: caller}
 	d.replayPastTheCaller(e)
 	defer e.endTheReplayBound()
-	if _, bounded := e.ctx.Deadline(); bounded {
-		t.Fatal("a suspect waiting in the queue is already bounded")
+	time.Sleep(40 * time.Millisecond)
+	if e.context().Err() != nil {
+		t.Fatal("a queued replay consumed its allowance")
 	}
 	d.boundTheReplayFromItsAdmission(e, _Shared{})
-	if _, bounded := e.ctx.Deadline(); bounded {
-		t.Fatal("a shared lease bounded the replay")
+	if e.replay.finished != nil {
+		t.Fatal("a shared lease started the replay allowance")
 	}
-	var admitted = time.Now()
-	d.boundTheReplayFromItsAdmission(e, _Owned{})
-	deadline, bounded := e.ctx.Deadline()
-	if !bounded || deadline.Before(admitted.Add(time.Minute-time.Second)) {
-		t.Fatalf("the replay alone is bounded a minute from its admission, got %v %v", deadline, bounded)
+	var expired = make(chan struct{})
+	e.replay.start(caller, d.replayBound(), func() { close(expired) })
+	select {
+	case <-expired:
+	case <-time.After(time.Second):
+		t.Fatal("an admitted abandoned replay did not expire")
+	}
+	if !e.replay.expired() {
+		t.Fatal("the replay did not retain its expiry cause")
 	}
 }
 
@@ -257,4 +265,119 @@ func TestSuspectsWhoseCallersLeftAreReplayedLastAndDroppedOnceTheDeathIsAttribut
 	if served := len(log.served(unitOf(spin))); served != 1 {
 		t.Fatalf("the spin whose caller left was replayed after the death was attributed: served %d times", served)
 	}
+}
+
+func TestAReplayWithItsCallerPresentOutlivesTheRetentionBound(t *testing.T) {
+	heard, listening := listenForDeaths()
+	var sb = mustIsolated(t, listening)
+	boundTheReplaysOf(t, sb, 100*time.Millisecond)
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	var log = recordRequests(t, sb)
+	asking, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var done = make(chan error, 1)
+	go func() { _, err := Resolve[any](asking, spin); done <- err }()
+	awaitServed(t, log, spin, 1)
+	killChild(t, sb)
+	awaitServed(t, log, spin, 2)
+	select {
+	case err := <-done:
+		t.Fatalf("a present caller lost its replay to the retention bound: %v", err)
+	case <-time.After(400 * time.Millisecond):
+	}
+	if deaths := heard.list(); len(deaths) != 0 {
+		t.Fatalf("the present caller was reported dropped: %+v", deaths)
+	}
+	cancel()
+	expectError(t, <-done, context.Canceled)
+	heard.awaitOne(t)
+	if deaths := heard.list(); len(deaths) != 1 || !errors.Is(deaths[0].cause, ReplayDropped) {
+		t.Fatalf("a caller leaving past the bound must drop its replay once: %+v", deaths)
+	}
+}
+
+func TestAConsoleDoesNotKeepItsCallerWaitingForAnAttributionReplay(t *testing.T) {
+	heard, deathsOption := listenForDeaths()
+	var sb = mustIsolated(t, deathsOption)
+	boundTheReplaysOf(t, sb, 2*time.Second)
+	var spin = mustExpression(t, sb, threeThenSpin)
+	var log = recordRequests(t, sb)
+	asking, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx, lines := listening(asking)
+	var done = make(chan error, 1)
+	go func() { _, err := Resolve[any](ctx, spin); done <- err }()
+	awaitServed(t, log, spin, 1)
+	awaitConsoleLines(t, lines, len(threeLines))
+	killChild(t, sb)
+	awaitServed(t, log, spin, 2)
+	cancel()
+	select {
+	case err := <-done:
+		expectError(t, err, context.Canceled)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("a cancelled caller waited for its background attribution replay")
+	}
+	expectEqual(t, lines.all(), threeLines)
+	heard.awaitOne(t)
+	if deaths := heard.list(); len(deaths) != 1 || !errors.Is(deaths[0].cause, ReplayDropped) {
+		t.Fatalf("the independent replay must still be heard once: %+v", deaths)
+	}
+	expectEqual(t, lines.all(), threeLines)
+}
+
+func awaitConsoleLines(t *testing.T, lines *_Heard, count int) {
+	t.Helper()
+	var deadline = time.Now().Add(10 * time.Second)
+	for len(lines.all()) < count {
+		if time.Now().After(deadline) {
+			t.Fatal("the expected console lines never arrived")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestTheRetentionBoundIncludesRebuildingTheReplay(t *testing.T) {
+	heard, deathsOption := listenForDeaths()
+	var sb = mustIsolated(t, deathsOption, WithBuildTimeout(5*time.Second))
+	boundTheReplaysOf(t, sb, 200*time.Millisecond)
+	var spin = mustExpression(t, sb, "(() => { while (true) {} })()")
+	var log = recordRequests(t, sb)
+	var d = dispatcherOf(t, sb)
+	var replayed = make(chan *_Life, 1)
+	d.mu.Lock()
+	var start = d.start
+	var once sync.Once
+	d.start = func() (*_Life, error) {
+		child, err := start()
+		if err == nil {
+			once.Do(func() {
+				if err := child.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+					t.Errorf("stopping the replay child: %v", err)
+				}
+				replayed <- child
+			})
+		}
+		return child, err
+	}
+	d.mu.Unlock()
+	asking, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var done = make(chan error, 1)
+	go func() { _, err := Resolve[any](asking, spin); done <- err }()
+	awaitServed(t, log, spin, 1)
+	killChild(t, sb)
+	var child = <-replayed
+	cancel()
+	expectError(t, <-done, context.Canceled)
+	select {
+	case <-child.ended:
+	case <-time.After(time.Second):
+		t.Fatal("the abandoned replay ignored its retention bound while rebuilding")
+	}
+	heard.awaitOne(t)
+	if deaths := heard.list(); len(deaths) != 1 || !errors.Is(deaths[0].cause, ReplayDropped) {
+		t.Fatalf("retiring the overlong rebuild must report only ReplayDropped: %+v", deaths)
+	}
+	expectEqual(t, mustResolve[int](t, within(t, 5*time.Second), mustExpression(t, sb, "7")), 7)
 }

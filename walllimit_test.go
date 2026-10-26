@@ -100,7 +100,7 @@ func TestOnlyAWedgedChildPastAnOverseenLimitTurnsIntoTimeLimit(t *testing.T) {
 func TestATimedOutJobBlamesNoOtherJobsDeath(t *testing.T) {
 	overdue, stop := context.WithCancelCause(t.Context())
 	stop(_WallLimit(time.Millisecond).exhausted())
-	var errand = &_Errand{ctx: t.Context()}
+	var errand = &_Errand{caller: t.Context()}
 	var starved = _Lost{cause: _MemoryLimit(64).exhausted()}
 	judged, replayed := errand.judge(_Shared{}, overran(overdue, starved), false)
 	if !replayed || judged != _Outcome(starved) {
@@ -119,7 +119,7 @@ func TestATimedOutJobBlamesNoOtherJobsDeath(t *testing.T) {
 func TestAnOutsideDeathPastALimitStillClassifiesAsUnavailable(t *testing.T) {
 	overdue, stop := context.WithCancelCause(t.Context())
 	stop(_WallLimit(time.Millisecond).exhausted())
-	var errand = &_Errand{ctx: t.Context()}
+	var errand = &_Errand{caller: t.Context()}
 	var outside = _Lost{cause: _OutsideDeath("evaluator died (signal: killed): killed from outside jaml")}
 	judged, replayed := errand.judge(_Owned{}, overran(overdue, outside), false)
 	if replayed {
