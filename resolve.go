@@ -46,15 +46,64 @@ func (e *Expression) decodeInto(ctx context.Context, destination any, args []any
 	}
 	var ask = _Ask{path: e.path, values: valuesOf(ctx), scripts: scriptsOf(ctx), args: args, skips: skips, wallLimit: wallLimit, timeLimit: timeLimit}
 	return e.held.answer(ctx, ask, func(settled _Answered) error {
+		var decoded = reflect.ValueOf(destination).Elem()
 		if err := json.Unmarshal(settled.data, destination); err != nil {
+			if skips != nil {
+				discardViews(decoded, &_ShapeCursor{shape: skips})
+			}
 			return err
 		}
-		var decoded = reflect.ValueOf(destination).Elem()
 		for _, path := range settled.skipped {
-			bindView(decoded, path, &Expression{held: e.held, path: slices.Concat(e.path, path)})
+			if view := viewAt(decoded, path); view != nil {
+				view.held, view.path = e.held, slices.Concat(e.path, path)
+			}
 		}
 		return nil
 	})
+}
+
+// A failed decode historically left null at lazy fields. Clear only placeholders
+// in the final decoded topology, without replaying source paths or map decoders.
+func discardViews(value reflect.Value, cursor *_ShapeCursor) bool {
+	if cursor == nil {
+		return false
+	}
+	if cursor.skips() {
+		if !value.IsNil() && value.Interface().(*Expression).held == nil {
+			value.SetZero()
+			return true
+		}
+		return false
+	}
+	var changed bool
+	switch value.Kind() {
+	case reflect.Pointer:
+		if !value.IsNil() {
+			return discardViews(value.Elem(), cursor)
+		}
+	case reflect.Struct:
+		for _, field := range jsonFields(value.Type()) {
+			if held, found := fieldAt(value, field.index); found && discardViews(held, cursor.key(field.name)) {
+				changed = true
+			}
+		}
+	case reflect.Map:
+		for entries := value.MapRange(); entries.Next(); {
+			var held = reflect.New(value.Type().Elem()).Elem()
+			held.Set(entries.Value())
+			if discardViews(held, cursor.item()) {
+				value.SetMapIndex(entries.Key(), held)
+				changed = true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for index := range value.Len() {
+			if discardViews(value.Index(index), cursor.item()) {
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func admitScripts(scripts []string) ([]string, error) {
@@ -77,39 +126,36 @@ func skipsFor(target reflect.Type) (*_Shape, error) {
 	return &_Shape{Nodes: nodes}, nil
 }
 
-func bindView(value reflect.Value, path []string, view *Expression) {
+func viewAt(value reflect.Value, path []string) *Expression {
 	if len(path) == 0 {
-		if value.Type() == expressionPointer {
-			value.Set(reflect.ValueOf(view))
+		if value.Type() == expressionPointer && !value.IsNil() {
+			return value.Interface().(*Expression)
 		}
-		return
+		return nil
 	}
 	switch value.Kind() {
 	case reflect.Pointer:
-		if value.IsNil() {
-			value.Set(reflect.New(value.Type().Elem()))
+		if !value.IsNil() {
+			return viewAt(value.Elem(), path)
 		}
-		bindView(value.Elem(), path, view)
 	case reflect.Struct:
 		if field, found := fieldNamed(value, path[0]); found {
-			bindView(field, path[1:], view)
+			return viewAt(field, path[1:])
 		}
 	case reflect.Map:
 		key, readable := mapKey(value.Type().Key(), path[0])
 		if !readable {
-			return
+			return nil
 		}
-		var held = reflect.New(value.Type().Elem()).Elem()
 		if existing := value.MapIndex(key); existing.IsValid() {
-			held.Set(existing)
+			return viewAt(existing, path[1:])
 		}
-		bindView(held, path[1:], view)
-		value.SetMapIndex(key, held)
 	case reflect.Slice, reflect.Array:
-		if index, err := strconv.Atoi(path[0]); err == nil && index < value.Len() {
-			bindView(value.Index(index), path[1:], view)
+		if index, err := strconv.Atoi(path[0]); err == nil && index >= 0 && index < value.Len() {
+			return viewAt(value.Index(index), path[1:])
 		}
 	}
+	return nil
 }
 
 func mapKey(kind reflect.Type, written string) (reflect.Value, bool) {
@@ -143,15 +189,12 @@ func fieldNamed(value reflect.Value, key string) (reflect.Value, bool) {
 func fieldAt(value reflect.Value, index []int) (reflect.Value, bool) {
 	for _, step := range index {
 		if value.Kind() == reflect.Pointer {
-			if value.IsNil() && !value.CanSet() {
-				return reflect.Value{}, false
-			}
 			if value.IsNil() {
-				value.Set(reflect.New(value.Type().Elem()))
+				return reflect.Value{}, false
 			}
 			value = value.Elem()
 		}
 		value = value.Field(step)
 	}
-	return value, value.CanSet()
+	return value, value.CanInterface()
 }
