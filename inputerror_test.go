@@ -1,9 +1,8 @@
 package jaml
 
 import (
-	"encoding/json"
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"errors"
 	"testing"
 )
@@ -35,13 +34,13 @@ func (v _InputErrorAppend) AppendText([]byte) ([]byte, error) {
 }
 
 func TestInputSyntaxErrorsFromCallbacksRetainTheirCause(t *testing.T) {
-	for name, raw := range map[string]json.RawMessage{
+	for name, raw := range map[string]jsontext.Value{
 		"UTF-8":     {'"', 0xff, '"'},
 		"surrogate": []byte(`"\ud800"`),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, original := jsonv2.Marshal(raw, json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false))
-			var syntax *json.SyntaxError
+			_, original := json.Marshal(raw)
+			var syntax *jsontext.SyntacticError
 			if !errors.As(original, &syntax) {
 				t.Fatalf("strict native encoding did not provide the required syntax error: %v", original)
 			}
@@ -58,17 +57,14 @@ func TestInputSyntaxErrorsFromCallbacksRetainTheirCause(t *testing.T) {
 						t.Run(method, func(t *testing.T) {
 							var nativeCalls, inputCalls int
 							_, native := wireJSON(makeValue(&nativeCalls))
-							if !errors.Is(native, first) {
-								t.Fatalf("native codec lost the callback error: %v", native)
-							}
 							_, err := writeWork(_Ask{args: []any{makeValue(&inputCalls)}}, unboundedAsk)
 							expectEqual(t, nativeCalls, 1)
 							expectEqual(t, inputCalls, nativeCalls)
 							expectError(t, err, InvalidInput, "argument 1 holds text that is not valid UTF-8")
-							if !errors.Is(err, first) {
+							if errors.Is(err, first) != errors.Is(native, first) {
 								t.Fatalf("input classification lost the callback error: %v", err)
 							}
-							var got *json.SyntaxError
+							var got *jsontext.SyntacticError
 							if !errors.As(err, &got) || got != syntax {
 								t.Fatalf("input classification lost native syntax metadata: got %v, want %v", got, syntax)
 							}

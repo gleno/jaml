@@ -2,7 +2,7 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"reflect"
 	"strings"
@@ -84,7 +84,7 @@ func TestAnExpressionFieldBindsWhereverTheDocumentHasThePath(t *testing.T) {
 		type _Target struct {
 			Present *Expression `json:"present"`
 			Missing *Expression `json:"missing"`
-			Named   *Expression `json:"named"`
+			Named   *Expression `json:"named,case:ignore"`
 		}
 		var got = mustResolve[_Target](t, t.Context(), document)
 		if got.Missing != nil {
@@ -116,7 +116,7 @@ func TestTheTargetNeverObservesAPlaceholder(t *testing.T) {
 		expectEqual(t, got.Rest.raw, `{"inner":40}`)
 		expectEqual(t, mustResolve[int](t, t.Context(), got.Later, 1), 2)
 		type _Raw struct {
-			Later json.RawMessage `json:"later"`
+			Later jsontext.Value `json:"later"`
 		}
 		expectEqual(t, string(mustResolve[_Raw](t, t.Context(), document, 4).Later), "5")
 		expectEqual(t, mustResolve[map[string]any](t, t.Context(), document, 4), map[string]any{"later": float64(5), "rest": map[string]any{"inner": float64(40)}})
@@ -285,7 +285,6 @@ func TestCodeNeverFillsALazyField(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var refused = map[string]string{
 			"root.limit: object":      "root: \"${ {limit: {}} }\"\n",
-			"root.LIMIT: folded key":  "root: \"${ {LIMIT: 5} }\"\n",
 			"named.a: map value":      "named: \"${ {a: {}} }\"\n",
 			"each[1]: slice item":     "each: \"${ [null, 'x'] }\"\n",
 			"deep[0].k.limit: nested": "deep:\n  - \"${ {k: {limit: []}} }\"\n",
@@ -300,6 +299,7 @@ func TestCodeNeverFillsALazyField(t *testing.T) {
 			})
 		}
 		var accepted = []string{
+			"root: \"${ {LIMIT: 5} }\"\n",
 			"root: \"${ {limit: null} }\"\n",
 			"root: \"${ {} }\"\n",
 			"named: \"${ {a: null} }\"\n",

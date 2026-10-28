@@ -2,7 +2,7 @@ package jaml
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"maps"
@@ -133,9 +133,6 @@ func (e *_Encoding) mapping(w *_WireWriter, mapping *_Mapping) error {
 }
 
 func (e *_Encoding) list(w *_WireWriter, list []any) error {
-	if list == nil {
-		return w.raw("null")
-	}
 	w.mark('[')
 	for index, item := range list {
 		if index > 0 {
@@ -285,7 +282,7 @@ func writeOutlineValue(w *_WireWriter, o *_CodeOutline) *_OutlineWriting {
 }
 
 func (o *_CodeOutline) UnmarshalJSON(written []byte) error {
-	var tokens = json.NewDecoder(bytes.NewReader(written))
+	var tokens = jsontext.NewDecoder(bytes.NewReader(written))
 	first, err := readOutlineValue(tokens)
 	if err != nil {
 		return err
@@ -300,8 +297,8 @@ func (o *_CodeOutline) UnmarshalJSON(written []byte) error {
 	var open = []*_CodeOutline{o}
 	for len(open) > 0 {
 		var top = open[len(open)-1]
-		if !tokens.More() {
-			if _, err := tokens.Token(); err != nil {
+		if tokens.PeekKind() == '}' {
+			if _, err := tokens.ReadToken(); err != nil {
 				return err
 			}
 			if len(top.steps) == 0 {
@@ -310,15 +307,16 @@ func (o *_CodeOutline) UnmarshalJSON(written []byte) error {
 			open = open[:len(open)-1]
 			continue
 		}
-		key, err := tokens.Token()
+		key, err := tokens.ReadToken()
 		if err != nil {
 			return err
 		}
+		var name = key.String()
 		child, err := readOutlineValue(tokens)
 		if err != nil {
 			return err
 		}
-		top.steps[key.(string)] = child
+		top.steps[name] = child
 		if child != nil && child.steps != nil {
 			open = append(open, child)
 		}
@@ -326,17 +324,17 @@ func (o *_CodeOutline) UnmarshalJSON(written []byte) error {
 	return nil
 }
 
-func readOutlineValue(tokens *json.Decoder) (*_CodeOutline, error) {
-	token, err := tokens.Token()
+func readOutlineValue(tokens *jsontext.Decoder) (*_CodeOutline, error) {
+	token, err := tokens.ReadToken()
 	if err != nil {
 		return nil, err
 	}
-	switch token {
-	case true:
+	switch token.Kind() {
+	case 't':
 		return &_CodeOutline{}, nil
-	case nil:
+	case 'n':
 		return nil, nil
-	case json.Delim('{'):
+	case '{':
 		return &_CodeOutline{steps: map[string]*_CodeOutline{}}, nil
 	}
 	return nil, fmt.Errorf("a code outline step is %v, neither true nor an object", token)

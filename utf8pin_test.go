@@ -1,7 +1,9 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
 	"testing"
 	"unicode/utf8"
 )
@@ -49,17 +51,16 @@ var invalidUTF8Everywhere = map[string]any{
 	"map key":            map[string]int{"k\xff": 1},
 	"struct field":       _Labelled{Label: "a\xc3"},
 	"marshaled raw":      _WrittenJSON("\"\xff\""),
-	"raw message raw":    json.RawMessage("[\"\xff\"]"),
+	"raw message raw":    jsontext.Value("[\"\xff\"]"),
 	"cesu lone":          "\xed\xa0\x80",
 	"cesu pair":          "\xed\xa0\xbd\xed\xb8\x80",
-	"raw message cesu":   json.RawMessage("\"\xed\xa0\x80\""),
+	"raw message cesu":   jsontext.Value("\"\xed\xa0\x80\""),
 	"marshaled cesu":     _WrittenJSON("{\"\xed\xb0\x80\": 1}"),
 	"nested struct key":  map[string]_Labelled{"x": {Label: "\xff"}},
 	"text marshaler":     []any{_TextOf("a\xff")},
 	"text marshaler key": map[_TextKey]int{{text: "k\xfe"}: 1},
 	"pointer":            pointerTo("p\xff"),
 	"array":              [2]string{"ok", "\xff"},
-	"misnamed field":     _Misnamed{Label: "fine"},
 	"embedded field":     _Embedding{_Labelled: _Labelled{Label: "\xff"}},
 	"deep":               map[string][]map[string]*_Labelled{"a": {{"b": {Label: "\xc3"}}}},
 }
@@ -101,37 +102,35 @@ func TestValidTextIsAdmittedInEveryPosition(t *testing.T) {
 	})
 }
 
-func TestAReplacementEscapeWrittenAsJSONIsRefusedLikeInvalidUTF8(t *testing.T) {
+func TestAReplacementEscapeWrittenAsJSONUsesNativeSemantics(t *testing.T) {
 	var escape = "\\ufffd"
 	var replacement = "\ufffd"
 	var written = map[string]any{
-		"raw message":       json.RawMessage(`"` + escape + `"`),
-		"raw message upper": json.RawMessage(`"\uFFFD"`),
+		"raw message":       jsontext.Value(`"` + escape + `"`),
+		"raw message upper": jsontext.Value(`"\uFFFD"`),
 		"marshaled key":     _WrittenJSON(`{"` + escape + `": 1}`),
 		"marshaled text":    _WrittenJSON(`["a` + escape + `b"]`),
 	}
 	expectEscapeText(t, escape)
-	encoded, err := wireJSON(written["raw message"])
-	if err != nil {
-		t.Fatal(err)
+	if err := unboundedWriter().quoted("x\xff"); !errors.Is(err, errInvalidText) {
+		t.Fatalf("invalid UTF-8: %v", err)
 	}
-	expectEqual(t, string(encoded), `"`+escape+`"`)
-	var own = unboundedWriter()
-	if err := own.quoted("x\xff"); err != nil {
-		t.Fatal(err)
-	}
-	expectEqual(t, string(own.written), `"x`+escape+`"`)
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var compiled = mustExpression(t, sb, "(a) => [real, typed, a]")
+		var compiled = mustExpression(t, sb, "(a) => a")
 		for name, value := range written {
 			t.Run(name, func(t *testing.T) {
-				var _, err = Resolve[[]string](withValues(t, map[string]any{"bad": value}), compiled, 1)
-				expectError(t, err, InvalidInput, `binding values: value "bad" holds text that is not valid UTF-8`)
-				_, err = Resolve[[]string](t.Context(), compiled, value)
-				expectError(t, err, InvalidInput, "binding arguments: argument 1 holds text that is not valid UTF-8")
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want any
+				if err := json.Unmarshal(encoded, &want); err != nil {
+					t.Fatal(err)
+				}
+				expectEqual(t, mustResolve[any](t, t.Context(), compiled, value), want)
+				expectEqual(t, mustResolve[any](t, withValues(t, map[string]any{"value": value}), mustExpression(t, sb, "value")), want)
 			})
 		}
-		var values = map[string]any{"real": replacement, "typed": escape}
-		expectEqual(t, mustResolve[[]string](t, withValues(t, values), compiled, replacement), []string{replacement, escape, replacement})
+		expectEqual(t, mustResolve[string](t, t.Context(), compiled, replacement), replacement)
 	})
 }

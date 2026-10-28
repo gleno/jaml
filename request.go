@@ -3,9 +3,8 @@ package jaml
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
@@ -366,9 +365,6 @@ func (w *_WireWriter) datum(value any, depth int) error {
 }
 
 func (w *_WireWriter) items(items []any, depth int) error {
-	if items == nil {
-		return w.raw("null")
-	}
 	if err := w.raw("["); err != nil {
 		return err
 	}
@@ -384,9 +380,6 @@ func (w *_WireWriter) items(items []any, depth int) error {
 }
 
 func (w *_WireWriter) members(members map[string]any, depth int) error {
-	if members == nil {
-		return w.raw("null")
-	}
 	if err := w.raw("{"); err != nil {
 		return err
 	}
@@ -406,15 +399,10 @@ func (w *_WireWriter) members(members map[string]any, depth int) error {
 }
 
 func (w *_WireWriter) marshalled(value any) error {
-	if !holdsValidText(value) {
-		return errInvalidText
-	}
-	var err = jsonv2.MarshalWrite(_EncoderSink{w: w}, value,
-		json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false), jsontext.EscapeForHTML(false))
-	var syntax *json.SyntaxError
-	if errors.As(err, &syntax) && (syntax.Error() == "invalid UTF-8" || strings.HasPrefix(syntax.Error(), "invalid surrogate pair ")) {
-		// Legacy conversion hides the native invalid-text sentinel. Preserve the
-		// cause: an application callback may itself return a native syntax error.
+	var err = json.MarshalWrite(_EncoderSink{w: w}, value)
+	var syntax *jsontext.SyntacticError
+	if errors.As(err, &syntax) && syntax.Err != nil && (syntax.Err.Error() == "invalid UTF-8" || strings.HasPrefix(syntax.Err.Error(), "invalid surrogate pair ")) {
+		// Keep JAML's text classification while retaining the native error chain.
 		return _InvalidText{cause: err}
 	}
 	return err

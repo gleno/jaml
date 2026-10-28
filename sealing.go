@@ -42,15 +42,21 @@ func (f _Frames) answer(job uint64, result _Rendered, used Usage) []byte {
 
 func (f _Frames) failure(job uint64, path string, err error) []byte {
 	var sealed = f.open(job)
-	if sealed.failure(located(path, err)) != nil || sealed.raw("}") != nil {
-		return f.refusal(job, path)
+	if failure := sealed.failure(located(path, err)); failure != nil {
+		return f.failedFrame(job, path, failure)
+	}
+	if err := sealed.raw("}"); err != nil {
+		return f.failedFrame(job, path, err)
 	}
 	return sealed.written
 }
 
 func (f _Frames) measuredFailure(job uint64, path string, err error, used Usage) []byte {
 	var sealed = f.open(job)
-	if sealed.failure(located(path, err)) != nil || sealed.usage(used) != nil || sealed.raw("}") != nil {
+	if failure := sealed.failure(located(path, err)); failure != nil {
+		return f.failedFrame(job, path, failure)
+	}
+	if sealed.usage(used) != nil || sealed.raw("}") != nil {
 		return f.refusal(job, path)
 	}
 	return sealed.written
@@ -70,6 +76,14 @@ func usageJSON(used Usage) string {
 func (f _Frames) refusal(job uint64, path string) []byte {
 	var unbounded = _Frames{limit: math.MaxInt}
 	return unbounded.failure(job, path, fmt.Errorf("the answer is larger than %d bytes", f.limit))
+}
+
+// A rejected diagnostic must not re-encode the same invalid location forever.
+func (f _Frames) failedFrame(job uint64, path string, err error) []byte {
+	if errors.As(err, new(_PastLimit)) {
+		return f.refusal(job, path)
+	}
+	return (_Frames{limit: math.MaxInt}).failure(job, "$", failWith(coercionFailed, err))
 }
 
 func (w *_WireWriter) answer(result _Rendered, used Usage) error {

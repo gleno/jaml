@@ -2,8 +2,7 @@ package jaml
 
 import (
 	"encoding"
-	"encoding/json"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"reflect"
 	"slices"
 	"strings"
@@ -17,16 +16,16 @@ type _Shape struct {
 }
 
 type _ShapeNode struct {
-	Expression bool          `json:"expression,omitempty"`
+	Expression bool          `json:"expression,omitzero"`
 	Fields     []_ShapeField `json:"fields,omitempty"`
-	Items      int           `json:"items,omitempty"`
-	Fallback   int           `json:"fallback,omitempty"`
+	Items      int           `json:"items,omitzero"`
+	Fallback   int           `json:"fallback,omitzero"`
 }
 
 type _ShapeField struct {
 	Name   string `json:"name"`
 	Node   int    `json:"node"`
-	Strict bool   `json:"strict,omitempty"`
+	Strict bool   `json:"strict,omitzero"`
 }
 
 type _ShapeCursor struct {
@@ -38,7 +37,7 @@ var (
 	expressionType      = reflect.TypeFor[Expression]()
 	expressionPointer   = reflect.TypeFor[*Expression]()
 	unmarshalerType     = reflect.TypeFor[json.Unmarshaler]()
-	unmarshalerFromType = reflect.TypeFor[jsonv2.UnmarshalerFrom]()
+	unmarshalerFromType = reflect.TypeFor[json.UnmarshalerFrom]()
 	textType            = reflect.TypeFor[encoding.TextUnmarshaler]()
 	shapes              sync.Map
 )
@@ -112,6 +111,12 @@ func (d *_ShapeDrawing) node(target reflect.Type) int {
 	}
 	switch target.Kind() {
 	case reflect.Struct:
+		// Decode an empty object to validate native struct metadata without
+		// visiting field values. Custom decoders were made opaque above.
+		if err := json.Unmarshal([]byte("{}"), reflect.New(target).Interface()); err != nil {
+			d.refuse(failWith(invalidTarget, err).at(rootPlace))
+			return -1
+		}
 		var index = d.add(target, _ShapeNode{})
 		var fields []_ShapeField
 		var layout = jsonLayout(target)
@@ -165,12 +170,23 @@ func undecodable(target reflect.Type) string {
 }
 
 func decodableKey(key reflect.Type) bool {
+	var seen = map[reflect.Type]bool{}
+	for key.Kind() == reflect.Pointer && !decodesItself(key) {
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+		key = key.Elem()
+	}
 	switch key.Kind() {
-	case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+	case reflect.String, reflect.Float32, reflect.Float64, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return true
 	}
-	return reflect.PointerTo(key).Implements(textType)
+	if decodesItself(key) {
+		return true
+	}
+	return key.Kind() == reflect.Interface && key.NumMethod() == 0 || key.Kind() == reflect.Array && key.Elem().Kind() == reflect.Uint8
 }
 
 func decodesItself(target reflect.Type) bool {
@@ -241,18 +257,24 @@ func matchKey(count int, name func(int) string, strict func(int) bool, key strin
 		}
 	}
 	var folded = foldName(key)
+	var matched = -1
 	for i := range count {
 		if !strict(i) && foldName(name(i)) == folded {
-			return i
+			if matched >= 0 {
+				return -2 // native JSONv2 rejects ambiguous case-insensitive names
+			}
+			matched = i
 		}
 	}
-	return -1
+	return matched
 }
 
 func foldName(name string) string {
 	var folded strings.Builder
 	for _, r := range name {
 		switch {
+		case r == '-' || r == '_':
+			continue
 		case r < utf8.RuneSelf && 'a' <= r && r <= 'z':
 			folded.WriteRune(r - 'a' + 'A')
 		case r < utf8.RuneSelf:
@@ -293,6 +315,9 @@ func (c *_ShapeCursor) key(key string) *_ShapeCursor {
 		return &_ShapeCursor{shape: c.shape, node: node.Items - 1}
 	}
 	var chosen = matchKey(len(node.Fields), func(i int) string { return node.Fields[i].Name }, func(i int) bool { return node.Fields[i].Strict }, key)
+	if chosen == -2 {
+		return nil
+	}
 	if chosen < 0 {
 		return c.fallback()
 	}

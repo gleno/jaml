@@ -132,7 +132,7 @@ func TestLegacyOctalStaysText(t *testing.T) {
 		var got = evalAs[map[string]any](t, parsed, nil)
 		expectEqual(t, got, map[string]any{"legacy": "0644", "negative": "-0755", "explicit": float64(420), "zero": float64(0), "tagged": float64(420)})
 		var mode int
-		expectError(t, resolveInto(t.Context(), &mode, parsed.At("legacy")), CoercionFailed, "$.legacy", "cannot unmarshal string")
+		expectError(t, resolveInto(t.Context(), &mode, parsed.At("legacy")), CoercionFailed, "$.legacy", "unmarshal JSON string")
 	})
 }
 

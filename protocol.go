@@ -1,9 +1,8 @@
 package jaml
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +23,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 27
+	protocolVersion      = 28
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -36,7 +35,7 @@ type _Hello struct {
 	Magic   string `json:"magic"`
 	Version int    `json:"version"`
 	Nonce   string `json:"nonce"`
-	Ceiling uint64 `json:"ceiling,omitempty"`
+	Ceiling uint64 `json:"ceiling,omitzero"`
 }
 
 type _Opcode string
@@ -50,18 +49,18 @@ const (
 
 type _Request struct {
 	Op   _Opcode     `json:"op"`
-	Job  uint64      `json:"job,omitempty"`
-	Unit uint64      `json:"unit,omitempty"`
-	Plan *_Blueprint `json:"plan,omitempty"`
-	Work *_Work      `json:"work,omitempty"`
+	Job  uint64      `json:"job,omitzero"`
+	Unit uint64      `json:"unit,omitzero"`
+	Plan *_Blueprint `json:"plan,omitzero"`
+	Work *_Work      `json:"work,omitzero"`
 }
 
 type _Blueprint struct {
 	Written   string   `json:"written"`
 	Null      Coercion `json:"null"`
 	Undefined Coercion `json:"undefined"`
-	Raw       bool     `json:"raw,omitempty"`
-	Function  bool     `json:"function,omitempty"`
+	Raw       bool     `json:"raw,omitzero"`
+	Function  bool     `json:"function,omitzero"`
 	Sigil     string   `json:"sigil,omitempty"`
 }
 
@@ -70,30 +69,30 @@ type _Work struct {
 	Values    _BoundValues `json:"values,omitempty"`
 	Scripts   []string     `json:"scripts,omitempty"`
 	Args      []_Datum     `json:"args,omitempty"`
-	Skips     *_Shape      `json:"skips,omitempty"`
+	Skips     *_Shape      `json:"skips,omitzero"`
 	Pinned    _Pinned      `json:"pinned"`
-	WallLimit _WallLimit   `json:"wall,omitempty"`
-	TimeLimit _TimeLimit   `json:"limit,omitempty"`
-	Console   bool         `json:"console,omitempty"`
+	WallLimit _WallLimit   `json:"wall,omitzero"`
+	TimeLimit _TimeLimit   `json:"limit,omitzero"`
+	Console   bool         `json:"console,omitzero"`
 }
 
 type _Reply struct {
 	Job      uint64        `json:"job"`
-	Built    bool          `json:"built,omitempty"`
-	Code     *_CodeOutline `json:"code,omitempty"`
-	Data     _Borrowed     `json:"data,omitempty"`
+	Built    bool          `json:"built,omitzero"`
+	Code     *_CodeOutline `json:"code,omitzero"`
+	Data     _Borrowed     `json:"data,omitzero"`
 	Skipped  [][]string    `json:"skipped,omitempty"`
-	Failure  *_Failure     `json:"failure,omitempty"`
-	Missing  bool          `json:"missing,omitempty"`
-	Compiled bool          `json:"compiled,omitempty"`
-	Line     *_LineOnWire  `json:"line,omitempty"`
-	Usage    *_UsageOnWire `json:"usage,omitempty"`
+	Failure  *_Failure     `json:"failure,omitzero"`
+	Missing  bool          `json:"missing,omitzero"`
+	Compiled bool          `json:"compiled,omitzero"`
+	Line     *_LineOnWire  `json:"line,omitzero"`
+	Usage    *_UsageOnWire `json:"usage,omitzero"`
 }
 
 type _UsageOnWire struct {
 	CPU      int64 `json:"cpu"`
 	Wall     int64 `json:"wall"`
-	Resident int64 `json:"rss,omitempty"`
+	Resident int64 `json:"rss,omitzero"`
 }
 
 func (u *_UsageOnWire) reported() *Usage {
@@ -126,13 +125,7 @@ func framesFor(limit _MemoryLimit) _Frames {
 }
 
 func wireJSON(value any) ([]byte, error) {
-	var encoded bytes.Buffer
-	var encoder = json.NewEncoder(&encoded)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(encoded.Bytes(), []byte("\n")), nil
+	return json.Marshal(value)
 }
 
 func (f _Frames) replies(source io.Reader, quiet *_Quiet) *_FrameReader {
@@ -150,7 +143,7 @@ type _Failure struct {
 	Label   string         `json:"label,omitempty"`
 	Cause   string         `json:"cause,omitempty"`
 	Message string         `json:"message"`
-	Thrown  *_ThrownOnWire `json:"thrown,omitempty"`
+	Thrown  *_ThrownOnWire `json:"thrown,omitzero"`
 }
 
 type _ThrownOnWire struct {

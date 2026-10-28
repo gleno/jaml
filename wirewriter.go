@@ -113,6 +113,9 @@ func (w *_WireWriter) number(number float64) error {
 }
 
 func (w *_WireWriter) quoted(text string) error {
+	if !utf8.ValidString(text) {
+		return errInvalidText
+	}
 	var length = quotedLength(text)
 	if len(w.written)+length > w.limit {
 		return _PastLimit{}
@@ -150,18 +153,11 @@ func escapeAt(text string, index int) (string, int) {
 	switch {
 	case character == utf8.RuneError && width == 1:
 		return "\\ufffd", 1
-	case character == 0x2028:
-		return "\\u2028", width
-	case character == 0x2029:
-		return "\\u2029", width
 	}
 	return "", width
 }
 
 func (w *_WireWriter) list(list []any) error {
-	if list == nil {
-		return w.raw("null")
-	}
 	w.mark('[')
 	for index, item := range list {
 		if index > 0 {
@@ -175,9 +171,6 @@ func (w *_WireWriter) list(list []any) error {
 }
 
 func (w *_WireWriter) object(object map[string]any) error {
-	if object == nil {
-		return w.raw("null")
-	}
 	w.mark('{')
 	for index, key := range slices.Sorted(maps.Keys(object)) {
 		if err := w.field(index, key, object[key]); err != nil {

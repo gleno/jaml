@@ -2,14 +2,15 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 )
 
-func TestTargetsDecodeThroughEncodingJSON(t *testing.T) {
+func TestTargetsDecodeThroughJSONv2(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		type _Limits struct {
 			Retries *int `json:"retries"`
@@ -18,7 +19,7 @@ func TestTargetsDecodeThroughEncodingJSON(t *testing.T) {
 			Name   string            `json:"name"`
 			Labels map[string]string `json:"labels"`
 			Limits _Limits           `json:"limits"`
-			Extra  json.RawMessage   `json:"extra"`
+			Extra  jsontext.Value    `json:"extra"`
 			Hidden string            `json:"-"`
 		}
 		var parsed = mustJaml(t, sb, `
@@ -43,10 +44,10 @@ services:
 func TestMismatchedTypesAreCoercionErrors(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		type _Decoded struct {
-			Port int `json:"port"`
+			Port int `json:"port,case:ignore"`
 		}
 		var out _Decoded
-		expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, "port: ${'eighty'}\n")), CoercionFailed, "$.port: json: cannot unmarshal string into Go struct field _Decoded.port")
+		expectError(t, resolveInto(t.Context(), &out, mustJaml(t, sb, "port: ${'eighty'}\n")), CoercionFailed, "$.port:", "unmarshal JSON string", "Go int")
 		var text string
 		expectError(t, resolveInto(t.Context(), &text, mustJaml(t, sb, "v: ${1}\n").At("v")), CoercionFailed, "$.v")
 	})
@@ -122,7 +123,7 @@ func TestATargetJSONCannotDecodeIntoAnywhereIsRefusedBeforeCodeRuns(t *testing.T
 		{"func in a nested field", resolving[_UndecodableNested], []string{"a func(), as jaml._UndecodableNested holds"}},
 		{"interface in a map", resolving[map[string]error], []string{"the interface error, as map[string]error holds"}},
 		{"complex in an array", resolving[*[2]complex128], []string{"a complex128, as *[2]complex128 holds"}},
-		{"bad key under a pointer", resolving[**map[float64]string], []string{"map[float64]string, whose keys are float64"}},
+		{"bad key under a pointer", resolving[**map[bool]string], []string{"map[bool]string, whose keys are bool"}},
 	}
 	allSandboxKinds.each(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "a: ${ (() => { throw new Error('ran') })() }\n")
@@ -189,7 +190,7 @@ config:
       port: {number: "two"}
 `
 
-func TestAnUnmarshalerOffsetIsNeverMappedOntoTheDocument(t *testing.T) {
+func TestNativeDecoderLocatesCustomUnmarshalerErrors(t *testing.T) {
 	var cases = map[string]func() any{
 		"wrapping":   func() any { return new(_PortsConfig[_WrappingPort]) },
 		"delegating": func() any { return new(_PortsConfig[_DelegatingPort]) },
@@ -197,14 +198,11 @@ func TestAnUnmarshalerOffsetIsNeverMappedOntoTheDocument(t *testing.T) {
 	for name, newOut := range cases {
 		t.Run(name, func(t *testing.T) {
 			var both = _Agreement{text: portsTemplate, path: []string{"config"}}.eval(t, newOut)
-			both.expectRefused(t, CoercionFailed, "$.config: ", "json: cannot unmarshal string")
+			both.expectRefused(t, CoercionFailed, "$.config.servers[1].port", "unmarshal JSON string")
 			for _, err := range []error{both.trusted, both.isolated} {
-				if strings.Contains(err.Error(), "$.config.") {
-					t.Fatalf("blamed a path inside the selection: %v", err)
-				}
-				var mismatch *json.UnmarshalTypeError
+				var mismatch *json.SemanticError
 				if !errors.As(err, &mismatch) {
-					t.Fatalf("expected *json.UnmarshalTypeError in %v", err)
+					t.Fatalf("expected *json.SemanticError in %v", err)
 				}
 			}
 		})
@@ -221,27 +219,27 @@ type _EmbeddingAndMap struct {
 }
 
 func TestBlameStillReachesEmbeddedFieldsAndMapValues(t *testing.T) {
-	_Agreement{text: "port: x\nlimits: {cpu: 1}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.port: json: cannot unmarshal string")
-	_Agreement{text: "port: 1\nlimits: {cpu: 1, mem: x}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.limits.mem: json: cannot unmarshal string")
+	_Agreement{text: "port: x\nlimits: {cpu: 1}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.port:", "unmarshal JSON string")
+	_Agreement{text: "port: 1\nlimits: {cpu: 1, mem: x}\n"}.eval(t, func() any { return new(_EmbeddingAndMap) }).expectRefused(t, CoercionFailed, "$.limits.mem:", "unmarshal JSON string")
 }
 
-func TestCoercionBlameFollowsEncodingJSONKeyMatching(t *testing.T) {
+func TestCoercionBlameFollowsJSONv2KeyMatching(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		type _Port struct {
-			Port int `json:"port"`
+			Port int `json:"port,case:ignore"`
 		}
 		type _Servers struct {
 			Servers []_Port `json:"servers"`
 		}
 		_, err := Resolve[_Servers](t.Context(), mustJaml(t, sb, "servers: [{PORT: 1}, {PORT: x}]\n"))
-		expectError(t, err, CoercionFailed, "$.servers[1].PORT: json: cannot unmarshal string")
+		expectError(t, err, CoercionFailed, "$.servers[1].PORT:", "unmarshal JSON string")
 		type _Both struct {
 			Port  int    `json:"port"`
 			Upper string `json:"PORT"`
 		}
 		_, err = Resolve[_Both](t.Context(), mustJaml(t, sb, "port: 1\nPORT: 2\n"))
-		expectError(t, err, CoercionFailed, "$.PORT: json: cannot unmarshal number")
+		expectError(t, err, CoercionFailed, "$.PORT:", "unmarshal JSON number")
 		_, err = Resolve[_Both](t.Context(), mustJaml(t, sb, "PORT: s\nport: s\n"))
-		expectError(t, err, CoercionFailed, "$.port: json: cannot unmarshal string")
+		expectError(t, err, CoercionFailed, "$.port:", "unmarshal JSON string")
 	})
 }

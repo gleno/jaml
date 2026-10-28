@@ -3,7 +3,8 @@ package jaml
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"iter"
 	"strconv"
@@ -18,7 +19,7 @@ const (
 )
 
 type _Datum struct {
-	encoded json.RawMessage
+	encoded jsontext.Value
 }
 
 type _BoundValues map[string]_Datum
@@ -162,11 +163,9 @@ func admissibleText(text []byte) bool {
 	if bytes.IndexByte(text, '\\') < 0 {
 		return true
 	}
-	var replaced = false
 	var units = func(yield func(uint16) bool) {
 		for i := 0; i < len(text); {
 			unit, size := nextUnit(text[i:])
-			replaced = replaced || size == len(`\ufffd`) && unit == utf8.RuneError
 			if !yield(unit) {
 				return
 			}
@@ -179,7 +178,7 @@ func admissibleText(text []byte) bool {
 			i += size
 		}
 	}
-	return wellFormedUnits(units) && !replaced
+	return wellFormedUnits(units)
 }
 
 func nextUnit(text []byte) (uint16, int) {

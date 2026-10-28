@@ -2,7 +2,7 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"regexp"
 	"testing"

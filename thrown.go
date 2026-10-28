@@ -1,7 +1,7 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 
 	"github.com/dop251/goja"
 )

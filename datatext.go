@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"math"
@@ -31,8 +30,6 @@ func writeData(text *strings.Builder, value any) error {
 		text.WriteString(strconv.FormatInt(typed, 10))
 	case float64:
 		writeNumber(text, typed)
-	case json.Number:
-		text.WriteString(typed.String())
 	case []any:
 		return writeList(text, typed)
 	case map[string]any:

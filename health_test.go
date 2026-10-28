@@ -1,7 +1,7 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	goruntime "runtime"
 	"sync"
 	"testing"

@@ -1,98 +1,54 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"testing"
 )
 
 type _LazyPair struct {
-	A *Expression
-	B *Expression
+	A *Expression `json:"a"`
+	B *Expression `json:"b"`
 }
 
 type _LazyContainers struct {
-	Map     map[string]_LazyPair
-	Pointer *_LazyPair
-	Array   [2]_LazyPair
-	Slice   []_LazyPair
-	Value   _LazyPair
+	Map     map[string]_LazyPair `json:"map"`
+	Pointer *_LazyPair           `json:"pointer"`
+	Array   [2]_LazyPair         `json:"array"`
+	Slice   []_LazyPair          `json:"slice"`
+	Value   _LazyPair            `json:"value"`
 }
 
 func TestLazyViewsFollowJSONContainerReplacement(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		for name, test := range map[string]struct {
-			text  string
-			check func(*testing.T, _LazyContainers)
-		}{
-			"cleared map": {
-				"map: {k: {a: '${1}'}}\nMAP: null\n",
-				func(t *testing.T, got _LazyContainers) { expectEqual(t, got.Map, map[string]_LazyPair(nil)) },
-			},
-			"cleared pointer": {
-				"pointer: {a: '${1}'}\nPOINTER: null\n",
-				func(t *testing.T, got _LazyContainers) { expectEqual(t, got.Pointer, (*_LazyPair)(nil)) },
-			},
-			"replaced map entry": {
-				"map: {k: {a: '${1}'}}\nMAP: {k: {b: '${2}'}}\n",
-				func(t *testing.T, got _LazyContainers) {
-					expectEqual(t, got.Map["k"].A, (*Expression)(nil))
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Map["k"].B), 2)
-				},
-			},
-			"array tail zeroed": {
-				"array: [{a: '${1}'}, {a: '${2}'}]\nARRAY: [{b: '${3}'}]\n",
-				func(t *testing.T, got _LazyContainers) {
-					expectEqual(t, got.Array[1], _LazyPair{})
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Array[0].A), 1)
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Array[0].B), 3)
-				},
-			},
-			"slice truncates and merges": {
-				"slice: [{a: '${1}'}, {a: '${2}'}]\nSLICE: [{b: '${3}'}]\n",
-				func(t *testing.T, got _LazyContainers) {
-					expectEqual(t, len(got.Slice), 1)
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Slice[0].A), 1)
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Slice[0].B), 3)
-				},
-			},
-			"struct merges": {
-				"value: {a: '${1}'}\nVALUE: {b: '${2}'}\n",
-				func(t *testing.T, got _LazyContainers) {
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Value.A), 1)
-					expectEqual(t, mustResolve[int](t, t.Context(), got.Value.B), 2)
-				},
-			},
-			"code null replaces a view": {
-				"value: {a: '${1}'}\nVALUE: '${ ({a: null}) }'\n",
-				func(t *testing.T, got _LazyContainers) { expectEqual(t, got.Value.A, (*Expression)(nil)) },
-			},
-		} {
-			t.Run(name, func(t *testing.T) {
-				defer func() {
-					if failure := recover(); failure != nil {
-						t.Errorf("Resolve panicked: %v", failure)
-					}
-				}()
-				test.check(t, mustResolve[_LazyContainers](t, t.Context(), mustJaml(t, sb, test.text)))
-			})
+		var initial = mustJaml(t, sb, "map: {k: {a: '${1}'}}\npointer: {a: '${1}'}\narray: [{a: '${1}'}, {a: '${2}'}]\nslice: [{a: '${1}'}, {a: '${2}'}]\nvalue: {a: '${1}'}\n")
+		var got = mustResolve[_LazyContainers](t, t.Context(), initial)
+		var update = mustJaml(t, sb, "map: {k: {b: '${3}'}}\npointer: null\narray: [{b: '${3}'}, {}]\nslice: [{b: '${3}'}]\nvalue: {b: '${3}'}\n")
+		if err := update.decodeInto(t.Context(), &got, nil); err != nil {
+			t.Fatal(err)
 		}
+		expectEqual(t, mustResolve[int](t, t.Context(), got.Map["k"].A), 1)
+		expectEqual(t, mustResolve[int](t, t.Context(), got.Map["k"].B), 3)
+		expectEqual(t, got.Pointer, (*_LazyPair)(nil))
+		expectEqual(t, got.Array[0].A, (*Expression)(nil))
+		expectEqual(t, got.Array[1], _LazyPair{})
+		expectEqual(t, mustResolve[int](t, t.Context(), got.Array[0].B), 3)
+		expectEqual(t, len(got.Slice), 1)
+		expectEqual(t, got.Slice[0].A, (*Expression)(nil))
+		expectEqual(t, mustResolve[int](t, t.Context(), got.Slice[0].B), 3)
+		expectEqual(t, mustResolve[int](t, t.Context(), got.Value.A), 1)
+		expectEqual(t, mustResolve[int](t, t.Context(), got.Value.B), 3)
 	})
 }
 
-func TestLazyViewsFollowDecodedMapKeyReplacement(t *testing.T) {
+func TestLazyViewsRejectDecodedMapKeyCollisions(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var got = mustResolve[map[int]_LazyPair](t, t.Context(), mustJaml(t, sb, `"1": {a: '${1}'}
-"01": {b: '${2}'}
-`))
-		expectEqual(t, len(got), 1)
-		expectEqual(t, got[1].A, (*Expression)(nil))
-		expectEqual(t, mustResolve[int](t, t.Context(), got[1].B), 2)
-		var leaf = mustResolve[map[int]*Expression](t, t.Context(), mustJaml(t, sb, "\"1\": '${1}'\n\"01\": '${2}'\n"))
-		expectEqual(t, mustResolve[int](t, t.Context(), leaf[1]), 2)
-		var named = mustResolve[map[_Hue]_LazyPair](t, t.Context(), mustJaml(t, sb, "red: {a: '${1}'}\nRED: {b: '${2}'}\n"))
-		expectEqual(t, named["RED"].A, (*Expression)(nil))
-		expectEqual(t, mustResolve[int](t, t.Context(), named["RED"].B), 2)
+		got, err := Resolve[map[_Hue]_LazyPair](t.Context(), mustJaml(t, sb, "red: {a: '${1}'}\nRED: {b: '${2}'}\n"))
+		expectError(t, err, CoercionFailed, "duplicate")
+		expectEqual(t, got, map[_Hue]_LazyPair{"RED": {}})
+		leaf, err := Resolve[map[int]*Expression](t.Context(), mustJaml(t, sb, "\"0\": '${1}'\n\"-0\": '${2}'\n"))
+		expectError(t, err, CoercionFailed, "duplicate")
+		expectEqual(t, leaf, map[int]*Expression{0: nil})
 	})
 }
 
@@ -133,13 +89,13 @@ func TestLazyViewsKeepStandardJSONDecoding(t *testing.T) {
 		expectEqual(t, mustResolve[int](t, t.Context(), got.Later), 1)
 		var _, err = Resolve[_Decoded](t.Context(), mustJaml(t, sb, "Later: '${1}'\nNested: {Port: bad}\n"))
 		expectError(t, err, CoercionFailed, "$.Nested.Port")
-		var mismatch *json.UnmarshalTypeError
+		var mismatch *json.SemanticError
 		if !errors.As(err, &mismatch) {
 			t.Fatalf("missing JSON mismatch: %v", err)
 		}
 		var expected _Decoded
 		var original = json.Unmarshal([]byte(`{"Later":null,"Nested":{"Port":"bad"}}`), &expected)
-		var reference *json.UnmarshalTypeError
+		var reference *json.SemanticError
 		if !errors.As(original, &reference) {
 			t.Fatal(original)
 		}
@@ -176,7 +132,7 @@ func TestLazyViewsPreservePartialResultsOnDecodeFailure(t *testing.T) {
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		for name, test := range map[string]struct{ document, json string }{
-			"type error continues": {
+			"type error stops immediately": {
 				"Later: '${1}'\nNumber: bad\nMap: {red: {a: '${2}'}}\nSlice: [{a: '${3}'}]\nArray: [{b: '${4}'}]\nPointer: {a: '${5}'}\n",
 				`{"Later":null,"Number":"bad","Map":{"red":{"a":null}},"Slice":[{"a":null}],"Array":[{"b":null}],"Pointer":{"a":null}}`,
 			},
@@ -194,7 +150,7 @@ func TestLazyViewsPreservePartialResultsOnDecodeFailure(t *testing.T) {
 				got, err := Resolve[_Partial](t.Context(), mustJaml(t, sb, test.document))
 				expectError(t, err, CoercionFailed, original.Error())
 				expectEqual(t, got, expected)
-				var reference, mismatch *json.UnmarshalTypeError
+				var reference, mismatch *json.SemanticError
 				if errors.As(original, &reference) {
 					if !errors.As(err, &mismatch) {
 						t.Fatalf("missing JSON mismatch: %v", err)

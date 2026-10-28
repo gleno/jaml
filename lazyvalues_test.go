@@ -1,7 +1,7 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"strings"
 	"testing"
@@ -53,7 +53,7 @@ func TestASessionPaysOnlyForTheValuesItReads(t *testing.T) {
 }
 
 func TestAValueIsNotBoundUntilCodeReadsIt(t *testing.T) {
-	var opened, err = openSession(t.Context(), _SessionPlan{values: _BoundValues{"broken": {encoded: json.RawMessage(`{`)}}})
+	var opened, err = openSession(t.Context(), _SessionPlan{values: _BoundValues{"broken": {encoded: jsontext.Value(`{`)}}})
 	if err != nil {
 		t.Fatalf("a session bound a value nobody read: %v", err)
 	}

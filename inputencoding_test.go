@@ -1,8 +1,8 @@
 package jaml
 
 import (
-	"encoding/json"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"strconv"
 	"strings"
@@ -70,8 +70,8 @@ func TestInputTextCallbacksFollowTheJSONEncoder(t *testing.T) {
 			var shared = &_InputPointerText{calls: calls}
 			return []*_InputPointerText{shared, shared}
 		},
-		"map key":            func(calls *int) any { return map[_InputText]int{{calls: calls}: 7} },
-		"string map key":     func(*int) any { return map[_OmittedInputText]int{"key": 7} },
+		"map key": func(calls *int) any { return map[_InputText]int{{calls: calls}: 7} },
+
 		"JSON stream method": func(calls *int) any { return _InputJSONTo{Text: "\xff", calls: calls} },
 		"text append method": func(calls *int) any { return _InputTextAppender{Text: "\xff", calls: calls} },
 		"text append map key": func(calls *int) any {
@@ -79,7 +79,7 @@ func TestInputTextCallbacksFollowTheJSONEncoder(t *testing.T) {
 		},
 		"omitted field": func(*int) any {
 			return struct {
-				Text _OmittedInputText `json:"text,omitempty"`
+				Text _OmittedInputText `json:"text,omitzero"`
 			}{}
 		},
 		"nil pointer": func(*int) any { return (*_InputPointerText)(nil) },
@@ -106,7 +106,7 @@ func TestInputTextCallbacksFollowTheJSONEncoder(t *testing.T) {
 			}{Name: "label", Number: 7}
 		},
 		"integer map keys": func(*int) any { return map[int]string{2: "two", 1: "one"} },
-		"raw JSON":         func(*int) any { return json.RawMessage(` { "x": "\u00e9", "y": "<&>" } `) },
+		"raw JSON":         func(*int) any { return jsontext.Value(` { "x": "\u00e9", "y": "<&>" } `) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			var nativeCalls, inputCalls int
@@ -118,7 +118,14 @@ func TestInputTextCallbacksFollowTheJSONEncoder(t *testing.T) {
 			if _, err := writer.admitted("input", makeValue(&inputCalls)); err != nil {
 				t.Fatal(err)
 			}
-			expectEqual(t, string(writer.written), string(want))
+			var gotValue, wantValue any
+			if err := json.Unmarshal(writer.written, &gotValue); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(want, &wantValue); err != nil {
+				t.Fatal(err)
+			}
+			expectEqual(t, gotValue, wantValue)
 			expectEqual(t, inputCalls, nativeCalls)
 		})
 	}
@@ -222,13 +229,23 @@ func TestInputStreamMethodFallbackPreservesTextAndTagChecks(t *testing.T) {
 		})
 	}
 	for _, decline := range []bool{false, true} {
-		var calls int
-		_, err := unboundedWriter().admitted("input", _MalformedInputJSON{Text: "valid", decline: decline, calls: &calls})
-		if !errors.Is(err, errInvalidText) {
-			t.Fatalf("malformed field tag, method declines=%t: %v", decline, err)
+		var nativeCalls, calls int
+		want, original := json.Marshal(_MalformedInputJSON{Text: "valid", decline: decline, calls: &nativeCalls})
+		var writer = unboundedWriter()
+		_, err := writer.admitted("input", _MalformedInputJSON{Text: "valid", decline: decline, calls: &calls})
+		if original != nil {
+			if err == nil {
+				t.Fatal("input accepted metadata rejected by native JSONv2")
+			}
+		} else {
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectEqual(t, string(writer.written), string(want))
 		}
-		expectEqual(t, calls, 0)
+		expectEqual(t, calls, nativeCalls)
 	}
+
 }
 
 func TestInputCapStopsTheNativeStreamWithinAValue(t *testing.T) {

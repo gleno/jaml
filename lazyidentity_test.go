@@ -1,9 +1,8 @@
 package jaml
 
 import (
-	"encoding/json"
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"errors"
 	"strconv"
 	"strings"
@@ -164,7 +163,7 @@ type _StrictNativeDecode struct {
 
 func (d *_StrictNativeDecode) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 	type _Fields _StrictNativeDecode
-	return jsonv2.UnmarshalDecode(decoder, (*_Fields)(d), jsonv2.RejectUnknownMembers(true))
+	return json.UnmarshalDecode(decoder, (*_Fields)(d), json.RejectUnknownMembers(true))
 }
 
 func TestLazyViewsPreserveDelegatedDecoderOptions(t *testing.T) {
@@ -197,7 +196,7 @@ func TestLazyViewsRetainRootArrayAndEscapedKeyPaths(t *testing.T) {
 	})
 }
 
-func FuzzLazyFieldSelectionMatchesEncodingJSON(f *testing.F) {
+func FuzzLazyFieldSelectionMatchesJSONv2(f *testing.F) {
 	for _, key := range []string{"I", "i", "ı", "İ", "unknown", "I\x00", "\x7f", "K"} {
 		f.Add(key)
 	}

@@ -1,7 +1,8 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strings"
 	"testing"
 
@@ -112,13 +113,13 @@ func (w _WrittenJSON) MarshalJSON() ([]byte, error) {
 }
 
 var textThatIsNotUTF8 = map[string]any{
-	"escaped lone high":      json.RawMessage(`"\ud800"`),
-	"escaped lone low":       json.RawMessage(`"a\udc00b"`),
-	"escaped reversed pair":  json.RawMessage(`"\udc00\ud800"`),
-	"escaped lone key":       json.RawMessage(`{"\ud800": 1}`),
+	"escaped lone high":      jsontext.Value(`"\ud800"`),
+	"escaped lone low":       jsontext.Value(`"a\udc00b"`),
+	"escaped reversed pair":  jsontext.Value(`"\udc00\ud800"`),
+	"escaped lone key":       jsontext.Value(`{"\ud800": 1}`),
 	"marshaled lone":         _WrittenJSON(`["\udfff"]`),
-	"raw invalid byte":       json.RawMessage("\"\xff\""),
-	"raw invalid key":        json.RawMessage("{\"\xfe\": 1}"),
+	"raw invalid byte":       jsontext.Value("\"\xff\""),
+	"raw invalid key":        jsontext.Value("{\"\xfe\": 1}"),
 	"marshaled invalid byte": _WrittenJSON("{\"k\": \"a\xc3\"}"),
 }
 
@@ -181,12 +182,12 @@ func TestTheChildRefusesWorkThatWasNeverAdmitted(t *testing.T) {
 func TestANumberOutOfRangeIsRefusedAtTheDoor(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var e = mustExpression(t, sb, "typeof v")
-		for _, number := range []any{json.RawMessage(`{"a":[1e400]}`), json.Number("-1e999"), json.RawMessage("1" + strings.Repeat("0", 400))} {
+		for _, number := range []any{jsontext.Value(`{"a":[1e400]}`), jsontext.Value("-1e999"), jsontext.Value("1" + strings.Repeat("0", 400))} {
 			_, err := Resolve[string](WithValues(t.Context(), map[string]any{"v": number}), e)
 			expectError(t, err, InvalidInput, `value "v" holds the number`, "which is out of range")
 		}
-		expectEqual(t, mustResolve[string](t, WithValues(t.Context(), map[string]any{"v": json.RawMessage(`[1e-400, "1e400", 1e308]`)}), e), "object")
-		_, err := Resolve[string](t.Context(), mustExpression(t, sb, "(n) => typeof n"), json.Number("1e400"))
+		expectEqual(t, mustResolve[string](t, WithValues(t.Context(), map[string]any{"v": jsontext.Value(`[1e-400, "1e400", 1e308]`)}), e), "object")
+		_, err := Resolve[string](t.Context(), mustExpression(t, sb, "(n) => typeof n"), jsontext.Value("1e400"))
 		expectError(t, err, InvalidInput, "argument 1 holds the number 1e400, which is out of range")
 	})
 }

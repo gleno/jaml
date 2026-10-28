@@ -1,7 +1,7 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"math"
 	"strings"
@@ -63,7 +63,7 @@ func wireTexts() []string {
 	for code := range 0x80 {
 		every.WriteByte(byte(code))
 	}
-	return []string{"", every.String(), "\u2028\u2029", "é😀\uFFFD", "<b>&amp;</b>", "bad \xff\xfe utf-8", "\"quoted\" \\ back", strings.Repeat("\x01", 9)}
+	return []string{"", every.String(), "\u2028\u2029", "é😀\uFFFD", "<b>&amp;</b>", "\"quoted\" \\ back", strings.Repeat("\x01", 9)}
 }
 
 func wireData() []any {
@@ -104,22 +104,20 @@ var wireWritten = []string{
 	`{"":""}`,
 	"\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\"",
 	"{\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\":\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\"}",
-	`"\u2028\u2029"`,
-	`{"\u2028\u2029":"\u2028\u2029"}`,
+	"\"\u2028\u2029\"",
+	"{\"\u2028\u2029\":\"\u2028\u2029\"}",
 	`"é😀�"`,
 	`{"é😀�":"é😀�"}`,
 	`"<b>&amp;</b>"`,
 	`{"<b>&amp;</b>":"<b>&amp;</b>"}`,
-	`"bad \ufffd\ufffd utf-8"`,
-	`{"bad \ufffd\ufffd utf-8":"bad \ufffd\ufffd utf-8"}`,
 	`"\"quoted\" \\ back"`,
 	`{"\"quoted\" \\ back":"\"quoted\" \\ back"}`,
 	`"\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001"`,
 	`{"\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001":"\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001"}`,
 	`[]`,
-	`null`,
+	`[]`,
 	`{}`,
-	`null`,
+	`{}`,
 	`{"a":{"y":1.5,"z":false},"b":[1,"x",null]}`,
 	`{"z":1,"a":["q"]}`,
 }
@@ -129,7 +127,7 @@ func TestAnAnswerFrameIsByteForByteTheWireEncoding(t *testing.T) {
 	var data = wireData()
 	expectEqual(t, len(data), len(wireWritten))
 	for index, value := range data {
-		var want = `{"job":42,"data":` + wireWritten[index] + `,"skipped":[["a","\u2028"],[]],"usage":{"cpu":3,"wall":7}}`
+		var want = `{"job":42,"data":` + wireWritten[index] + `,"skipped":[["a","` + "\u2028" + `"],[]],"usage":{"cpu":3,"wall":7}}`
 		expectEqual(t, string(f.answer(42, _Rendered{tree: value, skipped: [][]string{{"a", "\u2028"}, {}}}, Usage{CPU: 3, Wall: 7})), want)
 	}
 }
@@ -138,7 +136,7 @@ func TestAFailureFrameIsByteForByteTheWireEncoding(t *testing.T) {
 	var f = _Frames{limit: 1 << 20}
 	var data = wireData()
 	expectEqual(t, len(data), len(wireWritten))
-	var message = `threw \u2028 something`
+	var message = "threw \u2028 something"
 	for index, value := range data {
 		var thrown = &Thrown{Message: "threw \u2028 something", Value: value}
 		var want = `{"job":7,"failure":{"kind":"EvaluationFailed","at":"$.v","message":"` + message + `","thrown":{"message":"` + message + `","value":` + wireWritten[index] + `}}}`
@@ -165,7 +163,7 @@ func TestTheSmallFramesAreTheirWireEncoding(t *testing.T) {
 
 func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 	var f = _Frames{limit: 1 << 10}
-	var overhead = len(`{"job":1,"data":"\u2028","usage":{"cpu":0,"wall":0}}`)
+	var overhead = len(`{"job":1,"data":"` + "\u2028" + `","usage":{"cpu":0,"wall":0}}`)
 	var fitting = strings.Repeat("x", f.limit-overhead) + "\u2028"
 	expectEqual(t, len(f.answer(1, _Rendered{tree: fitting}, Usage{})), f.limit)
 	var refused = string(f.answer(1, _Rendered{tree: fitting + "x"}, Usage{}))
@@ -191,4 +189,44 @@ func TestAThrownValuePastTheCapIsRefusedAndOneUnderIsCarried(t *testing.T) {
 			t.Fatalf("a %d-byte thrown value past the cap was not refused: %v", size, rebuilt)
 		}
 	}
+}
+
+func TestFrameEncodingRejectsInvalidUTF8WithoutRecursing(t *testing.T) {
+	var frames = _Frames{limit: 1024}
+	for _, data := range []any{"bad\xff", map[string]any{"bad\xff": 1}} {
+		var reply _Reply
+		if err := json.Unmarshal(frames.answer(1, _Rendered{tree: data}, Usage{}), &reply); err != nil {
+			t.Fatal(err)
+		}
+		if reply.Failure == nil {
+			t.Fatal("invalid text was sent as data")
+		}
+	}
+	var reply _Reply
+	if err := json.Unmarshal(frames.failure(1, "$[\xff]", errors.New("bad\xff")), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Failure == nil {
+		t.Fatal("invalid failure was not refused")
+	}
+}
+
+func TestNativeReplyEncodingKeepsEmptyJSONResults(t *testing.T) {
+	for _, data := range []string{"null", "{}", "[]", `""`, "false", "0"} {
+		encoded, err := wireJSON(_Reply{Job: 1, Data: _Borrowed(data)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reply _Reply
+		if err := json.Unmarshal(encoded, &reply); err != nil {
+			t.Fatal(err)
+		}
+		expectEqual(t, string(reply.Data), data)
+		expectEqual(t, reply.outcomes(), 1)
+	}
+	encoded, err := wireJSON(_Reply{Job: 1, Missing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectEqual(t, string(encoded), `{"job":1,"missing":true}`)
 }

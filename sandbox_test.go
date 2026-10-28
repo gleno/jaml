@@ -1,7 +1,7 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	goruntime "runtime"
 	"sync"
@@ -175,7 +175,7 @@ func TestAnExpressionFollowsTheTemplateDefaults(t *testing.T) {
 		var shaped struct {
 			A []int `json:"a"`
 		}
-		expectError(t, resolveInto(t.Context(), &shaped, mustExpression(t, sb, "({a: [1, 'x']})")), CoercionFailed, "$.a[1]: json: cannot unmarshal string")
+		expectError(t, resolveInto(t.Context(), &shaped, mustExpression(t, sb, "({a: [1, 'x']})")), CoercionFailed, "$.a[1]:", "unmarshal JSON string")
 	})
 }
 

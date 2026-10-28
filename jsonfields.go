@@ -9,9 +9,8 @@ package jaml
 import (
 	"cmp"
 	"encoding"
-	"encoding/json"
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"reflect"
 	"slices"
 	"strconv"
@@ -34,7 +33,6 @@ type _JSONFields struct {
 	fields   []_JSONField // native depth-first traversal order
 	lookup   []int        // native breadth-first folded-match precedence
 	fallback *_JSONField
-	walk     []_JSONField // all serialized storage, including the fallback
 }
 
 var (
@@ -42,16 +40,12 @@ var (
 	jsonValueType    = reflect.TypeFor[jsontext.Value]()
 	zeroerType       = reflect.TypeFor[interface{ IsZero() bool }]()
 	jsonMethodTypes  = []reflect.Type{
-		reflect.TypeFor[jsonv2.MarshalerTo](), reflect.TypeFor[json.Marshaler](),
+		reflect.TypeFor[json.MarshalerTo](), reflect.TypeFor[json.Marshaler](),
 		reflect.TypeFor[encoding.TextAppender](), reflect.TypeFor[encoding.TextMarshaler](),
-		reflect.TypeFor[jsonv2.UnmarshalerFrom](), reflect.TypeFor[json.Unmarshaler](),
+		reflect.TypeFor[json.UnmarshalerFrom](), reflect.TypeFor[json.Unmarshaler](),
 		reflect.TypeFor[encoding.TextUnmarshaler](),
 	}
 )
-
-// jsonFields exposes storage to the pure input/tag walk. Matching and lazy
-// binding use the same layout, with fallback storage distinguished explicitly.
-func jsonFields(target reflect.Type) []_JSONField { return jsonLayout(target).walk }
 
 func jsonLayout(target reflect.Type) *_JSONFields {
 	if known, found := jsonFieldLayouts.Load(target); found {
@@ -79,13 +73,13 @@ func makeJSONFields(target reflect.Type) *_JSONFields {
 			if ignored {
 				continue
 			}
-			var field = _JSONField{name: options.name, kind: declared.Type, tagged: options.named, strict: options.casing == 2, index: append(slices.Clone(parent.index), i)}
+			var field = _JSONField{name: options.name, kind: declared.Type, tagged: options.named, strict: options.casing != 1, index: append(slices.Clone(parent.index), i)}
 			var underlying = embeddedType(declared.Type)
 			var embed = options.embed || declared.Anonymous && !options.named && underlying.Kind() == reflect.Struct
 			if embed && !options.named {
-				// Native compatibility mode ignores invalid option warnings and
-				// drops incompatible options on an otherwise unnamed embed.
-				field.strict, options.omitzero = false, false
+				// Invalid metadata is rejected by the native codec before this
+				// layout is used for lazy fields.
+				field.strict, options.omitzero = true, false
 				if underlying.Kind() == reflect.Struct {
 					if parent.children {
 						queue = append(queue, _Queued{underlying, field.index, !seen[underlying]})
@@ -100,8 +94,7 @@ func makeJSONFields(target reflect.Type) *_JSONFields {
 					fallbacks = append(fallbacks, field)
 					continue
 				}
-				// Unsupported embedded types remain ordinary fields under the
-				// native v1 compatibility options, including named pointers.
+				// Unsupported embedding is rejected by native metadata validation.
 			}
 			if !declared.IsExported() {
 				if !declared.Anonymous || underlying.Kind() != reflect.Struct || hasJSONMethods(underlying) || options.omitzero && implementsJSONInterface(underlying, zeroerType) {
@@ -119,11 +112,6 @@ func makeJSONFields(target reflect.Type) *_JSONFields {
 	slices.SortFunc(layout.lookup, func(a, b int) int { return cmp.Compare(layout.fields[a].order, layout.fields[b].order) })
 	if len(fallbacks) == 1 || len(fallbacks) > 1 && len(fallbacks[0].index) != len(fallbacks[1].index) {
 		layout.fallback = &fallbacks[0]
-	}
-	layout.walk = slices.Clone(layout.fields)
-	if layout.fallback != nil {
-		layout.walk = append(layout.walk, *layout.fallback)
-		slices.SortFunc(layout.walk, func(a, b _JSONField) int { return slices.Compare(a.index, b.index) })
 	}
 	return layout
 }
@@ -151,8 +139,8 @@ type _JSONFieldOptions struct {
 	casing   int
 }
 
-// Native DefaultOptionsV1 suppresses tag warnings, but retains the parser's
-// resulting name, matching policy and embedding. Do not invent target errors.
+// Extract only discovery metadata. The native codec validates tags before
+// shapes are drawn; it also owns all input validation and method calls.
 func jsonFieldOptions(field reflect.StructField) (_JSONFieldOptions, bool) {
 	var tag = field.Tag.Get("json")
 	var out = _JSONFieldOptions{name: field.Name}

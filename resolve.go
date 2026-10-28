@@ -2,9 +2,8 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"reflect"
@@ -56,7 +55,7 @@ func (e *Expression) decodeInto(ctx context.Context, destination any, args []any
 			sources[pathIdentity(path)] = true
 		}
 		var decoded = reflect.ValueOf(destination).Elem()
-		var unmarshalView = jsonv2.UnmarshalFromFunc(func(decoder *jsontext.Decoder, view *Expression) error {
+		var unmarshalView = json.UnmarshalFromFunc(func(decoder *jsontext.Decoder, view *Expression) error {
 			if decoder.PeekKind() != '{' {
 				return errors.ErrUnsupported
 			}
@@ -72,9 +71,9 @@ func (e *Expression) decodeInto(ctx context.Context, destination any, args []any
 			view.held, view.path = nil, slices.Concat(e.path, path)
 			return nil
 		})
-		// Go 1.27's encoding/json uses this same decoder and option set. The local
-		// hook supplies source identity without adding methods to Expression.
-		var err = jsonv2.Unmarshal(settled.data, destination, json.DefaultOptionsV1(), jsonv2.WithUnmarshalers(unmarshalView))
+		// The local hook supplies source identity without adding methods to
+		// Expression or changing native JSONv2 decoding semantics.
+		var err = json.Unmarshal(settled.data, destination, json.WithUnmarshalers(unmarshalView))
 		if err != nil {
 			settleViews(decoded, &_ShapeCursor{shape: skips}, nil)
 			return err

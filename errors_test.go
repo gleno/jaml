@@ -2,7 +2,7 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"strings"
 	"testing"
@@ -115,15 +115,15 @@ type _EmbeddingAList struct {
 func TestACoercionFailureNamesTheFailingField(t *testing.T) {
 	var text = "a:\n  b: [1, x]\nc:\n  d: {e: [1, 2, {f: 1}]}\n"
 	var both = _Agreement{text: text}.eval(t, func() any { return new(_ShapeWithAList) })
-	both.expectRefused(t, CoercionFailed, "$.a.b[1]: json: cannot unmarshal string")
-	var mismatch *json.UnmarshalTypeError
+	both.expectRefused(t, CoercionFailed, "$.a.b[1]:", "unmarshal JSON string")
+	var mismatch *json.SemanticError
 	if !errors.As(both.trusted, &mismatch) || !errors.As(both.isolated, &mismatch) {
-		t.Fatalf("expected *json.UnmarshalTypeError in %v", both.trusted)
+		t.Fatalf("expected *json.SemanticError in %v", both.trusted)
 	}
-	_Agreement{text: text, path: []string{"c"}}.eval(t, func() any { return new(map[string]map[string][]int) }).expectRefused(t, CoercionFailed, "$.c.d.e[2]: json: cannot unmarshal object")
-	_Agreement{text: "[1, x]\n"}.eval(t, func() any { return new([]int) }).expectRefused(t, CoercionFailed, "$[1]: json: cannot unmarshal string")
-	_Agreement{text: "- [1]\n- [2, x]\n"}.eval(t, func() any { return new([][]int) }).expectRefused(t, CoercionFailed, "$[1][1]: json: cannot unmarshal string")
-	_Agreement{text: "y: [1, x]\n"}.eval(t, func() any { return new(_EmbeddingAList) }).expectRefused(t, CoercionFailed, "$.y[1]: json: cannot unmarshal string")
+	_Agreement{text: text, path: []string{"c"}}.eval(t, func() any { return new(map[string]map[string][]int) }).expectRefused(t, CoercionFailed, "$.c.d.e[2]:", "unmarshal JSON object")
+	_Agreement{text: "[1, x]\n"}.eval(t, func() any { return new([]int) }).expectRefused(t, CoercionFailed, "$[1]:", "unmarshal JSON string")
+	_Agreement{text: "- [1]\n- [2, x]\n"}.eval(t, func() any { return new([][]int) }).expectRefused(t, CoercionFailed, "$[1][1]:", "unmarshal JSON string")
+	_Agreement{text: "y: [1, x]\n"}.eval(t, func() any { return new(_EmbeddingAList) }).expectRefused(t, CoercionFailed, "$.y[1]:", "unmarshal JSON string")
 }
 
 var errPicky = errors.New("picky refuses")
@@ -136,7 +136,7 @@ func (*_Picky) UnmarshalJSON([]byte) error {
 
 func TestACustomUnmarshalersErrorIsReachable(t *testing.T) {
 	var both = _Agreement{text: "v: ${ 1 }\n", path: []string{"v"}}.eval(t, func() any { return new(_Picky) })
-	both.expectRefused(t, CoercionFailed, "$.v: picky refuses")
+	both.expectRefused(t, CoercionFailed, "$.v:", "picky refuses")
 	if !errors.Is(both.trusted, errPicky) || !errors.Is(both.isolated, errPicky) {
 		t.Fatalf("expected the unmarshaler's error in %v", both.trusted)
 	}

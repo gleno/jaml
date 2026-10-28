@@ -2,7 +2,8 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -34,18 +35,27 @@ func staticExpression(tb testing.TB, kind _SandboxKind, keys int) *Expression {
 	return made
 }
 
-func TestACodeFreeResolveAllocatesIndependentlyOfTheDocumentSize(t *testing.T) {
+func TestACodeFreeResolveAddsBoundedOverheadToNativeDecoding(t *testing.T) {
 	var document = staticExpression(t, trustedKind, 10_000)
-	if _, err := Resolve[json.RawMessage](t.Context(), document); err != nil {
-		t.Fatalf("Resolve: %v", err)
+	encoded, err := Resolve[jsontext.Value](t.Context(), document)
+	if err != nil {
+		t.Fatal(err)
 	}
+	// Native v2 validates duplicate names even for raw values. Account for that
+	// required work while guarding JAML's cached-document splice separately.
+	var native = testing.AllocsPerRun(20, func() {
+		var decoded jsontext.Value
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+	})
 	var allocations = testing.AllocsPerRun(20, func() {
-		if _, err := Resolve[json.RawMessage](t.Context(), document); err != nil {
+		if _, err := Resolve[jsontext.Value](t.Context(), document); err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
 	})
-	if allocations > 100 {
-		t.Fatalf("a code-free Resolve of 10k keys allocated %v times; it should splice the encoded document", allocations)
+	if allocations-native > 100 {
+		t.Fatalf("a code-free Resolve of 10k keys allocated %v times beyond native decoding; it should splice the encoded document", allocations-native)
 	}
 }
 
@@ -205,12 +215,12 @@ func collectedHeap() uint64 {
 func TestResolvingEveryPrefixOfAStaticChainKeepsOneEncoding(t *testing.T) {
 	var written, path = chainedStaticJaml()
 	var document = mustJaml(t, mustSandbox(t, trustedKind), written)
-	if _, err := Resolve[json.RawMessage](t.Context(), document.At(path[:chainDepth/2]...)); err != nil {
+	if _, err := Resolve[jsontext.Value](t.Context(), document.At(path[:chainDepth/2]...)); err != nil {
 		t.Fatal(err)
 	}
 	var before = collectedHeap()
 	for depth := range chainDepth + 1 {
-		if _, err := Resolve[json.RawMessage](t.Context(), document.At(path[:depth]...)); err != nil {
+		if _, err := Resolve[jsontext.Value](t.Context(), document.At(path[:depth]...)); err != nil {
 			t.Fatalf("at depth %d: %v", depth, err)
 		}
 	}
@@ -228,7 +238,7 @@ func TestASecureChildSurvivesResolvingEveryPrefixOfAStaticChain(t *testing.T) {
 	var first = childPID(t, sb)
 	for resolved := range 200 {
 		var depth = resolved % (chainDepth + 1)
-		if _, err := Resolve[json.RawMessage](t.Context(), document.At(path[:depth]...)); err != nil {
+		if _, err := Resolve[jsontext.Value](t.Context(), document.At(path[:depth]...)); err != nil {
 			t.Fatalf("resolve %d at depth %d: %v", resolved, depth, err)
 		}
 	}

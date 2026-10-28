@@ -2,7 +2,7 @@ package jaml
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"reflect"
 	"slices"
@@ -12,43 +12,41 @@ import (
 )
 
 type NativeFoldedLazy struct {
-	Later *Expression `json:"name"`
+	Later *Expression `json:"name,case:ignore"`
 }
 
 type NativeFoldedPlain struct {
-	Later int `json:"name"`
+	Later int `json:"name,case:ignore"`
 }
 
-func TestNativeFieldsPreferShallowFoldedMatches(t *testing.T) {
+func TestNativeFieldsRejectAmbiguousFoldedMatches(t *testing.T) {
 	type _Plain struct {
 		NativeFoldedPlain
-		Now int `json:"NAME"`
+		Now int `json:"NAME,case:ignore"`
 	}
 	type _Lazy struct {
 		NativeFoldedLazy
-		Now int `json:"NAME"`
+		Now int `json:"NAME,case:ignore"`
 	}
 	var reference _Plain
-	if err := json.Unmarshal([]byte(`{"NaMe":7}`), &reference); err != nil {
-		t.Fatal(err)
+	var original = json.Unmarshal([]byte(`{"NaMe":7}`), &reference)
+	if original == nil {
+		t.Fatal("native decoder accepted an ambiguous name")
 	}
-	expectEqual(t, reference.Now, 7)
-	expectEqual(t, reference.Later, 0)
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var got = mustResolve[_Lazy](t, t.Context(), mustJaml(t, sb, "NaMe: '${7}'\n"))
-		expectEqual(t, got.Now, reference.Now)
-		expectEqual(t, got.Later, (*Expression)(nil))
+		_, err := Resolve[_Lazy](t.Context(), mustJaml(t, sb, "NaMe: '${7}'\n"))
+		expectError(t, err, CoercionFailed, "ambiguous")
 	})
 }
 
 func TestNativeFieldsRespectStrictCaseBeforeFallback(t *testing.T) {
 	type _Plain struct {
 		Later int `json:"name,case:strict"`
-		Now   int `json:"NAME"`
+		Now   int `json:"NAME,case:ignore"`
 	}
 	type _Lazy struct {
 		Later *Expression `json:"name,case:strict"`
-		Now   int         `json:"NAME"`
+		Now   int         `json:"NAME,case:ignore"`
 	}
 	var reference _Plain
 	if err := json.Unmarshal([]byte(`{"Name":7}`), &reference); err != nil {
@@ -139,7 +137,7 @@ func TestNativeFieldsKeepRecursiveFallbackIdentity(t *testing.T) {
 func TestNativeFieldsKeepFallbackPathsAcrossCopy(t *testing.T) {
 	type _Lazy struct {
 		Known int
-		Rest  *map[string]*Expression `json:",embed,omitempty"`
+		Rest  *map[string]*Expression `json:",embed"`
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		made, end := context.WithCancel(t.Context())
@@ -167,13 +165,13 @@ func TestNativeFieldsClearFallbackPlaceholdersOnFailure(t *testing.T) {
 	}
 	var reference _Partial
 	var original = json.Unmarshal([]byte(`{"extra":{"a":null},"Number":"bad","other":{"b":null}}`), &reference)
-	var expected *json.UnmarshalTypeError
+	var expected *json.SemanticError
 	if !errors.As(original, &expected) {
 		t.Fatal(original)
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		got, err := Resolve[_Partial](t.Context(), mustJaml(t, sb, "extra: {a: '${1}'}\nNumber: bad\nother: {b: '${2}'}\n"))
-		var mismatch *json.UnmarshalTypeError
+		var mismatch *json.SemanticError
 		if !errors.As(err, &mismatch) {
 			t.Fatal(err)
 		}
@@ -188,19 +186,18 @@ func (k _NativeEmbedKey) AppendText(into []byte) ([]byte, error) {
 	return append(into, string(k)...), nil
 }
 
-func TestNativeFieldsKeepInvalidEmbedsAsOrdinaryFields(t *testing.T) {
+func TestNativeFieldsRejectInvalidEmbedsBeforeEvaluation(t *testing.T) {
 	type _Lazy struct {
 		Named struct{ Later *Expression }     `json:"named,embed"`
 		Rest  map[_NativeEmbedKey]*Expression `json:",embed"`
 	}
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var got = mustResolve[_Lazy](t, t.Context(), mustJaml(t, sb, "named: {Later: '${7}'}\nRest: {entry: '${8}'}\n"))
-		expectEqual(t, mustResolve[int](t, t.Context(), got.Named.Later), 7)
-		expectEqual(t, mustResolve[int](t, t.Context(), got.Rest["entry"]), 8)
+		_, err := Resolve[_Lazy](t.Context(), mustExpression(t, sb, "(() => { throw 'ran' })()"))
+		expectError(t, err, InvalidTarget, "cannot have any options other than")
 	})
 }
 
-func TestNativeFieldsValidateOnlySurvivingInputNames(t *testing.T) {
+func TestNativeFieldsRejectMalformedInputNames(t *testing.T) {
 	var kind = reflect.StructOf([]reflect.StructField{
 		{Name: "Bad", Type: reflect.TypeFor[string](), Tag: reflect.StructTag("json:" + strconv.Quote("a\xff"))},
 		{Name: "Good", Type: reflect.TypeFor[string](), Tag: reflect.StructTag("json:" + strconv.Quote("a�"))},
@@ -208,14 +205,14 @@ func TestNativeFieldsValidateOnlySurvivingInputNames(t *testing.T) {
 	var value = reflect.New(kind).Elem()
 	value.Field(0).SetString("bad")
 	value.Field(1).SetString("good")
-	encoded, err := json.Marshal(value.Interface())
-	if err != nil {
-		t.Fatal(err)
+	_, err := json.Marshal(value.Interface())
+	if err == nil {
+		t.Fatal("native codec accepted malformed input metadata")
 	}
-	expectEqual(t, string(encoded), "{}")
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var ctx = WithValues(t.Context(), map[string]any{"value": value.Interface()})
-		expectEqual(t, mustResolve[string](t, ctx, mustExpression(t, sb, "JSON.stringify(value)")), string(encoded))
+		_, err := Resolve[string](ctx, mustExpression(t, sb, "JSON.stringify(value)"))
+		expectError(t, err, InvalidInput)
 	})
 }
 
@@ -228,40 +225,32 @@ func (_NativeFallbackWithMethod) MarshalJSON() ([]byte, error) {
 	return []byte("{}"), nil
 }
 
-func TestNativeFieldsInspectFallbackEntriesDespiteIgnoredMethods(t *testing.T) {
+func TestNativeFieldsRejectMethodsOnEmbeddedFallbacks(t *testing.T) {
 	type _Input struct {
 		Rest _NativeFallbackWithMethod `json:",embed"`
 	}
 	var input = _Input{Rest: _NativeFallbackWithMethod{"entry": {Label: "fine"}}}
 	nativeFallbackMethodCalls = 0
-	encoded, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
+	_, err := json.Marshal(input)
+	if err == nil {
+		t.Fatal("native codec accepted an embedded fallback with methods")
 	}
 	expectEqual(t, nativeFallbackMethodCalls, 0)
-	expectEqual(t, string(encoded), `{"entry":{"l�abel":"fine"}}`)
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var ctx = WithValues(t.Context(), map[string]any{"value": input})
 		_, err := Resolve[any](ctx, mustExpression(t, sb, "value"))
-		expectError(t, err, InvalidInput, "UTF-8")
+		expectError(t, err, InvalidInput, "must not implement marshal or unmarshal methods")
 		expectEqual(t, nativeFallbackMethodCalls, 0)
 	})
-}
-
-type _NativeFallbackText map[string]_InputText
-
-func (_NativeFallbackText) MarshalJSON() ([]byte, error) {
-	nativeFallbackMethodCalls++
-	return []byte("{}"), nil
 }
 
 func TestNativeFieldsPreserveFallbackValueCallbacks(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var calls int
 		nativeFallbackMethodCalls = 0
-		var rest = _NativeFallbackText{"entry": {calls: &calls}}
+		var rest = map[string]_InputText{"entry": {calls: &calls}}
 		var input = struct {
-			Rest *_NativeFallbackText `json:",embed"`
+			Rest *map[string]_InputText `json:",embed"`
 		}{Rest: &rest}
 		var ctx = WithValues(t.Context(), map[string]any{"value": input})
 		expectEqual(t, mustResolve[map[string]string](t, ctx, mustExpression(t, sb, "value")), map[string]string{"entry": "1"})
@@ -270,13 +259,13 @@ func TestNativeFieldsPreserveFallbackValueCallbacks(t *testing.T) {
 	})
 }
 
-func FuzzNativeFieldSelectionMatchesEncodingJSON(f *testing.F) {
+func FuzzNativeFieldSelectionMatchesJSONv2(f *testing.F) {
 	var tags = []string{"", "name", "name,case:strict", "name,case:ignore", "name,case:strict,case:ignore", "🦊", "a\x7f", "a\xff", "-", "-,", "name,embed", ",embed", ",embed,omitempty", "name'bad", "'comma,name'", "name,unknown", "name,case:unknown", "name,format:'x,y',case:strict"}
 	var targets []reflect.Type
 	for _, tag := range tags {
 		targets = append(targets, reflect.StructOf([]reflect.StructField{
 			{Name: "First", Type: reflect.TypeFor[int](), Tag: reflect.StructTag("json:" + strconv.Quote(tag))},
-			{Name: "Second", Type: reflect.TypeFor[int](), Tag: `json:"NAME"`},
+			{Name: "Second", Type: reflect.TypeFor[int](), Tag: `json:"NAME,case:ignore"`},
 		}))
 	}
 	for index := range tags {

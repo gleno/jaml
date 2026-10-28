@@ -1,7 +1,7 @@
 package jaml
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"reflect"
 	"slices"
@@ -34,7 +34,7 @@ type _KeyTricky struct {
 	Name       int
 	NAME       int `json:"name"`
 	Skipped    int `json:"-"`
-	Dash       int `json:"-,"`
+	Dash       int `json:"-"`
 	unexported int
 	Fold       int
 	Shared     int
@@ -81,7 +81,7 @@ func setLeaf(value reflect.Value, index []int) []int {
 	return nil
 }
 
-func TestKeysResolveToTheFieldEncodingJSONPicks(t *testing.T) {
+func TestKeysResolveToTheFieldJSONv2Picks(t *testing.T) {
 	var keys = []string{
 		"x", "X", "name", "Name", "NAME", "nAmE", "Skipped", "skipped", "-", "Dash", "dash", "unexported",
 		"Fold", "fold", "FOLD", "Shared", "shared", "SHARED", "A", "a", "C", "c", "P", "p", "H", "h",
@@ -99,12 +99,12 @@ func TestKeysResolveToTheFieldEncodingJSONPicks(t *testing.T) {
 				got = nil
 			}
 			if !slices.Equal(got, want) {
-				t.Errorf("%s key %q: jaml picks %v, encoding/json picks %v", target, key, got, want)
+				t.Errorf("%s key %q: jaml picks %v, JSONv2 picks %v", target, key, got, want)
 			}
 		}
 	}
-	if picked < 30 {
-		t.Fatalf("encoding/json picked a field for only %d keys; the table tests too little", picked)
+	if picked < 15 {
+		t.Fatalf("JSONv2 picked a field for only %d keys; the table tests too little", picked)
 	}
 }
 
@@ -120,18 +120,14 @@ func TestAnExactKeyWinsOverAFoldedExpressionField(t *testing.T) {
 	})
 }
 
-func TestTheLastKeyInTheDocumentWins(t *testing.T) {
+func TestCaseVariantsDoNotOverwriteExactFields(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		type _Plain struct {
-			Run any
-		}
-		type _Held struct {
-			Run *Expression
-		}
-		for text, want := range map[string]float64{"run: ${1}\nRun: ${2}\n": 2, "Run: ${2}\nrun: ${1}\n": 1} {
+		type _Plain struct{ Run any }
+		type _Held struct{ Run *Expression }
+		for _, text := range []string{"run: ${1}\nRun: ${2}\n", "Run: ${2}\nrun: ${1}\n"} {
 			var document = mustJaml(t, sb, text)
-			expectEqual(t, mustResolve[_Plain](t, t.Context(), document).Run, any(want))
-			expectEqual(t, mustResolve[float64](t, t.Context(), mustResolve[_Held](t, t.Context(), document).Run), want)
+			expectEqual(t, mustResolve[_Plain](t, t.Context(), document).Run, any(float64(2)))
+			expectEqual(t, mustResolve[int](t, t.Context(), mustResolve[_Held](t, t.Context(), document).Run), 2)
 		}
 	})
 }

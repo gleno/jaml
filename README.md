@@ -1,12 +1,12 @@
 # jaml
 
-Jaml documents are structured documents whose values can hold JavaScript. jaml parses a document into an `Expression` once, then `Resolve` evaluates the part you ask for and decodes the result into your Go type with `encoding/json`. Nothing runs until you resolve, and everything lives as long as the context you made it with.
+Jaml documents are structured documents whose values can hold JavaScript. jaml parses a document into an `Expression` once, then `Resolve` evaluates the part you ask for and decodes the result into your Go type with `encoding/json/v2`. Nothing runs until you resolve, and everything lives as long as the context you made it with.
 
 ```sh
 go get github.com/gleno/jaml
 ```
 
-Requires Go 1.27.3 or newer with its default JSONv2 implementation. Explicit `GOEXPERIMENT=nojsonv2` builds are unsupported.
+Requires Go 1.27.3 or newer with its default JSONv2 implementation. Explicit `GOEXPERIMENT=nojsonv2` builds are unsupported. JAML uses native JSONv2 defaults for Go inputs and resolved results. Since v0.7.0, struct fields match case-sensitively, nil slices and maps encode as `[]` and `{}`, and `omitempty` keeps `false` and `0` (use `omitzero` to omit them). Duplicate names and mismatched fixed-array lengths are rejected. Custom JSON methods also apply to map keys; errors expose native `json.SemanticError` or `jsontext.SyntacticError` causes. See [Go’s JSONv2 documentation](https://pkg.go.dev/encoding/json/v2) for the full type mapping and field options.
 
 ## Simple use
 
@@ -90,7 +90,7 @@ func WithMeter(ctx context.Context, sink func(Usage)) context.Context        // 
 func WithConsole(ctx context.Context, sink func(Line)) context.Context       // receives each console.log and friends, with the path of the code that wrote it
 
 // Expression options.
-func WithNullCoercion(coercion Coercion) Option      // Loose (default) lets null decode as encoding/json does; Strict refuses it
+func WithNullCoercion(coercion Coercion) Option      // Loose (default) lets null decode as encoding/json/v2 does; Strict refuses it
 func WithUndefinedCoercion(coercion Coercion) Option // Loose turns undefined into null; Strict (default) refuses it
 func AsFunction() Option                             // MakeExpression only: refuse anything but a function literal
 func WithSigil(sigil string) Option                  // MakeExpressionFromJaml only: what opens code; default "$"
@@ -116,7 +116,7 @@ type AttributedDeath struct { Cause error }                         // the death
 var (
 	ExpressionError   // base sentinel for every jaml error
 	InvalidExpression // bad document, bad JavaScript syntax, bad script or bad options
-	InvalidTarget     // T holds a type encoding/json cannot decode into, or a jaml.Expression by value
+	InvalidTarget     // T holds a type encoding/json/v2 cannot decode into, or a jaml.Expression by value
 	MissingPath       // the path names nothing in the document
 	EvaluationFailed  // code threw or produced something that is not data; a call was cancelled; the child died
 	CoercionFailed    // json.Unmarshal refused the data, or strict coercion refused null or undefined
