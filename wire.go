@@ -12,8 +12,6 @@ import (
 
 const requestChunk = 64 << 10
 
-var alreadyDone = closedChannel()
-
 var (
 	errLost    = errors.New("the evaluator died before the request was written")
 	errMissing = errors.New("the evaluator holds no such unit")
@@ -58,12 +56,6 @@ type _Call struct {
 	replies  <-chan _Reply
 	compiled <-chan struct{}
 	used     <-chan Usage
-}
-
-func closedChannel() <-chan struct{} {
-	var done = make(chan struct{})
-	close(done)
-	return done
 }
 
 func newWire(requests, controls *os.File) *_Wire {
@@ -134,7 +126,8 @@ func (l *_Life) build(r *_Residency, early func(_Outcome)) {
 			overdue = nil
 			l.settle(r, race.await())
 			early(race.await())
-			defer l.backstop(l.tell(_Request{Op: opCancel, Job: asked.job}), l.quiet)()
+			defer l.backstop(l.quiet)()
+			l.tell(_Request{Op: opCancel, Job: asked.job})
 		}
 	}
 }
@@ -217,16 +210,16 @@ func (l *_Life) serve(ctx context.Context, asked _Outgoing) _Outcome {
 			return overran(watch.ctx, l.final(sent, servedFrom))
 		case <-stopped:
 			stopped = nil
-			defer l.backstop(l.halt(ctx, sent.job), l.quiet)()
+			defer l.backstop(l.quiet)()
+			l.halt(ctx, sent.job)
 		}
 	}
 }
 
-func (l *_Life) halt(ctx context.Context, job uint64) <-chan struct{} {
-	if ctx.Err() == nil {
-		return alreadyDone
+func (l *_Life) halt(ctx context.Context, job uint64) {
+	if ctx.Err() != nil {
+		l.tell(_Request{Op: opCancel, Job: job})
 	}
-	return l.tell(_Request{Op: opCancel, Job: job})
 }
 
 func overran(watched context.Context, result _Outcome) _Outcome {
@@ -274,7 +267,7 @@ func (l *_Life) send(ctx context.Context, outgoing _Outgoing) (_Call, error) {
 	var job = l.wire.sent + 1
 	l.wire.sent = job
 	var expected = l.board.expect(job, outgoing.body.op, outgoing.console)
-	defer l.backstop(alreadyDone, l.wire.stall)()
+	defer l.backstop(l.wire.stall)()
 	if err := l.wire.write(outgoing.body.stamp(job, outgoing.unit)); err != nil {
 		l.end()
 		return _Call{}, errLost
@@ -322,23 +315,20 @@ func (l *_Life) tell(outgoing _Request) <-chan struct{} {
 		l.wire.control.Lock()
 		_, err = l.wire.controls.Write(headed(encoded))
 		l.wire.control.Unlock()
-		if err == nil {
-			close(delivered)
+		if err != nil {
+			// A broken pipe may reflect a child that already died. As with a
+			// failed request write, retire it without replacing its exit cause.
+			l.end()
+			return
 		}
+		close(delivered)
 	}()
 	return delivered
 }
 
-func (l *_Life) backstop(told <-chan struct{}, quiet *_Quiet) func() {
+func (l *_Life) backstop(quiet *_Quiet) func() {
 	var answered = make(chan struct{})
 	go func() {
-		select {
-		case <-told:
-		case <-answered:
-			return
-		case <-l.ended:
-			return
-		}
 		var since = monotonicNow()
 		var timer = time.NewTimer(backstopSilence)
 		defer timer.Stop()
