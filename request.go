@@ -74,6 +74,12 @@ type _EncoderSink struct {
 	w *_WireWriter
 }
 
+type _InvalidText struct{ cause error }
+
+func (_InvalidText) Error() string       { return errInvalidText.Error() }
+func (_InvalidText) Is(other error) bool { return other == errInvalidText }
+func (e _InvalidText) Unwrap() error     { return e.cause }
+
 type _InputLimit struct{ part string }
 
 func (l _InputLimit) Error() string { return "while writing " + l.part }
@@ -407,9 +413,9 @@ func (w *_WireWriter) marshalled(value any) error {
 		json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false), jsontext.EscapeForHTML(false))
 	var syntax *json.SyntaxError
 	if errors.As(err, &syntax) && (syntax.Error() == "invalid UTF-8" || strings.HasPrefix(syntax.Error(), "invalid surrogate pair ")) {
-		// Legacy error conversion hides the native invalid-text sentinel. Match
-		// only its typed syntax errors, never an application's error message.
-		return errInvalidText
+		// Legacy conversion hides the native invalid-text sentinel. Preserve the
+		// cause: an application callback may itself return a native syntax error.
+		return _InvalidText{cause: err}
 	}
 	return err
 }
