@@ -166,23 +166,6 @@ func TestThrownErrorsKeepTheEvaluator(t *testing.T) {
 	expectEqual(t, childPID(t, sb), before)
 }
 
-func TestADeadEvaluatorIsReplaced(t *testing.T) {
-	var sb = mustIsolated(t)
-	var document = mustJaml(t, sb, "slow: \"${ (() => { let n = 0; for (let i = 0; i < loops; i++) n += i % 3; return 7 })() }\"\nok: ${ 4 }\n")
-	var first = childPID(t, sb)
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		if running, err := os.FindProcess(first); err == nil {
-			_ = running.Kill()
-		}
-	}()
-	expectEqual(t, isolatedEvalAs[int](t, document, map[string]any{"loops": 3e7 / raceSlowdown}, "slow"), 7)
-	expectEqual(t, isolatedEvalAs[int](t, document, nil, "ok"), 4)
-	if replaced := childPID(t, sb); replaced == first {
-		t.Fatalf("expected a fresh evaluator, still %d", replaced)
-	}
-}
-
 func TestOneEvaluatorServesManyTemplatesAndExpressionsConcurrently(t *testing.T) {
 	var sb = mustIsolated(t, WithMaxConcurrency(8))
 	var before = liveChildren(t)

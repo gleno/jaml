@@ -11,19 +11,49 @@ import (
 func TestARunStuckInABuiltInPastItsTimeLimitEndsTheChildAndFailsWithTimeLimit(t *testing.T) {
 	var sb = mustIsolated(t)
 	var runaway = mustExpression(t, sb, "/^(?=a)(a+)+$/.test('a'.repeat(30) + 'b')")
-	var neighbour = mustExpression(t, sb, "(() => { let n = 0; for (let i = 0; i < 3e7; i++) { n += i % 3 } return n > 0 })()")
+	var neighbour = mustExpression(t, sb, "loops => { console.log('running'); let n = 0; for (let i = 0; i < loops; i++) { n += i % 3 } return n > 0 }")
 	var child = currentChild(t, sb)
-	var survived = make(chan error, 1)
+	var log = recordRequests(t, sb)
+	var running = make(chan struct{}, 1)
+	var ctx = WithConsole(within(t, 60*time.Second), func(line Line) {
+		if line.Text == "running" {
+			select {
+			case running <- struct{}{}:
+			default:
+			}
+		}
+	})
+	type answer struct {
+		value bool
+		err   error
+	}
+	var survived = make(chan answer, 1)
 	go func() {
-		var out bool
-		survived <- resolveInto(t.Context(), &out, neighbour)
+		value, err := Resolve[bool](ctx, neighbour, slowLoops(5))
+		survived <- answer{value, err}
 	}()
+	select {
+	case <-running:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the innocent job never started in the first evaluator")
+	}
+	expectEqual(t, len(log.served(unitOf(neighbour))), 1)
 	var out any
 	var err = resolveInto(WithWallLimit(t.Context(), 50*time.Millisecond), &out, runaway)
 	expectError(t, err, WallLimit, "$: /^(?=a)(a+)+$/.test('a'.repeat(30) + 'b'): exceeded the wall time limit of 50ms and was still inside a built-in 250ms after it was told to stop")
 	expectStuckAfterCancel(t, child)
-	if err := <-survived; err != nil {
-		t.Fatalf("a job beside the stuck one failed: %v", err)
+	select {
+	case got := <-survived:
+		if got.err != nil {
+			t.Fatalf("a job beside the stuck one failed: %v", got.err)
+		}
+		expectEqual(t, got.value, true)
+	case <-time.After(60 * time.Second):
+		t.Fatal("the innocent job was never replayed")
+	}
+	expectEqual(t, len(log.served(unitOf(neighbour))), 2)
+	if replaced := childPID(t, sb); replaced == child.cmd.Process.Pid {
+		t.Fatal("the innocent job was not replayed in a replacement evaluator")
 	}
 }
 
