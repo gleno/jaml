@@ -203,7 +203,8 @@ func (k *_Keep) hold(ctx context.Context) (*_Handle, bool) {
 		return nil, false
 	}
 	k.holders++
-	lifetime, end := context.WithCancelCause(ctx)
+	lifetime, end := context.WithCancelCause(context.Background())
+	followOrigin(ctx.Done(), lifetime.Done(), end)
 	var unfollow = context.AfterFunc(k.lifetime, func() { end(context.Cause(k.lifetime)) })
 	context.AfterFunc(lifetime, func() {
 		unfollow()
@@ -212,6 +213,21 @@ func (k *_Keep) hold(ctx context.Context) (*_Handle, bool) {
 	var held = &_Handle{lifetime: lifetime, origin: ctx, keep: k}
 	goruntime.AddCleanup(held, func(end context.CancelCauseFunc) { end(errUnreachable) }, end)
 	return held, true
+}
+
+// The cleanup-owned lifetime must not retain origin context values: they may
+// point back to the handle. Only the owner keeps that context for diagnostics.
+func followOrigin(origin, lifetime <-chan struct{}, end context.CancelCauseFunc) {
+	if origin == nil {
+		return
+	}
+	go func() {
+		select {
+		case <-origin:
+			end(errLifetimeOver)
+		case <-lifetime:
+		}
+	}()
 }
 
 func (k *_Keep) ended() bool {
