@@ -9,29 +9,47 @@ import (
 	"time"
 )
 
-func busyFor(t *testing.T, sb *Sandbox, busy time.Duration) <-chan error {
+func keepRunning(t *testing.T, document *Expression) (context.CancelFunc, <-chan error) {
 	t.Helper()
-	var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\n")
+	ctx, cancel := context.WithCancel(within(t, 10*time.Second))
+	t.Cleanup(cancel)
+	var entered = make(chan struct{})
+	var once sync.Once
+	ctx = WithConsole(ctx, func(Line) { once.Do(func() { close(entered) }) })
 	var spinning = make(chan error, 1)
 	go func() {
 		var out any
-		spinning <- resolveInto(within(t, busy), &out, document.At("spin"))
+		spinning <- resolveInto(ctx, &out, document)
 	}()
-	time.Sleep(100 * time.Millisecond)
-	return spinning
+	select {
+	case <-entered:
+	case err := <-spinning:
+		t.Fatalf("the occupancy fixture ended before entering its loop: %v", err)
+	case <-ctx.Done():
+		t.Fatalf("the occupancy fixture never entered its loop: %v", ctx.Err())
+	}
+	return cancel, spinning
 }
 
 func TestABuildTimeoutBoundsTheBuildNotTheWaitForItsSlot(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var spinning = busyFor(t, sb, time.Second)
+		var spin = mustExpression(t, sb, "(() => { console.log('entered'); while (true) {} })()")
+		cancel, spinning := keepRunning(t, spin)
+		var release = time.AfterFunc(2*50*time.Millisecond, cancel)
+		defer release.Stop()
+		var started = time.Now()
 		if _, err := sb.MakeExpression(within(t, 5*time.Second), "1"); err != nil {
 			t.Fatalf("a compile that waited for its slot longer than its build timeout failed: %v", err)
 		}
-		<-spinning
-		spinning = busyFor(t, sb, time.Second)
+		if waited := time.Since(started); waited < 50*time.Millisecond {
+			t.Fatalf("the compile waited only %s, so it never exceeded its build budget in the queue", waited)
+		}
+		expectError(t, <-spinning, context.Canceled)
+		cancel, spinning = keepRunning(t, spin)
 		_, err := sb.MakeExpression(within(t, 100*time.Millisecond), "1")
 		expectError(t, err, EvaluationFailed, "building: cancelled: context deadline exceeded")
-		<-spinning
+		cancel()
+		expectError(t, <-spinning, context.Canceled)
 	}, WithMaxConcurrency(1), WithBuildTimeout(50*time.Millisecond))
 }
 

@@ -27,19 +27,15 @@ func killChild(t *testing.T, sb *Sandbox) {
 
 func TestAQueuedEvalKeepsItsDeadline(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
-		var document = mustJaml(t, sb, "spin: ${ (() => { while (true) {} })() }\nok: ${ 1 }\n")
-		var spinning = make(chan error, 1)
-		go func() {
-			var out any
-			spinning <- resolveInto(within(t, 3*time.Second), &out, document.At("spin"))
-		}()
-		time.Sleep(100 * time.Millisecond)
+		var document = mustJaml(t, sb, "spin: ${ (() => { console.log('entered'); while (true) {} })() }\nok: ${ 1 }\n")
+		cancel, spinning := keepRunning(t, document.At("spin"))
 		var started = time.Now()
 		expectError(t, evalBounded(t, document, within(t, 100*time.Millisecond), "ok"), EvaluationFailed, "cancelled", "deadline exceeded")
 		if waited := time.Since(started); waited > time.Second {
 			t.Fatalf("a queued Eval waited %s past its 100ms deadline", waited)
 		}
-		expectError(t, <-spinning, EvaluationFailed, "$.spin: cancelled: context deadline exceeded")
+		cancel()
+		expectError(t, <-spinning, EvaluationFailed, "$.spin: cancelled: context canceled")
 	}, WithMaxConcurrency(1))
 }
 

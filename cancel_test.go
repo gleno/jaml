@@ -15,10 +15,8 @@ import (
 )
 
 const (
-	heldReplyLimit   = 256<<20 + 11
-	markedReplyLimit = 256<<20 + 13
-	heldReplyFor     = 3 * time.Second
-	heldReplyBytes   = 1 << 20
+	heldReplyLimit = 256<<20 + 11
+	heldReplyBytes = 1 << 20
 )
 
 var _ = holdBigReplies()
@@ -27,15 +25,10 @@ func holdBigReplies() bool {
 	if os.Getenv(evaluatorMarker) != "1" {
 		return false
 	}
-	var marker string
-	switch os.Getenv(evaluatorMemoryLimit) {
-	case strconv.Itoa(heldReplyLimit):
-	case strconv.Itoa(markedReplyLimit):
-		marker = heldReplyMarker(os.Getpid())
-	default:
+	if os.Getenv(evaluatorMemoryLimit) != strconv.Itoa(heldReplyLimit) {
 		return false
 	}
-	os.Exit(serveEvaluations(_HeldReplies{out: os.NewFile(responsesFD, "held-replies"), marker: marker}))
+	os.Exit(serveEvaluations(_HeldReplies{out: os.NewFile(responsesFD, "held-replies"), marker: heldReplyMarker(os.Getpid())}))
 	return true
 }
 
@@ -46,12 +39,17 @@ type _HeldReplies struct {
 
 func (h _HeldReplies) Write(written []byte) (int, error) {
 	if len(written) > heldReplyBytes {
-		if h.marker != "" {
-			if err := os.WriteFile(h.marker, nil, 0o600); err != nil {
+		if err := os.WriteFile(h.marker, nil, 0o600); err != nil {
+			return 0, err
+		}
+		for {
+			if _, err := os.Stat(h.marker); os.IsNotExist(err) {
+				break
+			} else if err != nil {
 				return 0, err
 			}
+			time.Sleep(time.Millisecond)
 		}
-		time.Sleep(heldReplyFor)
 	}
 	return h.out.Write(written)
 }
@@ -76,6 +74,17 @@ func awaitHeldReply(t *testing.T, child int) {
 	}
 }
 
+func releaseHeldReplyAfterGrace(t *testing.T, child *_Life) {
+	t.Helper()
+	// A wrongly armed stuck-job watchdog must have time to fire before the
+	// pending frame is released. Readiness and release are otherwise explicit.
+	time.Sleep(2 * cancelGrace)
+	expectSurvived(t, child)
+	if err := os.Remove(heldReplyMarker(child.cmd.Process.Pid)); err != nil {
+		t.Fatalf("releasing the held reply: %v", err)
+	}
+}
+
 func bigAnswer() string {
 	return `"x".repeat(` + strconv.Itoa(2*heldReplyBytes) + `)`
 }
@@ -92,7 +101,7 @@ func resolvingBig(t *testing.T, sb *Sandbox) <-chan error {
 		}
 		answered <- err
 	}()
-	time.Sleep(raceSlowdown * 100 * time.Millisecond)
+	awaitHeldReply(t, childPID(t, sb))
 	return answered
 }
 
@@ -144,7 +153,7 @@ func expectAllAnswered(t *testing.T, child *_Life) {
 }
 
 func TestALateCancelOnABigReplyLeavesTheChildAlone(t *testing.T) {
-	var sb = mustIsolated(t, WithMemoryLimit(markedReplyLimit))
+	var sb = mustIsolated(t, WithMemoryLimit(heldReplyLimit))
 	var big = mustExpression(t, sb, bigAnswer())
 	var child = currentChild(t, sb)
 	ctx, cancel := context.WithCancel(within(t, 60*time.Second))
@@ -156,6 +165,7 @@ func TestALateCancelOnABigReplyLeavesTheChildAlone(t *testing.T) {
 	awaitHeldReply(t, child.cmd.Process.Pid)
 	cancel()
 	expectError(t, <-answered, EvaluationFailed, "cancelled")
+	releaseHeldReplyAfterGrace(t, child)
 	expectAllAnswered(t, child)
 	expectEqual(t, isolatedEvalAs[int](t, mustJaml(t, sb, "v: ${ 3 }\n"), nil, "v"), 3)
 	expectSurvived(t, child)
@@ -165,9 +175,11 @@ func TestASiblingQueuedBehindAHeldFrameIsNotReplayed(t *testing.T) {
 	var sb = mustIsolated(t, WithMemoryLimit(heldReplyLimit), WithMaxConcurrency(4))
 	var small = mustExpression(t, sb, "1")
 	var before = childPID(t, sb)
+	var child = currentChild(t, sb)
 	var answered = resolvingBig(t, sb)
 	var out int
 	expectError(t, resolveInto(within(t, 100*time.Millisecond), &out, small), EvaluationFailed, "cancelled")
+	releaseHeldReplyAfterGrace(t, child)
 	if err := <-answered; err != nil {
 		t.Fatalf("the big answer failed: %v", err)
 	}
@@ -177,9 +189,11 @@ func TestASiblingQueuedBehindAHeldFrameIsNotReplayed(t *testing.T) {
 func TestABuildOverdueBehindAHeldFrameLeavesTheChildAlone(t *testing.T) {
 	var sb = mustIsolated(t, WithMemoryLimit(heldReplyLimit), WithMaxConcurrency(4), WithBuildTimeout(300*time.Millisecond))
 	var before = childPID(t, sb)
+	var child = currentChild(t, sb)
 	var answered = resolvingBig(t, sb)
 	_, err := sb.MakeExpressionFromJaml(t.Context(), "v: 1\n")
 	expectError(t, err, EvaluationFailed, "the build took longer than its timeout of 300ms")
+	releaseHeldReplyAfterGrace(t, child)
 	if err := <-answered; err != nil {
 		t.Fatalf("the big answer failed: %v", err)
 	}
@@ -352,7 +366,7 @@ func TestAChildThatWakesBeforeTheBackstopStillAnswers(t *testing.T) {
 }
 
 func TestAChildStoppedMidReplyIsCaughtForALimitedCall(t *testing.T) {
-	var sb = mustIsolated(t, WithMemoryLimit(markedReplyLimit))
+	var sb = mustIsolated(t, WithMemoryLimit(heldReplyLimit))
 	var big = mustExpression(t, sb, bigAnswer())
 	var child = currentChild(t, sb)
 	t.Cleanup(func() { _ = child.cmd.Process.Signal(syscall.SIGKILL) })
