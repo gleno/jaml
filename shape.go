@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"cmp"
 	"encoding"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
@@ -21,11 +20,13 @@ type _ShapeNode struct {
 	Expression bool          `json:"expression,omitempty"`
 	Fields     []_ShapeField `json:"fields,omitempty"`
 	Items      int           `json:"items,omitempty"`
+	Fallback   int           `json:"fallback,omitempty"`
 }
 
 type _ShapeField struct {
-	Name string `json:"name"`
-	Node int    `json:"node"`
+	Name   string `json:"name"`
+	Node   int    `json:"node"`
+	Strict bool   `json:"strict,omitempty"`
 }
 
 type _ShapeCursor struct {
@@ -113,10 +114,18 @@ func (d *_ShapeDrawing) node(target reflect.Type) int {
 	case reflect.Struct:
 		var index = d.add(target, _ShapeNode{})
 		var fields []_ShapeField
-		for _, field := range jsonFields(target) {
-			fields = append(fields, _ShapeField{Name: field.name, Node: d.node(field.kind)})
+		var layout = jsonLayout(target)
+		for _, ordered := range layout.lookup {
+			var field = layout.fields[ordered]
+			fields = append(fields, _ShapeField{Name: field.name, Node: d.node(field.kind), Strict: field.strict})
 		}
 		d.drawn[index].Fields = fields
+		if layout.fallback != nil {
+			var kind = embeddedType(layout.fallback.kind)
+			if kind.Kind() == reflect.Map {
+				d.drawn[index].Fallback = d.node(kind.Elem()) + 1
+			}
+		}
 		return index
 	case reflect.Map, reflect.Slice, reflect.Array:
 		var index = d.add(target, _ShapeNode{})
@@ -183,7 +192,7 @@ func (d *_ShapeDrawing) reaching() []bool {
 			if reaching[index] {
 				continue
 			}
-			var reaches = node.Expression || node.Items > 0 && reaching[node.Items-1] || slices.ContainsFunc(node.Fields, func(field _ShapeField) bool { return field.Node >= 0 && reaching[field.Node] })
+			var reaches = node.Expression || node.Items > 0 && reaching[node.Items-1] || node.Fallback > 0 && reaching[node.Fallback-1] || slices.ContainsFunc(node.Fields, func(field _ShapeField) bool { return field.Node >= 0 && reaching[field.Node] })
 			if reaches {
 				reaching[index], changed = true, true
 			}
@@ -212,104 +221,20 @@ func (d *_ShapeDrawing) pruned(root int, reaching []bool) []_ShapeNode {
 			if field.Node >= 0 && reaching[field.Node] {
 				child = number(field.Node)
 			}
-			kept.Fields = append(kept.Fields, _ShapeField{Name: field.Name, Node: child})
+			kept.Fields = append(kept.Fields, _ShapeField{Name: field.Name, Node: child, Strict: field.Strict})
 		}
 		if node.Items > 0 && reaching[node.Items-1] {
 			kept.Items = number(node.Items-1) + 1
+		}
+		if node.Fallback > 0 && reaching[node.Fallback-1] {
+			kept.Fallback = number(node.Fallback-1) + 1
 		}
 		nodes = append(nodes, kept)
 	}
 	return nodes
 }
 
-type _JSONField struct {
-	name   string
-	kind   reflect.Type
-	tagged bool
-	index  []int
-}
-
-func jsonFields(target reflect.Type) []_JSONField {
-	var found []_JSONField
-	var level = []_JSONField{{kind: target}}
-	var counts map[reflect.Type]int
-	var nextCounts = map[reflect.Type]int{}
-	var visited = map[reflect.Type]bool{}
-	for len(level) > 0 {
-		var next []_JSONField
-		counts, nextCounts = nextCounts, map[reflect.Type]int{}
-		for _, embedding := range level {
-			if visited[embedding.kind] {
-				continue
-			}
-			visited[embedding.kind] = true
-			for i := range embedding.kind.NumField() {
-				promoted, field, isField := fieldOf(embedding, i)
-				switch {
-				case isField:
-					found = append(found, field)
-					if counts[embedding.kind] > 1 {
-						found = append(found, field)
-					}
-				case promoted != nil:
-					nextCounts[promoted.kind]++
-					if nextCounts[promoted.kind] == 1 {
-						next = append(next, *promoted)
-					}
-				}
-			}
-		}
-		level = next
-	}
-	return dominantFields(found)
-}
-
-func fieldOf(embedding _JSONField, i int) (*_JSONField, _JSONField, bool) {
-	var field = embedding.kind.Field(i)
-	if field.Anonymous {
-		var embedded = field.Type
-		if embedded.Kind() == reflect.Pointer {
-			embedded = embedded.Elem()
-		}
-		if !field.IsExported() && embedded.Kind() != reflect.Struct {
-			return nil, _JSONField{}, false
-		}
-	} else if !field.IsExported() {
-		return nil, _JSONField{}, false
-	}
-	var tag = field.Tag.Get("json")
-	if tag == "-" {
-		return nil, _JSONField{}, false
-	}
-	var name, _, _ = strings.Cut(tag, ",")
-	if !validTagName(name) {
-		name = ""
-	}
-	var index = append(slices.Clip(embedding.index), i)
-	var kind = field.Type
-	if kind.Name() == "" && kind.Kind() == reflect.Pointer {
-		kind = kind.Elem()
-	}
-	if name == "" && field.Anonymous && kind.Kind() == reflect.Struct {
-		return &_JSONField{kind: kind, index: index}, _JSONField{}, false
-	}
-	var tagged = name != ""
-	if !tagged {
-		name = field.Name
-	}
-	return nil, _JSONField{name: name, kind: field.Type, tagged: tagged, index: index}, true
-}
-
-func fieldFor(target reflect.Type, key string) ([]int, bool) {
-	var fields = jsonFields(target)
-	var chosen = matchKey(len(fields), func(i int) string { return fields[i].name }, key)
-	if chosen < 0 {
-		return nil, false
-	}
-	return fields[chosen].index, true
-}
-
-func matchKey(count int, name func(int) string, key string) int {
+func matchKey(count int, name func(int) string, strict func(int) bool, key string) int {
 	for i := range count {
 		if name(i) == key {
 			return i
@@ -317,7 +242,7 @@ func matchKey(count int, name func(int) string, key string) int {
 	}
 	var folded = foldName(key)
 	for i := range count {
-		if foldName(name(i)) == folded {
+		if !strict(i) && foldName(name(i)) == folded {
 			return i
 		}
 	}
@@ -347,48 +272,6 @@ func foldName(name string) string {
 	return folded.String()
 }
 
-func validTagName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, r := range name {
-		if !strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", r) && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return false
-		}
-	}
-	return true
-}
-
-func dominantFields(found []_JSONField) []_JSONField {
-	slices.SortStableFunc(found, func(a, b _JSONField) int {
-		return cmp.Or(strings.Compare(a.name, b.name), cmp.Compare(len(a.index), len(b.index)), compareTagged(a, b))
-	})
-	var kept []_JSONField
-	for start := 0; start < len(found); {
-		var end = start + 1
-		for end < len(found) && found[end].name == found[start].name {
-			end++
-		}
-		var group = found[start:end]
-		if len(group) == 1 || len(group[0].index) < len(group[1].index) || group[0].tagged != group[1].tagged {
-			kept = append(kept, group[0])
-		}
-		start = end
-	}
-	slices.SortFunc(kept, func(a, b _JSONField) int { return slices.Compare(a.index, b.index) })
-	return kept
-}
-
-func compareTagged(a, b _JSONField) int {
-	switch {
-	case a.tagged == b.tagged:
-		return 0
-	case a.tagged:
-		return -1
-	}
-	return 1
-}
-
 func (c *_ShapeCursor) current() *_ShapeNode {
 	if c == nil {
 		return nil
@@ -409,11 +292,22 @@ func (c *_ShapeCursor) key(key string) *_ShapeCursor {
 	if node.Items > 0 {
 		return &_ShapeCursor{shape: c.shape, node: node.Items - 1}
 	}
-	var chosen = matchKey(len(node.Fields), func(i int) string { return node.Fields[i].Name }, key)
-	if chosen < 0 || node.Fields[chosen].Node < 0 {
+	var chosen = matchKey(len(node.Fields), func(i int) string { return node.Fields[i].Name }, func(i int) bool { return node.Fields[i].Strict }, key)
+	if chosen < 0 {
+		return c.fallback()
+	}
+	if node.Fields[chosen].Node < 0 {
 		return nil
 	}
 	return &_ShapeCursor{shape: c.shape, node: node.Fields[chosen].Node}
+}
+
+func (c *_ShapeCursor) fallback() *_ShapeCursor {
+	var node = c.current()
+	if node == nil || node.Fallback == 0 {
+		return nil
+	}
+	return &_ShapeCursor{shape: c.shape, node: node.Fallback - 1}
 }
 
 func (c *_ShapeCursor) item() *_ShapeCursor {

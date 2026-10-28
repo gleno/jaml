@@ -28,8 +28,9 @@ type _TextWalk struct {
 }
 
 type _KnownStruct struct {
-	fields []_JSONField
-	named  bool
+	fields   []_JSONField
+	fallback *_JSONField
+	named    bool
 }
 
 type _Followed struct {
@@ -52,6 +53,10 @@ func (w _TextWalk) valid(value reflect.Value, depth int) bool {
 	if implementsFor(value, streamMarshalerType) {
 		w.namesOnly = true
 	}
+	return w.contents(value, depth)
+}
+
+func (w _TextWalk) contents(value reflect.Value, depth int) bool {
 	switch value.Kind() {
 	case reflect.Pointer, reflect.Map, reflect.Slice:
 		var followed = _Followed{address: value.Pointer(), kind: value.Type()}
@@ -157,15 +162,37 @@ func (w _TextWalk) validFields(object reflect.Value, depth int) bool {
 			return false
 		}
 	}
+	if known.fallback != nil {
+		value, err := object.FieldByIndexErr(known.fallback.index)
+		if err == nil && !w.validFallback(value, depth) {
+			return false
+		}
+	}
 	return true
+}
+
+func (w _TextWalk) validFallback(value reflect.Value, depth int) bool {
+	if !value.IsValid() || depth > maxDataDepth || isNil(value) {
+		return true
+	}
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Map {
+		return w.valid(value, depth)
+	}
+	// Native embedded maps ignore their own methods. Inspect their entries
+	// through the same cycle/depth walk, keeping ordinary value methods opaque.
+	return w.contents(value, depth)
 }
 
 func (w _TextWalk) structOf(kind reflect.Type) _KnownStruct {
 	if known, seen := w.structs[kind]; seen {
 		return known
 	}
-	var known = _KnownStruct{fields: jsonFields(kind), named: true}
-	for _, field := range known.fields {
+	var layout = jsonLayout(kind)
+	var known = _KnownStruct{fields: layout.fields, fallback: layout.fallback, named: true}
+	for _, field := range jsonFields(kind) {
 		known.named = known.named && !namedInInvalidText(kind.FieldByIndex(field.index).Tag)
 	}
 	w.structs[kind] = known

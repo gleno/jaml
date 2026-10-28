@@ -136,25 +136,45 @@ func settleViews(value reflect.Value, cursor *_ShapeCursor, held *_Handle) bool 
 			return settleViews(value.Elem(), cursor, held)
 		}
 	case reflect.Struct:
-		for _, field := range jsonFields(value.Type()) {
+		var layout = jsonLayout(value.Type())
+		for _, field := range layout.fields {
 			if found, readable := fieldAt(value, field.index); readable && settleViews(found, cursor.key(field.name), held) {
 				changed = true
 			}
 		}
-	case reflect.Map:
-		for entries := value.MapRange(); entries.Next(); {
-			var entry = reflect.New(value.Type().Elem()).Elem()
-			entry.Set(entries.Value())
-			if settleViews(entry, cursor.item(), held) {
-				value.SetMapIndex(entries.Key(), entry)
-				changed = true
+		if field := layout.fallback; field != nil {
+			if found, readable := fieldAt(value, field.index); readable {
+				if found.Kind() == reflect.Pointer && !found.IsNil() {
+					found = found.Elem()
+				}
+				if found.Kind() == reflect.Map && settleMapViews(found, cursor.fallback(), held) {
+					changed = true
+				}
 			}
 		}
+	case reflect.Map:
+		return settleMapViews(value, cursor.item(), held)
 	case reflect.Slice, reflect.Array:
 		for index := range value.Len() {
 			if settleViews(value.Index(index), cursor.item(), held) {
 				changed = true
 			}
+		}
+	}
+	return changed
+}
+
+func settleMapViews(value reflect.Value, cursor *_ShapeCursor, held *_Handle) bool {
+	if cursor == nil {
+		return false
+	}
+	var changed bool
+	for entries := value.MapRange(); entries.Next(); {
+		var entry = reflect.New(value.Type().Elem()).Elem()
+		entry.Set(entries.Value())
+		if settleViews(entry, cursor, held) {
+			value.SetMapIndex(entries.Key(), entry)
+			changed = true
 		}
 	}
 	return changed
