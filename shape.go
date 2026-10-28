@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"reflect"
 	"slices"
 	"strings"
@@ -33,11 +34,12 @@ type _ShapeCursor struct {
 }
 
 var (
-	expressionType    = reflect.TypeFor[Expression]()
-	expressionPointer = reflect.TypeFor[*Expression]()
-	unmarshalerType   = reflect.TypeFor[json.Unmarshaler]()
-	textType          = reflect.TypeFor[encoding.TextUnmarshaler]()
-	shapes            sync.Map
+	expressionType      = reflect.TypeFor[Expression]()
+	expressionPointer   = reflect.TypeFor[*Expression]()
+	unmarshalerType     = reflect.TypeFor[json.Unmarshaler]()
+	unmarshalerFromType = reflect.TypeFor[jsonv2.UnmarshalerFrom]()
+	textType            = reflect.TypeFor[encoding.TextUnmarshaler]()
+	shapes              sync.Map
 )
 
 type _DrawnShape struct {
@@ -164,7 +166,7 @@ func decodableKey(key reflect.Type) bool {
 
 func decodesItself(target reflect.Type) bool {
 	var pointer = reflect.PointerTo(target)
-	return pointer.Implements(unmarshalerType) || pointer.Implements(textType)
+	return pointer.Implements(unmarshalerType) || pointer.Implements(unmarshalerFromType) || pointer.Implements(textType)
 }
 
 func (d *_ShapeDrawing) add(target reflect.Type, node _ShapeNode) int {
@@ -331,7 +333,15 @@ func foldName(name string) string {
 		case r < utf8.RuneSelf:
 			folded.WriteRune(r)
 		default:
-			folded.WriteRune(unicode.ToUpper(unicode.ToLower(r)))
+			for {
+				next := unicode.SimpleFold(r)
+				if next <= r {
+					r = next
+					break
+				}
+				r = next
+			}
+			folded.WriteRune(r)
 		}
 	}
 	return folded.String()

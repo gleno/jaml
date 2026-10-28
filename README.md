@@ -6,6 +6,8 @@ Jaml documents are structured documents whose values can hold JavaScript. jaml p
 go get github.com/gleno/jaml
 ```
 
+Requires Go 1.27.3 or newer with its default JSONv2 implementation. Explicit `GOEXPERIMENT=nojsonv2` builds are unsupported.
+
 ## Simple use
 
 `${ … }` as a whole value keeps its result's type. `${{ … }}` inside text writes its result into the text. Values arrive on the context.
