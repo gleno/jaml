@@ -443,7 +443,7 @@ func TestADocumentPastTheRequestCapIsRefusedBeforeItsBuild(t *testing.T) {
 			var sb = mustIsolated(t, WithMemoryLimit(16<<20), WithBuildTimeout(30*time.Second))
 			var before = childPID(t, sb)
 			_, err := sb.MakeExpressionFromJaml(within(t, 60*time.Second), text)
-			expectError(t, err, InvalidExpression, "the request is larger than 4194304 bytes, mostly the document")
+			expectError(t, err, InvalidExpression, "the request is larger than 4194304 bytes while writing the document")
 			if errors.Is(err, EvaluationFailed) || errors.Is(err, InvalidInput) {
 				t.Fatalf("a document past the cap is the author's, not an evaluation or the caller's input: %v", err)
 			}

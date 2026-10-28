@@ -3,6 +3,7 @@ package jaml
 import (
 	"encoding"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"reflect"
 	"strings"
@@ -10,14 +11,20 @@ import (
 )
 
 var (
-	errInvalidText    = errors.New("holds text that is not valid UTF-8")
-	marshalerType     = reflect.TypeFor[json.Marshaler]()
-	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+	errInvalidText      = errors.New("holds text that is not valid UTF-8")
+	streamMarshalerType = reflect.TypeFor[jsonv2.MarshalerTo]()
+	inputMarshalerTypes = [...]reflect.Type{
+		streamMarshalerType,
+		reflect.TypeFor[json.Marshaler](),
+		reflect.TypeFor[encoding.TextAppender](),
+		reflect.TypeFor[encoding.TextMarshaler](),
+	}
 )
 
 type _TextWalk struct {
-	structs  map[reflect.Type]_KnownStruct
-	followed map[_Followed]bool
+	structs   map[reflect.Type]_KnownStruct
+	followed  map[_Followed]bool
+	namesOnly bool
 }
 
 type _KnownStruct struct {
@@ -37,11 +44,13 @@ func holdsValidText(value any) bool {
 }
 
 func (w _TextWalk) valid(value reflect.Value, depth int) bool {
-	if !value.IsValid() || depth > maxDataDepth || isNil(value) || writesItsOwnJSON(value) {
+	if !value.IsValid() || depth > maxDataDepth || isNil(value) || marshalsItself(value) {
 		return true
 	}
-	if text, isText := marshalledText(value); isText {
-		return utf8.Valid(text)
+	// MarshalJSONTo may decline and let the encoder use ordinary fields. Preserve
+	// malformed-tag rejection in that fallback without invoking the method.
+	if implementsFor(value, streamMarshalerType) {
+		w.namesOnly = true
 	}
 	switch value.Kind() {
 	case reflect.Pointer, reflect.Map, reflect.Slice:
@@ -57,7 +66,7 @@ func (w _TextWalk) valid(value reflect.Value, depth int) bool {
 	}
 	switch value.Kind() {
 	case reflect.String:
-		return utf8.ValidString(value.String())
+		return w.namesOnly || utf8.ValidString(value.String())
 	case reflect.Interface:
 		return w.valid(value.Elem(), depth)
 	case reflect.Pointer:
@@ -82,30 +91,28 @@ func isNil(value reflect.Value) bool {
 	return false
 }
 
-func writesItsOwnJSON(value reflect.Value) bool {
-	return implementsFor(value, marshalerType)
+// Only the JSON encoder calls application methods and validates their text.
+// MarshalJSONTo remains visible to the metadata walk because it may decline.
+func marshalsItself(value reflect.Value) bool {
+	for _, behavior := range inputMarshalerTypes {
+		if behavior != streamMarshalerType && implementsFor(value, behavior) {
+			return true
+		}
+	}
+	return false
 }
 
-func marshalledText(value reflect.Value) ([]byte, bool) {
-	if !implementsFor(value, textMarshalerType) {
-		return nil, false
-	}
-	var receiver = value
-	if !value.Type().Implements(textMarshalerType) {
-		receiver = value.Addr()
-	}
-	if !receiver.CanInterface() {
-		return nil, false
-	}
-	text, err := receiver.Interface().(encoding.TextMarshaler).MarshalText()
-	if err != nil {
-		return nil, false
-	}
-	return text, true
+func implementsFor(value reflect.Value, behavior reflect.Type) bool {
+	return value.Type().Implements(behavior) || value.CanAddr() && reflect.PointerTo(value.Type()).Implements(behavior)
 }
 
-func implementsFor(value reflect.Value, behaviour reflect.Type) bool {
-	return value.Type().Implements(behaviour) || value.CanAddr() && reflect.PointerTo(value.Type()).Implements(behaviour)
+func hasInputMarshaler(kind reflect.Type) bool {
+	for _, behavior := range inputMarshalerTypes {
+		if kind.Implements(behavior) {
+			return true
+		}
+	}
+	return false
 }
 
 func writtenAsBytes(kind reflect.Type) bool {
@@ -113,8 +120,7 @@ func writtenAsBytes(kind reflect.Type) bool {
 	if item.Kind() != reflect.Uint8 {
 		return false
 	}
-	var pointer = reflect.PointerTo(item)
-	return !pointer.Implements(marshalerType) && !pointer.Implements(textMarshalerType)
+	return !hasInputMarshaler(reflect.PointerTo(item))
 }
 
 func (w _TextWalk) validItems(items reflect.Value, depth int) bool {
@@ -128,7 +134,7 @@ func (w _TextWalk) validItems(items reflect.Value, depth int) bool {
 
 func (w _TextWalk) validEntries(entries reflect.Value, depth int) bool {
 	for entry := entries.MapRange(); entry.Next(); {
-		if !validKey(entry.Key()) || !w.valid(entry.Value(), depth) {
+		if !w.namesOnly && !validKey(entry.Key()) || !w.valid(entry.Value(), depth) {
 			return false
 		}
 	}
@@ -136,13 +142,8 @@ func (w _TextWalk) validEntries(entries reflect.Value, depth int) bool {
 }
 
 func validKey(key reflect.Value) bool {
-	if key.Kind() == reflect.String {
-		return utf8.ValidString(key.String())
-	}
-	if text, isText := marshalledText(key); isText {
-		return utf8.Valid(text)
-	}
-	return true
+	// String keys ignore custom methods; other keys are checked after encoding.
+	return key.Kind() != reflect.String || utf8.ValidString(key.String())
 }
 
 func (w _TextWalk) validFields(object reflect.Value, depth int) bool {

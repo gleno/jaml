@@ -1,7 +1,6 @@
 package jaml
 
 import (
-	"reflect"
 	"testing"
 )
 
@@ -43,19 +42,16 @@ func TestATextWalkStopsAtAnActiveContainer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var calls int
 			var value = cycle(_CountingText{calls: &calls})
-			var walk = _TextWalk{structs: map[reflect.Type]_KnownStruct{}, followed: map[_Followed]bool{}}
-			// A short remaining depth bounds even the broken branching walk.
-			if !walk.valid(reflect.ValueOf(value), maxDataDepth-4) {
+			// Branching back edges must be cut without exhausting the depth budget.
+			if !holdsValidText(value) {
 				t.Fatal("cycle detection belongs to the JSON encoder, not text validation")
 			}
-			if calls != 1 {
-				t.Fatalf("visited the text in one active container %d times, want once", calls)
-			}
+			expectEqual(t, calls, 0)
 		})
 	}
 }
 
-func TestATextWalkRevisitsSharedContainersAfterLeavingThem(t *testing.T) {
+func TestATextWalkAcceptsSharedContainersWithoutCallingMarshalers(t *testing.T) {
 	for name, shared := range map[string]func(_CountingText) any{
 		"map":     func(text _CountingText) any { return _TextMap{"text": text} },
 		"slice":   func(text _CountingText) any { return _TextSlice{text} },
@@ -67,7 +63,7 @@ func TestATextWalkRevisitsSharedContainersAfterLeavingThem(t *testing.T) {
 			if !holdsValidText([]any{value, value}) {
 				t.Fatal("shared acyclic data was refused")
 			}
-			expectEqual(t, calls, 2)
+			expectEqual(t, calls, 0)
 		})
 	}
 }

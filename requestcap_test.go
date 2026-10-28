@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestARequestPastTheCapIsRefusedInTheHostNamingItsBulk(t *testing.T) {
+func TestARequestPastTheCapNamesTheInputThatCrossedIt(t *testing.T) {
 	var sb = mustIsolated(t, WithMemoryLimit(16<<20))
 	var before = childPID(t, sb)
 	var echo = mustExpression(t, sb, "x => typeof x")
@@ -22,7 +22,7 @@ func TestARequestPastTheCapIsRefusedInTheHostNamingItsBulk(t *testing.T) {
 	}
 	for name, refused := range map[string]struct {
 		run  func() error
-		bulk string
+		part string
 		kind error
 	}{
 		"one value": {func() error {
@@ -32,13 +32,13 @@ func TestARequestPastTheCapIsRefusedInTheHostNamingItsBulk(t *testing.T) {
 		"values": {func() error {
 			var out string
 			return resolveInto(valued(t.Context(), map[string]any{"a": third, "b": third, "c": third}), &out, echo, 1)
-		}, "the values", InvalidInput},
-		"arguments":  {func() error { var out string; return resolveInto(t.Context(), &out, echo, huge) }, "the arguments", InvalidInput},
+		}, `value "c"`, InvalidInput},
+		"arguments":  {func() error { var out string; return resolveInto(t.Context(), &out, echo, huge) }, "argument 1", InvalidInput},
 		"scripts":    {func() error { var out string; return resolveInto(scripted, &out, echo, 1) }, "the scripts", InvalidInput},
 		"a document": {func() error { _, err := sb.MakeExpressionFromJaml(t.Context(), "v: "+huge+"\n"); return err }, "the document", InvalidExpression},
 	} {
 		t.Run(name, func(t *testing.T) {
-			expectError(t, refused.run(), refused.kind, "the request is larger than 4194304 bytes, mostly "+refused.bulk)
+			expectError(t, refused.run(), refused.kind, "the request is larger than 4194304 bytes while writing "+refused.part)
 		})
 	}
 	expectEqual(t, childPID(t, sb), before)

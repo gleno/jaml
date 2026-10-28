@@ -1,16 +1,18 @@
 package jaml
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"maps"
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -72,6 +74,18 @@ type _EncoderSink struct {
 	w *_WireWriter
 }
 
+type _InputLimit struct{ part string }
+
+func (l _InputLimit) Error() string { return "while writing " + l.part }
+func (l _InputLimit) Unwrap() error { return _PastLimit{} }
+
+func inputPart(part string, err error) error {
+	if errors.As(err, new(_InputLimit)) || !errors.As(err, new(_PastLimit)) {
+		return err
+	}
+	return _InputLimit{part: part}
+}
+
 func bodyWriter(limit int) *_WireWriter {
 	return &_WireWriter{written: make([]byte, requestHeadroom), limit: requestHeadroom + min(limit, unboundedAsk)}
 }
@@ -81,7 +95,9 @@ func writeWork(ask _Ask, limit int) (_WrittenWork, error) {
 	var written = _WrittenWork{ask: ask, names: slices.Sorted(maps.Keys(ask.values))}
 	var err = written.fill(w)
 	if errors.As(err, new(_PastLimit)) {
-		return _WrittenWork{}, fail(invalidInput, "the request is larger than %d bytes, mostly %s", limit, ask.bulkiest()).at(rootPlace)
+		var at = _InputLimit{part: "the request metadata"}
+		_ = errors.As(err, &at)
+		return _WrittenWork{}, fail(invalidInput, "the request is larger than %d bytes %s", limit, at).at(rootPlace)
 	}
 	if err != nil {
 		return _WrittenWork{}, located(rootPlace, err)
@@ -112,11 +128,11 @@ func (ww *_WrittenWork) fill(w *_WireWriter) error {
 	}
 	if len(ww.ask.path) > 0 {
 		if err := w.strings(`,"path":`, ww.ask.path); err != nil {
-			return err
+			return inputPart("the path", err)
 		}
 	}
 	if err := ww.fillValues(w); err != nil {
-		return err
+		return inputPart("the values", err)
 	}
 	scripts, err := admitScripts(ww.ask.scripts)
 	if err != nil {
@@ -124,18 +140,18 @@ func (ww *_WrittenWork) fill(w *_WireWriter) error {
 	}
 	if len(scripts) > 0 {
 		if err := w.strings(`,"scripts":`, scripts); err != nil {
-			return err
+			return inputPart("the scripts", err)
 		}
 	}
 	if err := ww.fillArgs(w); err != nil {
-		return err
+		return inputPart("the arguments", err)
 	}
 	if ww.ask.skips != nil {
 		if err := w.raw(`,"skips":`); err != nil {
-			return err
+			return inputPart("the result shape", err)
 		}
 		if err := w.marshalled(ww.ask.skips); err != nil {
-			return err
+			return inputPart("the result shape", err)
 		}
 	}
 	return w.raw("}")
@@ -158,13 +174,14 @@ func (ww *_WrittenWork) fillValues(w *_WireWriter) error {
 		if index > 0 {
 			w.mark(',')
 		}
+		var named = fmt.Sprintf("value %q", clip(name, keyExcerptLength))
 		if err := w.quoted(name); err != nil {
-			return err
+			return inputPart(named, err)
 		}
 		w.mark(':')
-		span, err := w.admitted(fmt.Sprintf("value %q", clip(name, keyExcerptLength)), ww.ask.values[name])
+		span, err := w.admitted(named, ww.ask.values[name])
 		if err != nil {
-			return bound(bindingValues, err)
+			return bound(bindingValues, inputPart(named, err))
 		}
 		ww.values = append(ww.values, span)
 	}
@@ -195,9 +212,10 @@ func (ww *_WrittenWork) fillArgs(w *_WireWriter) error {
 		if index > 0 {
 			w.mark(',')
 		}
-		span, err := w.admitted(fmt.Sprintf("argument %d", index+1), arg)
+		var named = fmt.Sprintf("argument %d", index+1)
+		span, err := w.admitted(named, arg)
 		if err != nil {
-			return bound("binding arguments", err)
+			return bound("binding arguments", inputPart(named, err))
 		}
 		ww.args = append(ww.args, span)
 	}
@@ -231,7 +249,7 @@ func writePlan(plan _Blueprint, limit int) (*_RequestBody, error) {
 	var w = bodyWriter(limit)
 	if err := w.plan(plan); err != nil {
 		if errors.As(err, new(_PastLimit)) {
-			return nil, fail(invalidExpression, "the request is larger than %d bytes, mostly the document", limit)
+			return nil, fail(invalidExpression, "the request is larger than %d bytes while writing the document", limit)
 		}
 		return nil, err
 	}
@@ -275,41 +293,6 @@ func (b *_RequestBody) stamp(job, unit uint64) []byte {
 	binary.BigEndian.PutUint64(b.written[start:], uint64(len(b.written)-start-frameHeader))
 	copy(b.written[start+frameHeader:], envelope)
 	return b.written[start:]
-}
-
-func (a _Ask) bulkiest() string {
-	var parts = map[string]int{"the path": measured(func(w *_WireWriter) error { return w.strings("", a.path) })}
-	var biggest, biggestName, values = 0, "", 0
-	for name, value := range a.shipped() {
-		var size = measured(func(w *_WireWriter) error { return w.datum(value, 0) }) + quotedLength(name) + 2
-		values += size
-		if size > biggest {
-			biggest, biggestName = size, name
-		}
-	}
-	parts["the values"] = values
-	parts["the scripts"] = measured(func(w *_WireWriter) error { return w.strings("", a.scripts) })
-	for _, arg := range a.args {
-		parts["the arguments"] += measured(func(w *_WireWriter) error { return w.datum(arg, 0) }) + 1
-	}
-	var named = slices.MaxFunc(slices.Sorted(maps.Keys(parts)), func(x, y string) int { return parts[x] - parts[y] })
-	if named == "the values" && 2*biggest > values {
-		return fmt.Sprintf("value %q", clip(biggestName, keyExcerptLength))
-	}
-	return named
-}
-
-func (a _Ask) shipped() map[string]any {
-	if a.codeFree {
-		return nil
-	}
-	return a.values
-}
-
-func measured(write func(w *_WireWriter) error) int {
-	var scratch = unboundedWriter()
-	_ = write(scratch)
-	return len(scratch.written)
 }
 
 func (w *_WireWriter) admitted(named string, value any) (_Span, error) {
@@ -420,17 +403,22 @@ func (w *_WireWriter) marshalled(value any) error {
 	if !holdsValidText(value) {
 		return errInvalidText
 	}
-	var encoder = json.NewEncoder(_EncoderSink{w: w})
-	encoder.SetEscapeHTML(false)
-	return encoder.Encode(value)
+	var err = jsonv2.MarshalWrite(_EncoderSink{w: w}, value,
+		json.DefaultOptionsV1(), jsontext.AllowInvalidUTF8(false), jsontext.EscapeForHTML(false))
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) && (syntax.Error() == "invalid UTF-8" || strings.HasPrefix(syntax.Error(), "invalid surrogate pair ")) {
+		// Legacy error conversion hides the native invalid-text sentinel. Match
+		// only its typed syntax errors, never an application's error message.
+		return errInvalidText
+	}
+	return err
 }
 
 func (s _EncoderSink) Write(encoded []byte) (int, error) {
-	var text = bytes.TrimSuffix(encoded, []byte("\n"))
-	if len(s.w.written)+len(text) > s.w.limit {
+	if len(s.w.written)+len(encoded) > s.w.limit {
 		return 0, _PastLimit{}
 	}
-	s.w.reserve(len(text))
-	s.w.written = append(s.w.written, text...)
+	s.w.reserve(len(encoded))
+	s.w.written = append(s.w.written, encoded...)
 	return len(encoded), nil
 }
