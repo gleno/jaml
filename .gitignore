@@ -3,3 +3,7 @@ docs/
 __pycache__/
 .worktrees/
 .claude/
+
+# Keep repository documentation in the root README.
+*.md
+!/README.md
