@@ -24,11 +24,11 @@ func staticExpression(tb testing.TB, kind _SandboxKind, keys int) *Expression {
 	if kind.name == isolatedKind.name && isolationSupported() != nil {
 		tb.Skip(isolationSupported())
 	}
-	sb, err := kind.make(context.Background())
+	sb, err := kind.make(tb.Context())
 	if err != nil {
 		tb.Fatalf("making a sandbox: %v", err)
 	}
-	made, err := sb.MakeExpressionFromJaml(context.Background(), staticJaml(keys))
+	made, err := sb.MakeExpressionFromJaml(tb.Context(), staticJaml(keys))
 	if err != nil {
 		tb.Fatalf("MakeExpressionFromJaml: %v", err)
 	}
