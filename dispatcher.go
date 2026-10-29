@@ -232,15 +232,13 @@ func (e *_Errand) hasItsCallerLeft() bool {
 func (d *_Dispatcher) dropTheSuspectsWhoseCallersLeft() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	var kept = d.suspects[:0]
-	for _, suspect := range d.suspects {
+	d.suspects = slices.DeleteFunc(d.suspects, func(suspect *_Errand) bool {
 		if suspect.hasItsCallerLeft() {
 			suspect.answers <- _Admission{err: cancelled(suspect.caller)}
-			continue
+			return true
 		}
-		kept = append(kept, suspect)
-	}
-	d.suspects = kept
+		return false
+	})
 	d.dispatch()
 }
 
