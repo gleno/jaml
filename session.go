@@ -79,10 +79,6 @@ func (l *_LazySession) begin() (*_Session, error) {
 	}
 	var opened = &_Session{ctx: ctx, realm: realm}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
-	if err := opened.enter(realm.protection.guard); err != nil {
-		opened.close()
-		return nil, failWith(evaluationFailed, err)
-	}
 	if err := opened.installConsole(l.speak); err != nil {
 		opened.close()
 		return nil, failWith(evaluationFailed, err)
@@ -204,8 +200,7 @@ func guardJSONParse(vm *goja.Runtime) {
 
 func (s *_Session) evaluate(compiled _Expression, args []_Datum) (any, error) {
 	return s.attempt(func(r _Realm) (goja.Value, error) {
-		settled, err := r.settle(compiled, args)
-		return settled, r.explainWrite(compiled, err)
+		return r.settle(compiled, args)
 	})
 }
 

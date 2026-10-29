@@ -2,10 +2,11 @@ package jaml
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
-func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
+func TestEveryWriteToAFrozenValueIsRefused(t *testing.T) {
 	var writes = []string{
 		"items.sort()",
 		"items.sort((a, b) => a - b)",
@@ -43,11 +44,11 @@ func TestEveryWriteToAFrozenValueSaysItIsReadOnly(t *testing.T) {
 		"Function('user = 1')()",
 	}
 	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
-		expectReadOnly(t, sb, writes)
+		expectProtectedWrite(t, sb, writes)
 	})
 }
 
-func TestEveryWriteToAFrozenBuiltInSaysItIsReadOnly(t *testing.T) {
+func TestEveryWriteToAFrozenBuiltInIsRefused(t *testing.T) {
 	var writes = []string{
 		"Reflect.set(user, 'toString', 1)",
 		"Array.prototype.push = 1",
@@ -57,20 +58,20 @@ func TestEveryWriteToAFrozenBuiltInSaysItIsReadOnly(t *testing.T) {
 		"user.name.toString = 1",
 	}
 	protectedKinds.each(t, func(t *testing.T, sb *Sandbox) {
-		expectReadOnly(t, sb, writes)
+		expectProtectedWrite(t, sb, writes)
 	})
 }
 
-func expectReadOnly(t *testing.T, sb *Sandbox, writes []string) {
+func expectProtectedWrite(t *testing.T, sb *Sandbox, writes []string) {
 	t.Helper()
 	var values = map[string]any{"items": []int{3, 1, 2}, "user": map[string]any{"name": "a", "count": 1}}
 	for _, write := range writes {
 		var out any
 		var err = resolveInto(withValues(t, values), &out, mustExpression(t, sb, write))
-		expectError(t, err, EvaluationFailed, "$: ", "TypeError: "+readOnlyRefusal)
+		expectError(t, err, EvaluationFailed, "$: ", "TypeError")
 		var thrown *Thrown
-		if !errors.As(err, &thrown) || thrown.Message != "TypeError: "+readOnlyRefusal {
-			t.Fatalf("%s: the thrown message is %v", write, thrown)
+		if !errors.As(err, &thrown) || thrown.Message != "TypeError" && !strings.HasPrefix(thrown.Message, "TypeError: ") {
+			t.Fatalf("%s: the write did not throw a TypeError: %v", write, thrown)
 		}
 	}
 }
@@ -111,7 +112,7 @@ func TestATypeErrorBesideAFrozenTargetKeepsItsMessage(t *testing.T) {
 				t.Fatalf("%s: want %q, got %v", source, message, err)
 			}
 		}
-		expectReadOnly(t, sb, []string{"Object.defineProperty(Object.freeze({}), 'x', { value: 1 })", "Object.assign(Object.freeze({}), { x: 1 })"})
+		expectProtectedWrite(t, sb, []string{"Object.defineProperty(Object.freeze({}), 'x', { value: 1 })", "Object.assign(Object.freeze({}), { x: 1 })"})
 	})
 }
 
@@ -122,7 +123,7 @@ func TestAFrozenWriteThatDoesNothingStillSucceeds(t *testing.T) {
 	})
 }
 
-func TestAGuardedMethodKeepsItsNameAndLength(t *testing.T) {
+func TestProtectedMethodsKeepTheirNameAndLength(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var got = mustResolve[[]any](t, t.Context(), mustExpression(t, sb, "[Array.prototype.splice.name, Array.prototype.splice.length, Object.defineProperty.name, Object.defineProperty.length]"))
 		expectEqual(t, got, []any{"splice", float64(2), "defineProperty", float64(3)})

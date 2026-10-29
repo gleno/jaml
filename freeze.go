@@ -2,7 +2,6 @@ package jaml
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -11,14 +10,16 @@ import (
 	"github.com/dop251/goja"
 )
 
-const unnamedFunctionsFile = "jaml:intrinsics"
+const (
+	unnamedFunctionsFile = "jaml:intrinsics"
+	readOnlyRefusal      = "cannot change a read-only value: values from WithValues and the built-ins are frozen, so change a copy instead, such as items.toSorted(), [...items].reverse() or { ...item, key: value }"
+	nameRefusal          = "cannot change a read-only value: a name from WithValues cannot be assigned, so change the value in place or keep the new one under another name"
+)
 
 type _Protection interface {
 	_Closing
-	guard(r _Realm) error
 	freeze(r _Realm, survey _Survey) error
 	refusal() string
-	refuseWrite(r _Realm, thrown goja.Value) error
 }
 
 func (r _Runtime) protect(vm *goja.Runtime) (_Protection, error) {
@@ -34,10 +35,6 @@ func (r _Runtime) protect(vm *goja.Runtime) (_Protection, error) {
 
 type _Mutable struct{}
 
-func (_Mutable) guard(_Realm) error {
-	return nil
-}
-
 func (_Mutable) freeze(_Realm, _Survey) error {
 	return nil
 }
@@ -50,23 +47,16 @@ func (_Mutable) refusal() string {
 	return nameRefusal
 }
 
-func (_Mutable) refuseWrite(_Realm, goja.Value) error {
-	return nil
-}
-
 type _Frozen struct {
 	intrinsics *_Intrinsics
 }
 
 type _Intrinsics struct {
-	object    *goja.Object
-	typeError *goja.Object
-	ownKeys   goja.Callable
-	describe  goja.Callable
-	define    goja.Callable
-	isFrozen  goja.Callable
-	unnamed   []goja.Value
-	homes     []_Home
+	ownKeys  goja.Callable
+	describe goja.Callable
+	define   goja.Callable
+	unnamed  []goja.Value
+	homes    []_Home
 }
 
 type _Home struct {
@@ -80,10 +70,8 @@ type _Overridable struct {
 }
 
 var (
-	mutatingArrayMethods  = []string{"sort", "reverse", "fill", "copyWithin", "splice", "push", "pop", "shift", "unshift"}
-	mutatingObjectMethods = []string{"defineProperty", "defineProperties", "assign", "setPrototypeOf"}
-	errorOverridables     = []string{"name", "message"}
-	overridables          = []_Overridable{
+	errorOverridables = []string{"name", "message"}
+	overridables      = []_Overridable{
 		{global: "Error", keys: errorOverridables},
 		{global: "EvalError", keys: errorOverridables},
 		{global: "RangeError", keys: errorOverridables},
@@ -122,14 +110,11 @@ func captureIntrinsics(vm *goja.Runtime) (*_Intrinsics, error) {
 		homes = append(homes, _Home{object: home, keys: overridable.keys})
 	}
 	return &_Intrinsics{
-		object:    object,
-		typeError: global.Get("TypeError").ToObject(vm),
-		ownKeys:   method(reflect, "ownKeys"),
-		describe:  method(object, "getOwnPropertyDescriptor"),
-		define:    method(reflect, "defineProperty"),
-		isFrozen:  method(object, "isFrozen"),
-		unnamed:   append(unnamed, typedArray),
-		homes:     homes,
+		ownKeys:  method(reflect, "ownKeys"),
+		describe: method(object, "getOwnPropertyDescriptor"),
+		define:   method(reflect, "defineProperty"),
+		unnamed:  append(unnamed, typedArray),
+		homes:    homes,
 	}, nil
 }
 
@@ -180,98 +165,6 @@ func prototypeOf(vm *goja.Runtime, value goja.Value) goja.Value {
 	return goja.Null()
 }
 
-func (f _Frozen) guard(r _Realm) error {
-	var mutators []_Mutator
-	for _, name := range mutatingArrayMethods {
-		mutators = append(mutators, _Mutator{home: r.arrayPrototype, name: name, changes: receiver})
-	}
-	for _, name := range mutatingObjectMethods {
-		mutators = append(mutators, _Mutator{home: f.intrinsics.object, name: name, changes: firstArgument})
-	}
-	for _, mutator := range mutators {
-		if err := f.guardAt(r, mutator); err != nil {
-			return fmt.Errorf("guarding %s: %w", mutator.name, r.explain(err))
-		}
-	}
-	return nil
-}
-
-type _Mutator struct {
-	home    *goja.Object
-	name    string
-	changes func(call goja.FunctionCall) goja.Value
-}
-
-func receiver(call goja.FunctionCall) goja.Value {
-	return call.This
-}
-
-func firstArgument(call goja.FunctionCall) goja.Value {
-	return call.Argument(0)
-}
-
-func (f _Frozen) guardAt(r _Realm, mutator _Mutator) error {
-	var held = mutator.home.Get(mutator.name)
-	original, isFunction := goja.AssertFunction(held)
-	if !isFunction {
-		return nil
-	}
-	var sorts = mutator.name == "sort"
-	var guarded = _Native{name: mutator.name, length: int(held.ToObject(r.vm).Get("length").ToInteger()), call: func(call goja.FunctionCall) goja.Value {
-		var compared = _Compared{}
-		var arguments = call.Arguments
-		if sorts {
-			arguments = compared.watch(r.vm, arguments)
-		}
-		returned, err := original(call.This, arguments...)
-		if err != nil && !compared.failed && f.isWriteRefusal(r, err) && f.isFrozen(mutator.changes(call)) {
-			panic(r.vm.NewTypeError(readOnlyRefusal))
-		}
-		if err != nil {
-			panic(err)
-		}
-		return returned
-	}}.on(r.vm)
-	return mutator.home.DefineDataProperty(mutator.name, guarded, goja.FLAG_NOT_SET, goja.FLAG_NOT_SET, goja.FLAG_NOT_SET)
-}
-
-type _Compared struct {
-	failed bool
-}
-
-func (c *_Compared) watch(vm *goja.Runtime, arguments []goja.Value) []goja.Value {
-	compare, isFunction := goja.AssertFunction(goja.FunctionCall{Arguments: arguments}.Argument(0))
-	if !isFunction {
-		return arguments
-	}
-	var watched = slices.Clone(arguments)
-	watched[0] = vm.ToValue(func(call goja.FunctionCall) goja.Value {
-		compared, err := compare(call.This, call.Arguments...)
-		if err != nil {
-			c.failed = true
-			panic(err)
-		}
-		return compared
-	})
-	return watched
-}
-
-func (f _Frozen) isWriteRefusal(r _Realm, err error) bool {
-	var exception *goja.Exception
-	return errors.As(err, &exception) && r.vm.InstanceOf(exception.Value(), f.intrinsics.typeError) && r.refusesWrite(exception.Value())
-}
-
-func (f _Frozen) isFrozen(target goja.Value) bool {
-	if _, isObject := target.(*goja.Object); !isObject {
-		return false
-	}
-	frozen, err := f.intrinsics.isFrozen(goja.Undefined(), target)
-	if err != nil {
-		panic(err)
-	}
-	return frozen.ToBoolean()
-}
-
 func (_Frozen) settle(r _Realm, object *goja.Object) error {
 	_, err := r.freeze(goja.Undefined(), object)
 	return err
@@ -279,10 +172,6 @@ func (_Frozen) settle(r _Realm, object *goja.Object) error {
 
 func (_Frozen) refusal() string {
 	return readOnlyRefusal
-}
-
-func (_Frozen) refuseWrite(r _Realm, thrown goja.Value) error {
-	return &Thrown{Message: "TypeError: " + readOnlyRefusal, Value: r.snapshot(thrown)}
 }
 
 type _Survey func(freezing _Freezing, roots []goja.Value) ([]*goja.Object, error)
@@ -686,9 +575,6 @@ var pristineChart = sync.OnceValues(func() ([]_Route, error) {
 		return nil, err
 	}
 	var frozen = realm.protection.(_Frozen)
-	if err := frozen.guard(realm); err != nil {
-		return nil, err
-	}
 	var freezing = _Freezing{realm: realm, intrinsics: frozen.intrinsics}
 	roots, err := freezing.tame()
 	if err != nil {

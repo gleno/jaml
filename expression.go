@@ -14,7 +14,10 @@ import (
 	"github.com/dop251/goja/parser"
 )
 
-const expressionOpens = "\"use strict\";0,\n"
+const (
+	expressionOpens = "\"use strict\";0,\n"
+	expressionFile  = "jaml:expression"
+)
 
 const maxCodeBytes = 64 << 10
 
@@ -31,7 +34,6 @@ type _Expression struct {
 	opened      _Delimiter
 	program     *goja.Program
 	bracedArrow bool
-	writes      []_WriteSite
 }
 
 func (e _Expression) written() string {
@@ -70,7 +72,7 @@ func (p _ParsedCode) compile(opened _Delimiter) (_Expression, error) {
 	if err != nil {
 		return _Expression{}, describeSyntaxError(p.source, err)
 	}
-	return _Expression{source: p.source, opened: opened, program: program, bracedArrow: endsInBracedArrow(p.written()), writes: writeSites(p.program)}, nil
+	return _Expression{source: p.source, opened: opened, program: program, bracedArrow: endsInBracedArrow(p.written())}, nil
 }
 
 func (p _ParsedCode) written() ast.Expression {

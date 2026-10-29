@@ -153,9 +153,6 @@ func TestTheChartedFreezeReachesAccessorsOnTheGlobalObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := realm.protection.guard(realm); err != nil {
-		t.Fatal(err)
-	}
 	var getter = _Native{name: "get bound", call: func(goja.FunctionCall) goja.Value { return goja.Undefined() }}.on(realm.vm)
 	var setter = _Native{name: "set bound", length: 1, call: func(goja.FunctionCall) goja.Value { return goja.Undefined() }}.on(realm.vm)
 	if err := realm.vm.GlobalObject().DefineAccessorProperty("bound", getter, setter, goja.FLAG_FALSE, goja.FLAG_TRUE); err != nil {
