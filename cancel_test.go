@@ -116,18 +116,6 @@ func awaitStalledWrite(t *testing.T, child *_Life) {
 	}
 }
 
-func expectStuckAfterCancel(t *testing.T, child *_Life) {
-	t.Helper()
-	select {
-	case <-child.ended:
-	case <-time.After(10 * time.Second):
-		t.Fatal("a job stuck after its cancel never ended its evaluator")
-	}
-	if cause := child.lost().cause; !strings.Contains(cause.Error(), "stuck after cancel") {
-		t.Fatalf("the evaluator's death was judged %v, want a job stuck after cancel", cause)
-	}
-}
-
 func expectSurvived(t *testing.T, child *_Life) {
 	t.Helper()
 	if !child.alive() {

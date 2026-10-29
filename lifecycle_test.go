@@ -18,13 +18,6 @@ import (
 	"time"
 )
 
-func killChild(t *testing.T, sb *Sandbox) {
-	t.Helper()
-	var child = currentChild(t, sb)
-	_ = child.cmd.Process.Kill()
-	expectDeath(t, child)
-}
-
 func TestAQueuedEvalKeepsItsDeadline(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "spin: ${ (() => { console.log('entered'); while (true) {} })() }\nok: ${ 1 }\n")
@@ -375,10 +368,6 @@ func hostCPU(t *testing.T) time.Duration {
 		t.Fatal(err)
 	}
 	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
-}
-
-func hostileText() string {
-	return "v: '${[" + strings.Repeat("("+strings.Repeat("-1+", 4095)+"0),", 5) + "]}'\n"
 }
 
 func TestAHostileTemplateCostsTheHostNothingToCompile(t *testing.T) {

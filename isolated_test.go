@@ -57,12 +57,31 @@ func childPID(t *testing.T, sb *Sandbox) int {
 	return 0
 }
 
+func killChild(t *testing.T, sb *Sandbox) {
+	t.Helper()
+	var child = currentChild(t, sb)
+	_ = child.cmd.Process.Kill()
+	expectDeath(t, child)
+}
+
 func expectDeath(t *testing.T, process *_Life) {
 	t.Helper()
 	select {
 	case <-process.ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the evaluator outlived its sandbox")
+	}
+}
+
+func expectStuckAfterCancel(t *testing.T, child *_Life) {
+	t.Helper()
+	select {
+	case <-child.ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a job stuck after its cancel never ended its evaluator")
+	}
+	if cause := child.lost().cause; !strings.Contains(cause.Error(), "stuck after cancel") {
+		t.Fatalf("the evaluator's death was judged %v, want a job stuck after cancel", cause)
 	}
 }
 

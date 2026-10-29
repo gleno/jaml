@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+func hostileText() string {
+	return "v: '${[" + strings.Repeat("("+strings.Repeat("-1+", 4095)+"0),", 5) + "]}'\n"
+}
+
 type _SandboxKind struct {
 	name     string
 	make     func(ctx context.Context, options ...SandboxOption) (*Sandbox, error)
