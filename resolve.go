@@ -1,6 +1,7 @@
 package jaml
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -55,8 +56,11 @@ func (e *Expression) decodeInto(ctx context.Context, destination any, args []any
 			sources[pathIdentity(path)] = true
 		}
 		var decoded = reflect.ValueOf(destination).Elem()
+		var source = jsontext.NewDecoder(bytes.NewReader(settled.data))
 		var unmarshalView = json.UnmarshalFromFunc(func(decoder *jsontext.Decoder, view *Expression) error {
-			if decoder.PeekKind() != '{' {
+			// Custom decoders may copy their options into a different stream.
+			// Its paths do not identify nodes in this rendered document.
+			if decoder != source || decoder.PeekKind() != '{' {
 				return errors.ErrUnsupported
 			}
 			var path = nextDecodePath(decoder)
@@ -73,7 +77,9 @@ func (e *Expression) decodeInto(ctx context.Context, destination any, args []any
 		})
 		// The local hook supplies source identity without adding methods to
 		// Expression or changing native JSONv2 decoding semantics.
-		var err = json.Unmarshal(settled.data, destination, json.WithUnmarshalers(unmarshalView))
+		// Rendered answers contain exactly one JSON value. Keep its decoder
+		// identity so inherited hooks cannot claim nodes in detached streams.
+		var err = json.UnmarshalDecode(source, destination, json.WithUnmarshalers(unmarshalView))
 		if err != nil {
 			settleViews(decoded, &_ShapeCursor{shape: skips}, nil)
 			return err
