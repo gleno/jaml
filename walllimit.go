@@ -2,6 +2,7 @@ package jaml
 
 import (
 	"context"
+	"math"
 	"time"
 )
 
@@ -38,19 +39,31 @@ type _Oversight struct {
 	stop  context.CancelFunc
 }
 
-func (l _WallLimit) overseen(ctx context.Context, allowance time.Duration) *_Oversight {
+func (l _WallLimit) overseen(ctx context.Context, allowances ...time.Duration) *_Oversight {
 	if l == 0 {
 		return &_Oversight{ctx: ctx, stop: func() {}}
 	}
 	watched, cancel := context.WithCancelCause(ctx)
-	var timer = time.AfterFunc(time.Duration(l)+allowance, func() { cancel(l.exhausted()) })
+	var timer = time.AfterFunc(extendedTimeout(time.Duration(l), allowances...), func() { cancel(l.exhausted()) })
 	return &_Oversight{ctx: watched, limit: l, timer: timer, stop: func() { timer.Stop(); cancel(context.Canceled) }}
 }
 
 func (o *_Oversight) rearm(allowance time.Duration) {
 	if o.timer != nil {
-		o.timer.Reset(time.Duration(o.limit) + allowance)
+		o.timer.Reset(extendedTimeout(time.Duration(o.limit), allowance))
 	}
+}
+
+// Admitted timeouts and internal allowances are nonnegative. Extending one
+// must never wrap it into an already-expired timer.
+func extendedTimeout(timeout time.Duration, allowances ...time.Duration) time.Duration {
+	for _, allowance := range allowances {
+		if timeout > time.Duration(math.MaxInt64)-allowance {
+			return time.Duration(math.MaxInt64)
+		}
+		timeout += allowance
+	}
+	return timeout
 }
 
 func (l _WallLimit) exhausted() error {

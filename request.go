@@ -45,7 +45,7 @@ type _RequestBody struct {
 
 func (b *_RequestBody) overseen(ctx context.Context, buildTimeout time.Duration) *_Oversight {
 	if b.compiles {
-		return b.limit.overseen(ctx, buildTimeout+2*cancelGrace)
+		return b.limit.overseen(ctx, buildTimeout, 2*cancelGrace)
 	}
 	return b.limit.overseen(ctx, cancelGrace)
 }
