@@ -52,11 +52,11 @@ type _Frozen struct {
 }
 
 type _Intrinsics struct {
-	ownKeys  goja.Callable
-	describe goja.Callable
-	define   goja.Callable
-	unnamed  []goja.Value
-	homes    []_Home
+	ownKeys       goja.Callable
+	describe      goja.Callable
+	define        goja.Callable
+	originalRoots []goja.Value
+	homes         []_Home
 }
 
 type _Home struct {
@@ -109,12 +109,22 @@ func captureIntrinsics(vm *goja.Runtime) (*_Intrinsics, error) {
 		}
 		homes = append(homes, _Home{object: home, keys: overridable.keys})
 	}
+	globals, err := pristineGlobals()
+	if err != nil {
+		return nil, err
+	}
+	// Capture before scripts can replace globals or sever constructor backlinks.
+	// The engine still uses these originals for literals, boxing and exceptions.
+	var roots = append(unnamed, typedArray)
+	for _, key := range globals {
+		roots = append(roots, valueAt(global, key))
+	}
 	return &_Intrinsics{
-		ownKeys:  method(reflect, "ownKeys"),
-		describe: method(object, "getOwnPropertyDescriptor"),
-		define:   method(reflect, "defineProperty"),
-		unnamed:  append(unnamed, typedArray),
-		homes:    homes,
+		ownKeys:       method(reflect, "ownKeys"),
+		describe:      method(object, "getOwnPropertyDescriptor"),
+		define:        method(reflect, "defineProperty"),
+		originalRoots: roots,
+		homes:         homes,
 	}, nil
 }
 
@@ -129,7 +139,12 @@ func unnamedIntrinsics(vm *goja.Runtime) ([]goja.Value, error) {
 		return nil, err
 	}
 	var global = vm.GlobalObject()
-	var unnamed = []goja.Value{prototypeOf(vm, functions.ToObject(vm).Get("0")), prototypeOf(vm, functions.ToObject(vm).Get("1"))}
+	var generator = functions.ToObject(vm).Get("0")
+	var unnamed = []goja.Value{
+		prototypeOf(vm, generator),
+		prototypeOf(vm, generator.ToObject(vm).Get("prototype")),
+		prototypeOf(vm, functions.ToObject(vm).Get("1")),
+	}
 	var iterables = []goja.Value{vm.NewArray(), vm.ToValue("")}
 	for _, name := range []string{"Map", "Set"} {
 		made, err := vm.New(global.Get(name))
@@ -248,7 +263,7 @@ func (z _Freezing) tame() ([]goja.Value, error) {
 			return nil, err
 		}
 	}
-	roots = append(roots, z.intrinsics.unnamed...)
+	roots = append(roots, z.intrinsics.originalRoots...)
 	for _, home := range z.intrinsics.homes {
 		for _, key := range home.keys {
 			value, err := z.overridableAt(home.object, key)
