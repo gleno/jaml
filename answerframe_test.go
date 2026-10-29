@@ -127,7 +127,7 @@ func TestAnAnswerFrameIsByteForByteTheWireEncoding(t *testing.T) {
 	var data = wireData()
 	expectEqual(t, len(data), len(wireWritten))
 	for index, value := range data {
-		var want = `{"job":42,"data":` + wireWritten[index] + `,"skipped":[["a","` + "\u2028" + `"],[]],"usage":{"cpu":3,"wall":7}}`
+		var want = `{"job":42,"at":"$","data":` + wireWritten[index] + `,"skipped":[["a","` + "\u2028" + `"],[]],"usage":{"cpu":3,"wall":7}}`
 		expectEqual(t, string(f.answer(42, _Rendered{tree: value, skipped: [][]string{{"a", "\u2028"}, {}}}, Usage{CPU: 3, Wall: 7})), want)
 	}
 }
@@ -163,7 +163,7 @@ func TestTheSmallFramesAreTheirWireEncoding(t *testing.T) {
 
 func TestAFrameAtExactlyTheCapIsSentAndOneByteMoreIsRefused(t *testing.T) {
 	var f = _Frames{limit: 1 << 10}
-	var overhead = len(`{"job":1,"data":"` + "\u2028" + `","usage":{"cpu":0,"wall":0}}`)
+	var overhead = len(`{"job":1,"at":"$","data":"` + "\u2028" + `","usage":{"cpu":0,"wall":0}}`)
 	var fitting = strings.Repeat("x", f.limit-overhead) + "\u2028"
 	expectEqual(t, len(f.answer(1, _Rendered{tree: fitting}, Usage{})), f.limit)
 	var refused = string(f.answer(1, _Rendered{tree: fitting + "x"}, Usage{}))
@@ -213,7 +213,7 @@ func TestFrameEncodingRejectsInvalidUTF8WithoutRecursing(t *testing.T) {
 
 func TestNativeReplyEncodingKeepsEmptyJSONResults(t *testing.T) {
 	for _, data := range []string{"null", "{}", "[]", `""`, "false", "0"} {
-		encoded, err := wireJSON(_Reply{Job: 1, Data: _Borrowed(data)})
+		encoded, err := wireJSON(_Reply{Job: 1, Data: _Borrowed(data), At: "$"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,4 +229,53 @@ func TestNativeReplyEncodingKeepsEmptyJSONResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectEqual(t, string(encoded), `{"job":1,"missing":true}`)
+}
+
+func TestAnswerLocationsRoundTripAndCountTowardsTheCap(t *testing.T) {
+	for _, path := range []*_DataPath{nil, (*_DataPath)(nil).atKey("0").atIndex(0).atKey("0"), (*_DataPath)(nil).atKey("\n\"\\é\u2028")} {
+		var frames = _Frames{limit: 1024}
+		var want = path.String()
+		reference, err := wireJSON(_Reply{Job: 1, Data: _Borrowed(`""`), At: want, Usage: &_UsageOnWire{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fitting = strings.Repeat("x", frames.limit-len(reference))
+		var frame = frames.answer(1, _Rendered{tree: fitting, path: path}, Usage{})
+		expectEqual(t, len(frame), frames.limit)
+		var reply _Reply
+		if err := json.Unmarshal(frame, &reply); err != nil {
+			t.Fatal(err)
+		}
+		if err := reply.fits(opServe); err != nil {
+			t.Fatal(err)
+		}
+		expectEqual(t, reply.At, want)
+		expectEqual(t, servedFrom(reply).(_Answered).at, want)
+		if err := json.Unmarshal(frames.answer(1, _Rendered{tree: fitting + "x", path: path}, Usage{}), &reply); err != nil {
+			t.Fatal(err)
+		}
+		if reply.Failure == nil {
+			t.Fatal("the selected location was excluded from the frame cap")
+		}
+		expectEqual(t, reply.Failure.At, want)
+	}
+}
+
+func TestOnlyDataRepliesCarryAResolvedLocation(t *testing.T) {
+	for _, reply := range []_Reply{
+		{Job: 1, Data: _Borrowed("1")},
+		{Job: 1, Built: true, At: "$"},
+		{Job: 1, Missing: true, At: "$"},
+		{Job: 1, Failure: &_Failure{Kind: "EvaluationFailed", At: "$", Message: "failed"}, At: "$"},
+		{Job: 1, Compiled: true, At: "$"},
+		{Job: 1, Line: &_LineOnWire{}, At: "$"},
+		{Job: 1, Usage: &_UsageOnWire{}, At: "$"},
+	} {
+		if reply.fits(opServe) == nil {
+			t.Fatalf("invalid resolved location accepted: %+v", reply)
+		}
+		if new(_Switchboard).route(reply) == nil {
+			t.Fatalf("invalid resolved location routed: %+v", reply)
+		}
+	}
 }

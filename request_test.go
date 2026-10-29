@@ -196,7 +196,7 @@ func TestTheChildScriptBudgetIsAnEighthOfItsLimitUnlessSet(t *testing.T) {
 
 func TestAReplyIsReadIntoOneBufferAndDecodedInPlace(t *testing.T) {
 	var data = `"` + strings.Repeat("x", 8<<20) + `"`
-	var frame = headed([]byte(`{"job":4,"data":` + data + `}`))
+	var frame = headed([]byte(`{"job":4,"at":"$","data":` + data + `}`))
 	var allocated = uint64(math.MaxUint64)
 	for range 3 {
 		var stream = &_ReplyStream{frames: _Frames{limit: 16 << 20}.replies(bytes.NewReader(frame), &_Quiet{})}

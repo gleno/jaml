@@ -105,7 +105,7 @@ func TestTheHostRefusesABadlyOutlinedReply(t *testing.T) {
 	}
 	oversized.WriteString("}}")
 	for _, sent := range []string{
-		`{"job":1,"data":1,"code":true}`,
+		`{"job":1,"at":"$","data":1,"code":true}`,
 		`{"job":1,"built":true,"code":{"a":null}}`,
 		oversized.String(),
 	} {

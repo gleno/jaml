@@ -375,7 +375,7 @@ func serveIntoAnEndingLife(t *testing.T) _Outcome {
 	for !life.board.awaits(1) {
 		time.Sleep(time.Millisecond)
 	}
-	if err := life.board.deliver(_Reply{Job: 1, Data: []byte("1")}); err != nil {
+	if err := life.board.deliver(_Reply{Job: 1, Data: []byte("1"), At: "$"}); err != nil {
 		t.Fatal(err)
 	}
 	life.bury(errors.New("the child died after answering"))

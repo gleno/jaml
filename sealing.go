@@ -87,6 +87,9 @@ func (f _Frames) failedFrame(job uint64, path string, err error) []byte {
 }
 
 func (w *_WireWriter) answer(result _Rendered, used Usage) error {
+	if err := w.labelled(`,"at":`, result.path.String()); err != nil {
+		return err
+	}
 	if err := w.raw(`,"data":`); err != nil {
 		return err
 	}

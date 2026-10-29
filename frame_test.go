@@ -79,7 +79,7 @@ func (_EngineFunc) health() Health { return Health{} }
 
 type _IdleUnit struct{}
 
-func (_IdleUnit) serve(context.Context, _Ask) _Outcome { return _Answered{data: []byte("1")} }
+func (_IdleUnit) serve(context.Context, _Ask) _Outcome { return _Answered{data: []byte("1"), at: "$"} }
 
 func TestABuildThatOutlivesItsCallerIsNeverHandedBack(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
@@ -139,13 +139,14 @@ func TestABuildRaceRecordsExactlyOneVerdict(t *testing.T) {
 	}
 }
 
-func TestAPlainDecimalKeyIsSpelledAsAnIndex(t *testing.T) {
+func TestAPlainDecimalKeyKeepsItsMappingLocation(t *testing.T) {
 	eachKind(t, func(t *testing.T, sb *Sandbox) {
 		var document = mustJaml(t, sb, "\"0\":\n  boom: ${ (() => { throw new Error('boom') })() }\n  \"01\": 1\n")
 		var out any
-		expectError(t, resolveInto(t.Context(), &out, document.At("0", "boom")), EvaluationFailed, "$[0].boom: ", "Error: boom")
-		expectError(t, resolveInto(t.Context(), &out, document.At("0", "nope")), MissingPath, `$[0] has no key "nope"`)
-		expectError(t, resolveInto(t.Context(), &out, document.At("0")), EvaluationFailed, "$[0].boom: ", "Error: boom")
+		expectError(t, resolveInto(t.Context(), &out, document), EvaluationFailed, `$["0"].boom: `, "Error: boom")
+		expectError(t, resolveInto(t.Context(), &out, document.At("0", "boom")), EvaluationFailed, `$["0"].boom: `, "Error: boom")
+		expectError(t, resolveInto(t.Context(), &out, document.At("0", "nope")), MissingPath, `$["0"] has no key "nope"`)
+		expectError(t, resolveInto(t.Context(), &out, document.At("0")), EvaluationFailed, `$["0"].boom: `, "Error: boom")
 		expectEqual(t, mustResolve[int](t, t.Context(), document.At("0", "01")), 1)
 	})
 }

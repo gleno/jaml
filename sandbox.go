@@ -41,6 +41,7 @@ type _Outcome interface{ isOutcome() }
 
 type _Answered struct {
 	data    []byte
+	at      string
 	skipped [][]string
 	used    Usage
 }
@@ -361,7 +362,7 @@ func (h *_Handle) answer(ctx context.Context, ask _Ask, decode func(settled _Ans
 	switch settled := result.(type) {
 	case _Answered:
 		if err := decode(settled); err != nil {
-			return failWith(coercionFailed, err).at(blame(selectedPath(ask.path).String(), settled.data, err))
+			return failWith(coercionFailed, err).at(blame(settled.at, settled.data, err))
 		}
 		return nil
 	case _Refused:

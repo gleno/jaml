@@ -242,7 +242,7 @@ func servedFrom(incoming _Reply) _Outcome {
 	case incoming.Missing:
 		return _Refused{err: errMissing}
 	}
-	return _Answered{data: incoming.Data, skipped: incoming.Skipped, used: incoming.Usage.measured()}
+	return _Answered{data: incoming.Data, at: incoming.At, skipped: incoming.Skipped, used: incoming.Usage.measured()}
 }
 
 func (l *_Life) unsent(err error) _Outcome {
@@ -393,6 +393,9 @@ func (b *_Switchboard) expect(job uint64, op _Opcode, console *_Console) _Call {
 }
 
 func (b *_Switchboard) route(incoming _Reply) error {
+	if err := incoming.checkLocation(); err != nil {
+		return err
+	}
 	if incoming.Usage != nil && incoming.Usage.Resident > 0 {
 		b.resident.Store(incoming.Usage.Resident)
 	}

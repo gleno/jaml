@@ -17,8 +17,14 @@ type _Host struct {
 }
 
 type _Prepared struct {
-	spot   *_Spot
-	render func(ctx context.Context, speak func(Line)) (_Rendered, error)
+	spot *_Spot
+	run  func(ctx context.Context, speak func(Line)) (_Rendered, error)
+}
+
+func (p _Prepared) render(ctx context.Context, speak func(Line)) (_Rendered, error) {
+	result, err := p.run(ctx, speak)
+	result.path = p.spot.selection
+	return result, placed(result.path.String(), err)
 }
 
 type _Rendered struct {
@@ -84,7 +90,7 @@ func (d *_Document) prepare(request _Work, host _Host) (_Prepared, error) {
 	var plan = _SessionPlan{values: request.Values, scripts: scripts, pinned: request.Pinned, runtime: host.runtime}
 	var spot = &_Spot{selection: chosen.path}
 	args, skips := request.Args, request.Skips
-	return _Prepared{spot: spot, render: func(ctx context.Context, speak func(Line)) (_Rendered, error) {
+	return _Prepared{spot: spot, run: func(ctx context.Context, speak func(Line)) (_Rendered, error) {
 		var engine = &_LazySession{ctx: ctx, plan: plan, speak: spot.speaking(speak)}
 		defer engine.close()
 		if err := engine.warm(); err != nil {
@@ -95,7 +101,7 @@ func (d *_Document) prepare(request _Work, host _Host) (_Prepared, error) {
 		if err != nil {
 			return _Rendered{}, err
 		}
-		return _Rendered{tree: tree, path: chosen.path, skipped: renderer.skipped}, nil
+		return _Rendered{tree: tree, skipped: renderer.skipped}, nil
 	}}, nil
 }
 
@@ -123,13 +129,13 @@ func (d *_Document) selectPath(path []string) (_Subtree, error) {
 			if !ok {
 				return _Subtree{}, noSuchPath(location, fmt.Sprintf("has no key %q", step))
 			}
-			current, location = found, location.atStep(step)
+			current, location = found, location.atKey(step)
 		case []any:
 			index, err := strconv.Atoi(step)
 			if err != nil || strconv.Itoa(index) != step || index < 0 || index >= len(typed) {
 				return _Subtree{}, noSuchPath(location, fmt.Sprintf("is a list of %d, which has no item %q", len(typed), step))
 			}
-			current, location = typed[index], location.atStep(step)
+			current, location = typed[index], location.atIndex(index)
 		default:
 			return _Subtree{}, d.missingInside(_Subtree{node: current, path: location}, step)
 		}

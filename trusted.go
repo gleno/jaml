@@ -113,7 +113,7 @@ func (u *_LocalUnit) serve(ctx context.Context, ask _Ask) _Outcome {
 			served = _Refused{err: err, used: &used}
 			return
 		}
-		served = _Answered{data: data, skipped: result.skipped, used: used}
+		served = _Answered{data: data, at: result.path.String(), skipped: result.skipped, used: used}
 	})
 	return served
 }

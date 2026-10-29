@@ -23,7 +23,7 @@ const (
 	evaluatorNonce       = "JAML_NONCE"
 	evaluatorParent      = "JAML_PARENT"
 	evaluatorMagic       = "jaml-evaluator"
-	protocolVersion      = 28
+	protocolVersion      = 29
 	exitMemoryLimit      = 86
 	exitStuckAfterCancel = 89
 	requestsFD           = 3
@@ -80,6 +80,7 @@ type _Reply struct {
 	Job      uint64        `json:"job"`
 	Built    bool          `json:"built,omitzero"`
 	Code     *_CodeOutline `json:"code,omitzero"`
+	At       string        `json:"at,omitempty"`
 	Data     _Borrowed     `json:"data,omitzero"`
 	Skipped  [][]string    `json:"skipped,omitempty"`
 	Failure  *_Failure     `json:"failure,omitzero"`
@@ -205,6 +206,9 @@ func (r _Reply) outcomes() int {
 }
 
 func (r _Reply) fits(op _Opcode) error {
+	if err := r.checkLocation(); err != nil {
+		return err
+	}
 	switch {
 	case r.outcomes() > 1:
 		return errors.New("the evaluator answered with more than one outcome")
@@ -226,6 +230,16 @@ func (r _Reply) fits(op _Opcode) error {
 		return errors.New("the evaluator answered a build with something other than built")
 	case op == opServe && r.Built:
 		return errors.New("the evaluator answered an evaluation with a build")
+	}
+	return nil
+}
+
+func (r _Reply) checkLocation() error {
+	switch {
+	case len(r.Data) != 0 && r.At == "":
+		return errors.New("the evaluator answered with data at no place")
+	case len(r.Data) == 0 && r.At != "":
+		return errors.New("the evaluator located something other than data")
 	}
 	return nil
 }

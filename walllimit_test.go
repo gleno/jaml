@@ -81,7 +81,7 @@ func TestWaitingForASlotDoesNotCountTowardTheTimeLimit(t *testing.T) {
 func TestOnlyAWedgedChildPastAnOverseenLimitTurnsIntoTimeLimit(t *testing.T) {
 	overdue, stop := context.WithCancelCause(t.Context())
 	stop(_WallLimit(time.Millisecond).exhausted())
-	var answered = _Answered{data: []byte("5")}
+	var answered = _Answered{data: []byte("5"), at: "$"}
 	var silent = _Lost{cause: errSilent}
 	var unread = _Lost{cause: errNotReading}
 	var outside = _Lost{cause: _OutsideDeath("killed from outside")}
