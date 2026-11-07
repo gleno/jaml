@@ -87,16 +87,16 @@ func (d *_Document) prepare(request _Work, host _Host) (_Prepared, error) {
 	if err != nil {
 		return _Prepared{}, err
 	}
-	var plan = _SessionPlan{values: request.Values, scripts: scripts, pinned: request.Pinned, runtime: host.runtime}
+	var plan = _SessionPlan{values: request.Values, scripts: scripts, args: request.Args, pinned: request.Pinned, runtime: host.runtime}
 	var spot = &_Spot{selection: chosen.path}
-	args, skips := request.Args, request.Skips
+	var skips = request.Skips
 	return _Prepared{spot: spot, run: func(ctx context.Context, speak func(Line)) (_Rendered, error) {
 		var engine = &_LazySession{ctx: ctx, plan: plan, speak: spot.speaking(speak)}
 		defer engine.close()
 		if err := engine.warm(); err != nil {
 			return _Rendered{}, err
 		}
-		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, spot: spot, args: args, skips: skips, depth: chosen.path.depth()}
+		var renderer = &_Renderer{compiled: d.compiled, settings: d.settings, engine: engine, spot: spot, skips: skips, depth: chosen.path.depth()}
 		tree, err := renderer.render(chosen.node, renderer.place(chosen))
 		if err != nil {
 			return _Rendered{}, err

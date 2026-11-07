@@ -19,6 +19,7 @@ var errInterrupted = errors.New("interrupted")
 type _SessionPlan struct {
 	values  _BoundValues
 	scripts []_Script
+	args    []_Datum
 	pinned  _Pinned
 	runtime _Runtime
 }
@@ -76,6 +77,9 @@ func (l *_LazySession) begin() (*_Session, error) {
 	realm, err := captureRealm(_Pace{ctx: ctx, vm: vm}, plan.runtime)
 	if err != nil {
 		return nil, failWith(evaluationFailed, err)
+	}
+	if slices.ContainsFunc(plan.args, _Datum.isObject) {
+		realm.proxies = captureProxies(vm)
 	}
 	var opened = &_Session{ctx: ctx, realm: realm}
 	opened.release = context.AfterFunc(ctx, func() { vm.Interrupt(errInterrupted) })
@@ -237,18 +241,6 @@ func (r _Realm) settle(compiled _Expression, args []_Datum) (goja.Value, error) 
 		}
 	}
 	return nil, err
-}
-
-func (r _Realm) arguments(args []_Datum) ([]goja.Value, error) {
-	var values = make([]goja.Value, len(args))
-	for index, arg := range args {
-		built, err := r.build(arg, _Mutable{})
-		if err != nil {
-			return nil, fmt.Errorf("argument %d: %w", index+1, r.explain(err))
-		}
-		values[index] = built
-	}
-	return values, nil
 }
 
 func (s *_Session) breakOnEngineFailure(err *error) {

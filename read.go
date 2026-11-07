@@ -34,6 +34,7 @@ type _Realm struct {
 	arrayPrototype  *goja.Object
 	ownKeys         goja.Callable
 	freeze          goja.Callable
+	proxies         _Proxies
 	pace            _Pace
 }
 
@@ -247,7 +248,7 @@ func (r *_DataReader) readFloat(number float64, path *_DataPath) (any, error) {
 }
 
 func (r *_DataReader) readObject(object *goja.Object, path *_DataPath) (any, error) {
-	if object.ExportType() == proxyType {
+	if r.realm.isForeignProxy(object) {
 		return r.stranger(path, "is a proxy"+notData, false)
 	}
 	if _, isFunction := goja.AssertFunction(object); isFunction {

@@ -107,7 +107,7 @@ func (r _Realm) describeThrown(value goja.Value) string {
 		return "threw an empty string"
 	case !isObject:
 		return "threw " + primitiveText(value)
-	case object.ExportType() == proxyType:
+	case r.isForeignProxy(object):
 		return "threw a proxy"
 	}
 	if text := errorText(object); text != "" {

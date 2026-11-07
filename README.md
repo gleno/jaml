@@ -33,7 +33,7 @@ Make the sandbox and the document on a long-lived context. Resolve per request w
 
 ## Advanced use
 
-Scripts travel on the context too. Code that produces a function is called with the arguments of the `Resolve`. A field typed `*jaml.Expression` is left unevaluated, so you can resolve it later, with its own arguments. `At` selects a part of the document, and the limits bound a runaway job.
+Scripts travel on the context too. Code that produces a function is called with the arguments of the `Resolve`. Each field of an object argument is built when the code first touches it, so a large field the code never reads costs nothing against the limits. A field typed `*jaml.Expression` is left unevaluated, so you can resolve it later, with its own arguments. `At` selects a part of the document, and the limits bound a runaway job.
 
 ```go
 type Plan struct {

@@ -44,10 +44,95 @@ func (r _Realm) build(datum _Datum, closing _Closing) (goja.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	if b.space(); b.at < len(b.text) {
-		return nil, b.unexpected()
+	if err := b.ended(); err != nil {
+		return nil, err
 	}
 	return value, nil
+}
+
+func (b *_ValueBuild) each(hold func(key string, value _Datum) error) error {
+	if err := b.expect('{'); err != nil {
+		return err
+	}
+	if b.space(); b.next() == '}' {
+		b.at++
+		return b.ended()
+	}
+	for {
+		b.walked++
+		if err := b.realm.pace.keep(b.walked); err != nil {
+			return err
+		}
+		b.space()
+		key, err := b.string()
+		if err != nil {
+			return err
+		}
+		if err := b.expect(':'); err != nil {
+			return err
+		}
+		b.space()
+		var start = b.at
+		if err := b.skip(); err != nil {
+			return err
+		}
+		if err := hold(key, _Datum{encoded: b.text[start:b.at:b.at]}); err != nil {
+			return err
+		}
+		if done, err := b.closes('}'); done || err != nil {
+			if err != nil {
+				return err
+			}
+			return b.ended()
+		}
+	}
+}
+
+func (b *_ValueBuild) ended() error {
+	if b.space(); b.at < len(b.text) {
+		return b.unexpected()
+	}
+	return nil
+}
+
+func (b *_ValueBuild) skip() error {
+	switch b.next() {
+	case '"':
+		var end = textEnd(b.text, b.at+1)
+		if end == len(b.text) {
+			return b.unexpected()
+		}
+		b.at = end + 1
+		return nil
+	case '{', '[':
+		return b.skipNested()
+	}
+	var start = b.at
+	for b.at < len(b.text) && !isJSONSpace(b.text[b.at]) && b.text[b.at] != ',' && b.text[b.at] != '}' && b.text[b.at] != ']' {
+		b.at++
+	}
+	if start == b.at {
+		return b.unexpected()
+	}
+	return nil
+}
+
+func (b *_ValueBuild) skipNested() error {
+	var depth = 0
+	for ; b.at < len(b.text); b.at++ {
+		switch b.text[b.at] {
+		case '"':
+			b.at = textEnd(b.text, b.at+1)
+		case '{', '[':
+			depth++
+		case '}', ']':
+			if depth--; depth == 0 {
+				b.at++
+				return nil
+			}
+		}
+	}
+	return b.unexpected()
 }
 
 func (b *_ValueBuild) value() (goja.Value, error) {

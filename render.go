@@ -14,7 +14,6 @@ type _Renderer struct {
 	settings _ExpressionSettings
 	engine   *_LazySession
 	spot     *_Spot
-	args     []_Datum
 	skips    *_Shape
 	depth    int
 	skipped  [][]string
@@ -195,7 +194,7 @@ func (r *_Renderer) evaluate(compiled _Expression, path *_DataPath) (any, error)
 	}
 	var piece = &_Piece{path: path, code: compiled}
 	r.spot.running.Store(piece)
-	result, err := session.evaluate(compiled, r.args)
+	result, err := session.evaluate(compiled, r.engine.plan.args)
 	r.spot.running.Store(nil)
 	if err != nil {
 		return nil, piece.failed(err)
